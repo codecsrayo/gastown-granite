@@ -158,6 +158,8 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleSSE(w, r)
 	case path == "/session/preview" && r.Method == http.MethodGet:
 		h.handleSessionPreview(w, r)
+	case path == "/session/attach" && r.Method == http.MethodGet:
+		h.handleSessionAttach(w, r)
 	default:
 		http.Error(w, "Not found", http.StatusNotFound)
 	}

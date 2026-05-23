@@ -3063,6 +3063,10 @@
             sessionPreviewInterval = null;
         }
 
+        if (typeof closeSessionAttach === 'function') {
+            closeSessionAttach();
+        }
+
         var preview = document.getElementById('session-preview');
         if (preview) preview.style.display = 'none';
 
@@ -3077,6 +3081,133 @@
     if (sessionPreviewBack) {
         sessionPreviewBack.addEventListener('click', closeSessionPreview);
     }
+
+    // ============================================
+    // INTERACTIVE TMUX ATTACH (xterm.js + WebSocket)
+    // ============================================
+    var attachTerm = null;
+    var attachFit = null;
+    var attachWs = null;
+    var attachSession = null;
+    var attachResizeHandler = null;
+
+    function openSessionAttach(sessionName) {
+        if (typeof Terminal === 'undefined') {
+            alert('xterm.js failed to load; attach unavailable');
+            return;
+        }
+        // Pause snapshot polling; hide preview <pre>, show terminal div.
+        if (sessionPreviewInterval) {
+            clearInterval(sessionPreviewInterval);
+            sessionPreviewInterval = null;
+        }
+        var contentEl = document.getElementById('session-preview-content');
+        var termEl = document.getElementById('session-preview-terminal');
+        var statusEl = document.getElementById('session-preview-status');
+        if (contentEl) contentEl.style.display = 'none';
+        if (termEl) termEl.style.display = 'block';
+
+        closeSessionAttachInner(); // drop any prior session
+
+        attachSession = sessionName;
+        attachTerm = new Terminal({
+            fontFamily: 'monospace',
+            fontSize: 13,
+            cursorBlink: true,
+            convertEol: false,
+            allowProposedApi: true
+        });
+        if (window.FitAddon && window.FitAddon.FitAddon) {
+            attachFit = new window.FitAddon.FitAddon();
+            attachTerm.loadAddon(attachFit);
+        }
+        attachTerm.open(termEl);
+        if (attachFit) attachFit.fit();
+
+        var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var url = proto + '//' + window.location.host + '/api/session/attach?session=' + encodeURIComponent(sessionName);
+        attachWs = new WebSocket(url);
+        attachWs.binaryType = 'arraybuffer';
+
+        attachWs.onopen = function() {
+            if (statusEl) statusEl.textContent = 'attached';
+            sendAttachResize();
+        };
+        attachWs.onmessage = function(ev) {
+            if (typeof ev.data === 'string') {
+                attachTerm.write(ev.data);
+            } else {
+                attachTerm.write(new Uint8Array(ev.data));
+            }
+        };
+        attachWs.onclose = function() {
+            if (statusEl) statusEl.textContent = 'detached';
+        };
+        attachWs.onerror = function() {
+            if (statusEl) statusEl.textContent = 'ws error';
+        };
+
+        attachTerm.onData(function(data) {
+            if (attachWs && attachWs.readyState === 1) {
+                attachWs.send(JSON.stringify({type: 'input', data: data}));
+            }
+        });
+
+        attachResizeHandler = function() {
+            if (attachFit) {
+                try { attachFit.fit(); } catch (e) {}
+            }
+            sendAttachResize();
+        };
+        window.addEventListener('resize', attachResizeHandler);
+
+        // Focus so keypresses go to terminal.
+        setTimeout(function() { attachTerm.focus(); }, 50);
+    }
+
+    function sendAttachResize() {
+        if (!attachWs || attachWs.readyState !== 1 || !attachTerm) return;
+        attachWs.send(JSON.stringify({
+            type: 'resize',
+            cols: attachTerm.cols,
+            rows: attachTerm.rows
+        }));
+    }
+
+    function closeSessionAttachInner() {
+        if (attachWs) {
+            try { attachWs.close(); } catch (e) {}
+            attachWs = null;
+        }
+        if (attachTerm) {
+            try { attachTerm.dispose(); } catch (e) {}
+            attachTerm = null;
+        }
+        attachFit = null;
+        attachSession = null;
+        if (attachResizeHandler) {
+            window.removeEventListener('resize', attachResizeHandler);
+            attachResizeHandler = null;
+        }
+    }
+
+    function closeSessionAttach() {
+        closeSessionAttachInner();
+        var termEl = document.getElementById('session-preview-terminal');
+        var contentEl = document.getElementById('session-preview-content');
+        if (termEl) termEl.style.display = 'none';
+        if (contentEl) contentEl.style.display = '';
+    }
+
+    var attachBtn = document.getElementById('session-preview-attach');
+    if (attachBtn) {
+        attachBtn.addEventListener('click', function() {
+            var nameEl = document.getElementById('session-preview-name');
+            var name = nameEl ? nameEl.textContent : '';
+            if (name) openSessionAttach(name);
+        });
+    }
+
 
     // ============================================
     // CONVOY DRILL-DOWN (expand rows to show tracked issues)

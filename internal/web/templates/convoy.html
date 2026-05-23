@@ -7,6 +7,9 @@
     <title>Gas Town Control Center</title>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://unpkg.com/idiomorph@0.3.0/dist/idiomorph-ext.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
     <link rel="stylesheet" href="/static/dashboard.css">
 </head>
 <body>
@@ -399,8 +402,10 @@
                             <button id="session-preview-back" class="mail-back-btn">← Back</button>
                             <span id="session-preview-name" class="session-preview-title"></span>
                             <span id="session-preview-status" class="session-preview-refresh-status"></span>
+                            <button id="session-preview-attach" class="mail-back-btn" style="margin-left:auto;">Attach ⌨</button>
                         </div>
                         <pre id="session-preview-content" class="session-preview-content">Loading...</pre>
+                        <div id="session-preview-terminal" style="display:none;"></div>
                     </div>
                 </div>
             </div>
@@ -1074,6 +1079,6 @@
         <div id="output-panel-content" class="output-panel-content"></div>
     </div>
 
-    <script src="/static/dashboard.js?v=3"></script>
+    <script src="/static/dashboard.js?v=4"></script>
 </body>
 </html>

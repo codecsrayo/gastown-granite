@@ -3696,6 +3696,19 @@
             min-height: 100px;
         }
 
+        #session-preview-terminal {
+            background: #000;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 4px;
+            height: 480px;
+        }
+        #session-preview-terminal .xterm,
+        #session-preview-terminal .xterm-viewport,
+        #session-preview-terminal .xterm-screen {
+            height: 100% !important;
+        }
+
         @keyframes slideIn {
             from { transform: translateX(100%); opacity: 0; }
             to { transform: translateX(0); opacity: 1; }
