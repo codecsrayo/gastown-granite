@@ -66,6 +66,20 @@ type APIHandler struct {
 	csrfToken string
 }
 
+// tmuxArgsWithSocket prepends `-L <socket>` to tmux args when a default
+// town socket is configured. Without it, tmux talks to the default socket
+// which has no Gas Town sessions — capture-pane returns "no such session".
+func tmuxArgsWithSocket(args ...string) []string {
+	socket := tmux.GetDefaultSocket()
+	if socket == "" {
+		return args
+	}
+	full := make([]string, 0, len(args)+2)
+	full = append(full, "-L", socket)
+	full = append(full, args...)
+	return full
+}
+
 const optionsCacheTTL = 30 * time.Second
 
 // maxConcurrentCommands limits how many gt subprocesses can run at once.
@@ -1953,7 +1967,8 @@ func paneCurrentCommandIsAgent(output string) bool {
 
 // hasQuestionInPane checks the last output for question indicators.
 func (h *APIHandler) hasQuestionInPane(ctx context.Context, sessionName string) bool {
-	cmd := exec.CommandContext(ctx, "tmux", "capture-pane", "-t", sessionName, "-p", "-J")
+	args := tmuxArgsWithSocket("capture-pane", "-t", sessionName, "-p", "-J")
+	cmd := exec.CommandContext(ctx, "tmux", args...)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
@@ -2118,7 +2133,8 @@ func (h *APIHandler) handleSessionPreview(w http.ResponseWriter, r *http.Request
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "tmux", "capture-pane", "-t", sessionName, "-p", "-J", "-S", "-30")
+	args := tmuxArgsWithSocket("capture-pane", "-t", sessionName, "-p", "-J", "-S", "-30")
+	cmd := exec.CommandContext(ctx, "tmux", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
