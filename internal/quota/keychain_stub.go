@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package quota
 
@@ -7,7 +7,7 @@ import (
 	"errors"
 )
 
-var errNotDarwin = errors.New("keychain operations are only supported on macOS")
+var errNotDarwin = errors.New("keychain operations are not supported on this OS")
 
 // KeychainCredential holds a backup of a keychain credential for rollback.
 type KeychainCredential struct {
