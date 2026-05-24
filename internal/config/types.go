@@ -1542,6 +1542,11 @@ type QuotaState struct {
 	// keychain entry — not the target's. SyncSwappedTokens uses this map
 	// to propagate fresh tokens to all target keychain entries.
 	ActiveSwaps map[string]string `json:"active_swaps,omitempty"` // targetConfigDir -> sourceAccountHandle
+
+	// LastBlockedAlertAt is the RFC3339 timestamp of the last "rotation blocked"
+	// escalation emission. Used by `gt quota watch` to throttle alerts so a
+	// stuck-rotation incident emits at most one escalation per cooldown window.
+	LastBlockedAlertAt string `json:"last_blocked_alert_at,omitempty"`
 }
 
 // AccountQuotaStatus is the rate-limit status of an account.

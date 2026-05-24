@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
 	"os/signal"
 	"slices"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -20,6 +22,12 @@ import (
 	"github.com/steveyegge/gastown/internal/util"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
+
+// quotaBlockedAlertCooldown is the minimum time between successive
+// "rotation blocked" escalation emissions from `gt quota watch`. A blocked
+// incident persists across many polling cycles; without throttling the watcher
+// would emit a new escalation every interval.
+const quotaBlockedAlertCooldown = 30 * time.Minute
 
 // quotaLogger adapts style.PrintWarning to the quota.Logger interface.
 type quotaLogger struct{}
@@ -440,6 +448,15 @@ func runQuotaRotate(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(plan.Assignments) == 0 {
+		// Rotation-blocked: sessions are rate-limited but every candidate
+		// account was skipped (typically expired tokens). Emit a throttled
+		// escalation so operators see it on the dashboard even when nobody
+		// is tailing `gt quota rotate`. Also fires when invoked by the
+		// quota_dog daemon patrol or the long-running quota watch loop.
+		if len(plan.LimitedSessions) > 0 {
+			maybeEmitRotationBlockedAlert(mgr, plan)
+		}
+
 		if quotaJSON {
 			return json.NewEncoder(os.Stdout).Encode([]quota.RotateResult{})
 		}
@@ -904,6 +921,13 @@ func runWatchCycle(townRoot string, acctCfg *config.AccountsConfig) {
 		return
 	}
 
+	// Rotation-blocked detection: limited sessions exist but no plan assignments
+	// were produced (typically because every account had an expired token).
+	// Emit a throttled escalation so operators see it on the dashboard / via mail.
+	if len(plan.LimitedSessions) > 0 && len(plan.Assignments) == 0 {
+		maybeEmitRotationBlockedAlert(mgr, plan)
+	}
+
 	// Report findings
 	now := time.Now().Format("15:04:05")
 	totalTargets := len(plan.LimitedSessions) + len(plan.NearLimitSessions)
@@ -955,6 +979,80 @@ func runWatchCycle(townRoot string, acctCfg *config.AccountsConfig) {
 				result.Error)
 		}
 	}
+}
+
+// maybeEmitRotationBlockedAlert emits a `gt escalate` once per cooldown window
+// when account rotation is wedged (limited sessions exist but no available
+// accounts to rotate to). Tracks the last emission in quota.json so the
+// alert fires once per incident, not once per polling tick.
+func maybeEmitRotationBlockedAlert(mgr *quota.Manager, plan *quota.RotatePlan) {
+	state, err := mgr.Load()
+	if err != nil {
+		style.PrintWarning("quota alert: load state: %v", err)
+		return
+	}
+
+	nowTime := time.Now().UTC()
+	if state.LastBlockedAlertAt != "" {
+		if last, parseErr := time.Parse(time.RFC3339, state.LastBlockedAlertAt); parseErr == nil {
+			if nowTime.Sub(last) < quotaBlockedAlertCooldown {
+				return // still inside cooldown window
+			}
+		}
+	}
+
+	// Build escalation reason from the plan
+	sessions := make([]string, 0, len(plan.LimitedSessions))
+	for _, s := range plan.LimitedSessions {
+		sessions = append(sessions, s.Session)
+	}
+	sort.Strings(sessions)
+
+	skippedHandles := make([]string, 0, len(plan.SkippedAccounts))
+	for h := range plan.SkippedAccounts {
+		skippedHandles = append(skippedHandles, h)
+	}
+	sort.Strings(skippedHandles)
+
+	var reason strings.Builder
+	fmt.Fprintf(&reason, "Account rotation blocked: %d session(s) rate-limited, 0 available accounts.\n", len(sessions))
+	if len(sessions) > 0 {
+		fmt.Fprintf(&reason, "Limited sessions: %s\n", strings.Join(sessions, ", "))
+	}
+	if len(skippedHandles) > 0 {
+		fmt.Fprintln(&reason, "Skipped accounts (reason):")
+		for _, h := range skippedHandles {
+			fmt.Fprintf(&reason, "  - %s: %s\n", h, plan.SkippedAccounts[h])
+		}
+	}
+	fmt.Fprintln(&reason, "")
+	fmt.Fprintln(&reason, "Fix: re-authenticate at least one account via `claude /login` in its config dir,")
+	fmt.Fprintln(&reason, "then `gt quota rotate` to recover blocked sessions.")
+
+	title := fmt.Sprintf("Quota rotation blocked: %d limited session(s), no available accounts", len(sessions))
+	args := []string{
+		"escalate", title,
+		"--severity", "high",
+		"--source", "quota:watch",
+		"--stdin",
+	}
+	cmd := exec.Command("gt", args...) //nolint:gosec // G204: gt is a trusted internal tool
+	cmd.Stdin = strings.NewReader(reason.String())
+	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+		style.PrintWarning("quota alert: emit escalation failed: %v\n%s", runErr, string(out))
+		return
+	}
+
+	// Stamp the emission so we don't fire again until cooldown elapses
+	state.LastBlockedAlertAt = nowTime.Format(time.RFC3339)
+	if saveErr := mgr.Save(state); saveErr != nil {
+		style.PrintWarning("quota alert: persist timestamp: %v", saveErr)
+	}
+
+	stamp := time.Now().Format("15:04:05")
+	fmt.Printf(" [%s] %s rotation blocked — emitted escalation\n",
+		style.Dim.Render(stamp),
+		style.Warning.Render("ALERT"))
 }
 
 func init() {
