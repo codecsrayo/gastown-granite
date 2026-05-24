@@ -390,37 +390,302 @@
     })();
 
     // ============================================
-    // EXPAND BUTTON HANDLER
+    // PANEL POP-OUT (tear-off into standalone window) + SOLO MODE
     // ============================================
-    document.addEventListener('click', function(e) {
-        var btn = e.target.closest('.expand-btn');
-        if (!btn) return;
+    // The dashboard runs in two modes:
+    //   * normal  — the full grid; the ⇱ button on a panel pops it into its
+    //               own window, leaving a "merge back" placeholder behind.
+    //   * solo    — the same page opened as /?solo=<panelId>; everything but
+    //               the target panel is hidden (CSS), so the popup *is* a
+    //               live, self-refreshing copy of that one panel.
+    // Merge-back is coordinated over the 'gastown-panel' BroadcastChannel.
+    var soloPanelId = new URLSearchParams(window.location.search).get('solo');
 
-        e.preventDefault();
-        var panel = btn.closest('.panel');
-        if (!panel) return;
-
-        if (panel.classList.contains('expanded')) {
-            panel.classList.remove('expanded');
-            btn.textContent = 'Expand';
-            // Resume refresh when panel is collapsed
-            window.pauseRefresh = false;
-        } else {
-            document.querySelectorAll('.panel.expanded').forEach(function(p) {
-                p.classList.remove('expanded');
-                var b = p.querySelector('.expand-btn');
-                if (b) b.textContent = 'Expand';
-            });
-            panel.classList.add('expanded');
-            btn.textContent = '✕ Close';
-            // Pause refresh while panel is expanded
-            window.pauseRefresh = true;
-        }
+    // Single source of truth for per-panel UI state (Observer + Memento via
+    // GTStore). `collapsed` is persisted across reloads; `poppedOut` is
+    // session-only — a popped-out panel's window dies on reload, so there'd
+    // be nothing to merge back. Every mutation re-renders through the
+    // subscriber below, which is also what we re-run after an HTMX morph.
+    var panelStore = GTStore.create({
+        key:     'gastown-panel-ui',
+        initial: { collapsed: {}, poppedOut: {} },
+        persist: function (s) { return { collapsed: s.collapsed }; },
     });
+
+    function applyPoppedOut(panel) {
+        panel.classList.add('popped-out');
+        if (!panel.querySelector('.panel-popped-note')) {
+            var note = document.createElement('div');
+            note.className = 'panel-popped-note';
+            note.innerHTML =
+                '<span class="panel-popped-label">Abierto en ventana aparte</span>' +
+                '<button class="panel-merge-back-btn" type="button">⇲ Reintegrar</button>';
+            panel.appendChild(note);
+        }
+    }
+
+    function clearPoppedOut(panel) {
+        panel.classList.remove('popped-out');
+        var note = panel.querySelector('.panel-popped-note');
+        if (note) note.remove();
+    }
+
+    // Render the whole UI state onto the DOM. Idempotent — safe to call on
+    // every store change and after every morph.
+    function applyPanelState(s) {
+        document.querySelectorAll('.panel[id]').forEach(function (panel) {
+            var id = panel.id;
+            // Never collapse the solo-mode target — it owns the whole window.
+            panel.classList.toggle('collapsed', !!s.collapsed[id] && id !== soloPanelId);
+            if (s.poppedOut[id]) applyPoppedOut(panel);
+            else clearPoppedOut(panel);
+        });
+    }
+    panelStore.subscribe(applyPanelState); // fires now → restores on load
+
+    function markPanelPoppedOut(panelId) {
+        panelStore.set(function (s) { s.poppedOut[panelId] = true; });
+    }
+
+    function mergePanelBack(panelId) {
+        panelStore.set(function (s) { delete s.poppedOut[panelId]; });
+    }
+
+    // Dim "0" count badges so the eye lands on panels that actually have
+    // something. CSS can't match text content, so we tag them here and
+    // re-run after every morph.
+    function decorateCounts() {
+        document.querySelectorAll('.panel-header .count').forEach(function (el) {
+            var n = el.textContent.trim();
+            el.classList.toggle('count-zero', n === '' || n === '0');
+        });
+    }
+    decorateCounts();
+
+    // ============================================
+    // HELP POPOVER — per-panel "?" explainer
+    // ============================================
+    // The popover itself is the reusable GTHelpPopover component (any box
+    // with a .help-btn inherits the behavior). Here we only register the
+    // panel-specific content sourced from docs/glossary.md and install it.
+    GTHelpPopover.registerAll({
+        'convoy-panel': {
+            title: '🚚 Convoys',
+            html:
+                '<p>Órdenes de trabajo principales que envuelven Beads relacionados.</p>' +
+                '<ul>' +
+                  '<li>Agrupan tareas y pueden asignarse a varios workers.</li>' +
+                  '<li>Crear con <code>gt convoy create</code> o el botón <code>+ New Convoy</code>.</li>' +
+                  '<li>Click en una fila para detalle (progreso, work, actividad).</li>' +
+                '</ul>',
+        },
+        'crew-panel': {
+            title: '👨‍💼 Crew',
+            html:
+                '<p>Agentes nombrados de larga vida para colaboración persistente.</p>' +
+                '<ul>' +
+                  '<li>Mantienen contexto entre sesiones (a diferencia de Polecats efímeros).</li>' +
+                  '<li>Ideales para trabajo en curso con un humano o tema concreto.</li>' +
+                '</ul>',
+        },
+        'polecats-panel': {
+            title: '🦨 Polecats',
+            html:
+                '<p>Workers con identidad persistente pero sesiones efímeras.</p>' +
+                '<ul>' +
+                  '<li>Cada uno tiene un bead de agente, cadena CV e historial.</li>' +
+                  '<li>Trabajan en worktrees git aislados para evitar conflictos.</li>' +
+                  '<li>Sesiones y sandboxes se crean por tarea, se limpian al terminar.</li>' +
+                '</ul>',
+        },
+        'sessions-panel': {
+            title: '📟 Sessions',
+            html:
+                '<p>Sesiones tmux vivas de todos los agentes.</p>' +
+                '<ul>' +
+                  '<li>Click en una fila → abre terminal xterm.js en el panel inferior.</li>' +
+                  '<li>Cerrar la tab solo desconecta el navegador; la sesión sigue en tmux.</li>' +
+                '</ul>',
+        },
+        'activity-panel': {
+            title: '📜 Activity',
+            html:
+                '<p>Timeline de eventos del sistema (boot, sling, done, merges, escalaciones…).</p>' +
+                '<ul>' +
+                  '<li>Filtros por categoría (Agent / Work / Comms / System), Rig y Agente.</li>' +
+                  '<li>Stream en vivo vía SSE.</li>' +
+                '</ul>',
+        },
+        'git-panel': {
+            title: '🌳 Git',
+            html:
+                '<p>Cambios de refs en vivo a través de Rigs y worktrees de Polecats.</p>' +
+                '<ul>' +
+                  '<li>Branches creados, push y delete — stream en tiempo real.</li>' +
+                  '<li>Filtros por repo y tipo de evento.</li>' +
+                '</ul>',
+        },
+        'mail-panel': {
+            title: '✉️ Mail',
+            html:
+                '<p>Mensajería persistente entre agentes — cartas con thread.</p>' +
+                '<ul>' +
+                  '<li>Conversaciones agrupadas; compose desde aquí.</li>' +
+                  '<li>Distinto de <code>gt nudge</code> (mensajería real-time, no persistida).</li>' +
+                '</ul>',
+        },
+        'merge-queue-panel': {
+            title: '🔀 Merge Queue',
+            html:
+                '<p>Cola del <strong>Refinery</strong> — branches de Polecats esperando merge.</p>' +
+                '<ul>' +
+                  '<li>El Refinery mergea inteligentemente y maneja conflictos.</li>' +
+                  '<li>Garantiza calidad antes de tocar <code>main</code>.</li>' +
+                '</ul>',
+        },
+        'escalations-panel': {
+            title: '🚨 Escalations',
+            html:
+                '<p>Alertas de Polecats o Refinery que requieren atención humana.</p>' +
+                '<ul>' +
+                  '<li>Ack, cerrar o reasignar desde aquí.</li>' +
+                  '<li>Disparadas por merges fallidos, polecats stuck, etc.</li>' +
+                '</ul>',
+        },
+        'rigs-panel': {
+            title: '🏗️ Rigs',
+            html:
+                '<p>Repos git bajo manejo de Gas Town — donde ocurre el trabajo real.</p>' +
+                '<ul>' +
+                  '<li>Cada Rig tiene sus Polecats, Refinery, Witness y Crew.</li>' +
+                  '<li>El nivel <em>Town</em> (<code>~/gt/</code>) coordina todos los Rigs.</li>' +
+                '</ul>',
+        },
+        'dogs-panel': {
+            title: '🐕 Dogs',
+            html:
+                '<p>Crew de mantenimiento del <strong>Deacon</strong>: cleanup, health checks, tareas background.</p>' +
+                '<ul>' +
+                  '<li><strong>Boot</strong> (el Dog) revisa al Deacon cada 5 min — watchdog del watchdog.</li>' +
+                '</ul>',
+        },
+        'queues-panel': {
+            title: '📋 Queues',
+            html:
+                '<p>Colas de trabajo por agente (basadas en Hook).</p>' +
+                '<ul>' +
+                  '<li>Muestra qué hay encolado para cada worker.</li>' +
+                '</ul>',
+        },
+        'work-panel': {
+            title: '📋 Work',
+            html:
+                '<p><strong>Beads</strong> — unidades atómicas de trabajo en Dolt (issues, tasks, epics).</p>' +
+                '<ul>' +
+                  '<li>Filtrar por prioridad y estado.</li>' +
+                  '<li>Asignar a un agente con <code>gt sling</code>.</li>' +
+                '</ul>',
+        },
+        'hooks-panel': {
+            title: '🪝 Hooks',
+            html:
+                '<p>Bead pinneado por agente — su cola principal de trabajo.</p>' +
+                '<ul>' +
+                  '<li><strong>GUPP</strong>: «If there is work on your Hook, YOU MUST RUN IT.»</li>' +
+                  '<li>Attach / detach desde <code>+ Attach</code> o <code>Clear All</code>.</li>' +
+                '</ul>',
+        },
+    });
+    GTHelpPopover.install({ footer: 'Más info: <code>docs/glossary.md</code>' });
+
+    // Concrete tear-off factory for grid panels: opens the dashboard in
+    // solo mode in a standalone window and hides the panel behind a
+    // placeholder; merge-back restores it in place.
+    var panelTearOff = GTTearOff.createController({
+        channelName:    function () { return 'gastown-panel'; },
+        windowFeatures: function () { return 'width=1100,height=820,resizable=yes,scrollbars=yes'; },
+        urlFor:   function (item) { return '/?solo=' + encodeURIComponent(item.panelId); },
+        onDetach: function (item) { markPanelPoppedOut(item.panelId); },
+        onMerge:  function (msg)  { mergePanelBack(msg.panel); },
+        matches:  function (msg)  { return !!msg.panel; },
+    });
+
+    if (soloPanelId) {
+        initSoloMode(soloPanelId);
+    } else {
+        // ---- Pop-out (⇱): tear the panel into its own window -----------
+        document.addEventListener('click', function (e) {
+            var btn = e.target.closest('.popout-btn');
+            if (!btn) return;
+            e.preventDefault();
+            var panel = btn.closest('.panel');
+            if (!panel || !panel.id) return;
+            if (panelStore.get().poppedOut[panel.id]) return; // already out
+            var win = panelTearOff.popOut({ panelId: panel.id });
+            if (!win) showToast('error', 'Pop-out blocked', 'Allow popups for this site');
+        });
+
+        // ---- Merge back (placeholder button): ask the popup to close ----
+        document.addEventListener('click', function (e) {
+            var btn = e.target.closest('.panel-merge-back-btn');
+            if (!btn) return;
+            e.preventDefault();
+            var panel = btn.closest('.panel');
+            if (!panel) return;
+            // Tell the popup to close itself; re-show locally right away so
+            // the grid recovers even if the popup window is already gone.
+            if (panelTearOff.channel) {
+                panelTearOff.channel.postMessage({ type: 'merge-request', panel: panel.id });
+            }
+            mergePanelBack(panel.id);
+        });
+    }
+
+    // Solo mode: hide everything but the target panel (CSS via body class)
+    // and add a floating "Reintegrar" control that merges back and closes.
+    function initSoloMode(panelId) {
+        document.body.classList.add('solo-mode');
+        var panel = document.getElementById(panelId);
+        if (panel) {
+            panel.classList.add('solo-target');
+            var h = panel.querySelector('.panel-header h2');
+            if (h) document.title = 'gt: ' + h.textContent.trim();
+        }
+        var bar = document.createElement('div');
+        bar.className = 'solo-bar';
+        bar.innerHTML = '<button class="solo-merge-btn" type="button" ' +
+            'title="Reintegrar al dashboard">⇲ Reintegrar</button>';
+        document.body.appendChild(bar);
+
+        var merge = GTTearOff.createMergeChannel('gastown-panel');
+        var done = false;
+        function mergeBack() {
+            if (done) return;
+            done = true;
+            merge.merge({ panel: panelId });
+        }
+        bar.querySelector('.solo-merge-btn').addEventListener('click', function () {
+            mergeBack();
+            window.close();
+        });
+        // The dashboard can also request the merge (placeholder button).
+        if (merge.channel) {
+            merge.channel.addEventListener('message', function (ev) {
+                var m = ev.data || {};
+                if (m.type === 'merge-request' && m.panel === panelId) window.close();
+            });
+        }
+        // Closing the window for any reason re-integrates the panel — a
+        // panel popup owns no killable resource, so it must never vanish.
+        window.addEventListener('beforeunload', mergeBack);
+    }
 
     // ============================================
     // COLLAPSE BUTTON HANDLER
     // ============================================
+    // Toggle the panel's collapse bit in panelStore; the store's subscriber
+    // (applyPanelState) renders it and persists to localStorage. Panels
+    // without an id can't be tracked — toggle them directly (there are none).
     document.addEventListener('click', function(e) {
         var btn = e.target.closest('.collapse-btn');
         if (!btn) return;
@@ -429,14 +694,23 @@
         var panel = btn.closest('.panel');
         if (!panel) return;
 
-        panel.classList.toggle('collapsed');
+        if (!panel.id) { panel.classList.toggle('collapsed'); return; }
+        panelStore.set(function (s) {
+            if (s.collapsed[panel.id]) delete s.collapsed[panel.id];
+            else s.collapsed[panel.id] = true;
+        });
     });
 
     // After HTMX swap - morph preserves most state, but we need to re-init some things
     document.body.addEventListener('htmx:afterSwap', function() {
-        // Morph preserves expanded class, so we don't need to close panels anymore
-        // Just check if we should resume refresh
-        var hasExpanded = document.querySelector('.panel.expanded');
+        // Morph re-renders panels from the server, wiping client-only state.
+        // Re-render the whole UI state from the single store + re-tag chrome.
+        if (soloPanelId) {
+            var sp = document.getElementById(soloPanelId);
+            if (sp) sp.classList.add('solo-target');
+        }
+        applyPanelState(panelStore.get());
+        decorateCounts();
         var mailDetail = document.getElementById('mail-detail');
         var mailCompose = document.getElementById('mail-compose');
         var issueDetail = document.getElementById('issue-detail');
@@ -454,7 +728,7 @@
                           (convoyDetailView && convoyDetailView.style.display !== 'none') ||
                           (convoyCreateView && convoyCreateView.style.display !== 'none') ||
                           outputPanelOpen;
-        if (!inDetailView && !hasExpanded) {
+        if (!inDetailView) {
             window.pauseRefresh = false;
         }
         // Reload dynamic panels after swap (handled via window functions)
@@ -722,25 +996,13 @@
         addConsoleTab(cmd, sessionName);
     }
 
-    // Pop-out: open the tab's session in a standalone browser window and
-    // remove the tab from the dashboard (no kill — the popup owns the
-    // attach now). Returning to the dashboard re-adds it via the
-    // BroadcastChannel listener below.
-    function popoutConsoleTab(sessionName) {
+    // Detach a tab from the dashboard without killing its tmux session:
+    // tear down the local attach if it was the active tab, splice the tab,
+    // and switch to the next sibling (or close the panel if empty). Used
+    // by the tear-off factory below — the popup owns the attach afterwards.
+    function detachConsoleTab(sessionName) {
         var idx = findTab(sessionName);
         if (idx === -1) return;
-        var tab = consoleTabs[idx];
-        var url = '/static/console.html'
-            + '?session=' + encodeURIComponent(sessionName)
-            + '&label='   + encodeURIComponent(tab.cmdName || sessionName);
-        var win = window.open(url, '_blank', 'width=960,height=600,resizable=yes');
-        if (!win) {
-            showToast('error', 'Pop-out blocked', 'Allow popups for this site');
-            return;
-        }
-        // Detach from dashboard without killing: tear down the local
-        // attach if it was the active tab, splice the tab, and switch
-        // to the next sibling (or close the panel if empty).
         consoleTabs.splice(idx, 1);
         if (activeConsoleSession === sessionName) {
             closeSessionAttachInner();
@@ -755,6 +1017,33 @@
         } else {
             renderConsoleTabs();
         }
+    }
+
+    // Concrete tear-off factory for console tabs: opens console.html in a
+    // standalone window, detaches the tab, and re-adds it on merge-back.
+    var consoleTearOff = GTTearOff.createController({
+        channelName:    function () { return 'gastown-console'; },
+        windowFeatures: function () { return 'width=960,height=600,resizable=yes'; },
+        urlFor: function (item) {
+            return '/static/console.html'
+                + '?session=' + encodeURIComponent(item.sessionName)
+                + '&label='   + encodeURIComponent(item.cmdName || item.sessionName);
+        },
+        onDetach: function (item) { detachConsoleTab(item.sessionName); },
+        onMerge:  function (msg) {
+            addConsoleTab(msg.label || msg.session, msg.session, {
+                ephemeral: msg.ephemeral !== false,
+            });
+            showToast('info', 'Merged back', msg.label || msg.session);
+        },
+        matches: function (msg) { return !!msg.session; },
+    });
+
+    function popoutConsoleTab(sessionName) {
+        var idx = findTab(sessionName);
+        if (idx === -1) return;
+        var win = consoleTearOff.popOut(consoleTabs[idx]);
+        if (!win) showToast('error', 'Pop-out blocked', 'Allow popups for this site');
     }
 
     // Tab clicks: pop-out (⇱), close (✕), or switch (label area).
@@ -801,21 +1090,8 @@
         });
     }
 
-    // BroadcastChannel listener: a popped-out console can ask to merge
-    // back into the dashboard. We re-add it as a tab (with the same
-    // ephemeral flag) and mount the attach; the popup window closes
-    // itself on its side.
-    try {
-        var mergeChannel = new BroadcastChannel('gastown-console');
-        mergeChannel.addEventListener('message', function(ev) {
-            var msg = ev.data || {};
-            if (msg.type !== 'merge' || !msg.session) return;
-            addConsoleTab(msg.label || msg.session, msg.session, {
-                ephemeral: msg.ephemeral !== false,
-            });
-            showToast('info', 'Merged back', msg.label || msg.session);
-        });
-    } catch (e) { /* BroadcastChannel unsupported — silent fallback */ }
+    // Merge-back for popped-out consoles is handled by consoleTearOff's
+    // BroadcastChannel listener (see GTTearOff.createController above).
 
     document.getElementById('output-close-btn').onclick = function() {
         // Close button reaps every EPHEMERAL session in the tab list (the
@@ -1510,19 +1786,6 @@
                 openPalette();
             }
             return;
-        }
-
-        // Escape closes expanded panels when palette is not open
-        if (!isPaletteOpen && e.key === 'Escape') {
-            var expanded = document.querySelector('.panel.expanded');
-            if (expanded) {
-                e.preventDefault();
-                expanded.classList.remove('expanded');
-                var expandBtn = expanded.querySelector('.expand-btn');
-                if (expandBtn) expandBtn.textContent = 'Expand';
-                window.pauseRefresh = false;
-                return;
-            }
         }
 
         // Rest only when palette is open

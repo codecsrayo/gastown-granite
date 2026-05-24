@@ -117,16 +117,58 @@
         }
 
         .panel-header .count {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 28px;
+            height: 22px;
+            padding: 0 11px;
+            margin-left: 4px;
             font-size: 0.75rem;
-            color: var(--text-muted);
-            background: var(--border);
-            padding: 2px 8px;
-            border-radius: 10px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            line-height: 1;
+            color: var(--blue);
+            background: linear-gradient(180deg,
+                rgba(89, 194, 255, 0.20),
+                rgba(89, 194, 255, 0.08));
+            border: 1px solid rgba(89, 194, 255, 0.35);
+            border-radius: 999px;
+            box-shadow: 0 0 0 1px rgba(89, 194, 255, 0.05),
+                        0 1px 3px rgba(0, 0, 0, 0.3);
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .panel-header:hover .count {
+            transform: translateY(-1px);
+            box-shadow: 0 0 10px rgba(89, 194, 255, 0.30);
+        }
+
+        /* Zero is muted — nothing to draw the eye to. */
+        .panel-header .count.count-zero {
+            color: var(--text-secondary);
+            background: var(--bg-card-hover);
+            border-color: var(--border-accent);
+            box-shadow: none;
         }
 
         .panel-header .count-alert {
-            background: var(--red);
-            color: var(--bg-dark);
+            color: var(--red);
+            background: linear-gradient(180deg,
+                rgba(240, 113, 120, 0.22),
+                rgba(240, 113, 120, 0.10));
+            border-color: rgba(240, 113, 120, 0.45);
+            animation: count-pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes count-pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(240, 113, 120, 0.0); }
+            50%      { box-shadow: 0 0 9px 1px rgba(240, 113, 120, 0.45); }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .panel-header .count,
+            .panel-header .count-alert { transition: none; animation: none; }
         }
 
         .panel-body {
@@ -2203,13 +2245,61 @@
             border-color: var(--text-muted);
         }
 
-        .panel.collapsed .panel-body,
-        .panel.collapsed .panel-tabs {
+        /* Collapse hides every direct child except the header. Targeting the
+           body/tabs alone left header-level siblings (e.g. Activity's
+           .tl-filters) visible below a "collapsed" panel. */
+        .panel.collapsed > :not(.panel-header):not(.panel-popped-note) {
             display: none;
         }
 
         .panel.collapsed .collapse-btn {
             transform: rotate(-90deg);
+        }
+
+        /* Grid tracks stretch every panel to the tallest sibling's height
+           (align-items: stretch is the default). That left a collapsed
+           panel as a tall empty box. Pin collapsed/popped panels to the
+           top of their track so the whole box shrinks to its header. */
+        .panel.collapsed,
+        .panel.popped-out {
+            align-self: start;
+        }
+
+        /* Popped-out placeholder: the panel content lives in a standalone
+           window; the grid keeps a slot with a one-click merge-back. */
+        .panel-popped-note {
+            display: none;
+        }
+
+        .panel.popped-out .panel-body,
+        .panel.popped-out .panel-tabs {
+            display: none;
+        }
+
+        .panel.popped-out .panel-popped-note {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 14px 16px;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+
+        .panel-merge-back-btn {
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 0.75rem;
+            padding: 4px 10px;
+            white-space: nowrap;
+        }
+
+        .panel-merge-back-btn:hover {
+            border-color: var(--blue);
+            color: var(--blue);
         }
 
         /* Medium screens / tablets */
@@ -2326,71 +2416,242 @@
             }
         }
 
-        /* Expand mode (client-side JS) */
         .panel-header {
             display: flex;
             align-items: center;
         }
 
-        .expand-btn {
+        /* Pop-out (⇱): tear the panel into a standalone window. Icon button,
+           pushed to the right edge of the header. */
+        .popout-btn {
             margin-left: auto;
-            font-size: 0.7rem;
+            font-size: 0.95rem;
+            line-height: 1;
             color: var(--text-muted);
             cursor: pointer;
-            padding: 2px 8px;
+            padding: 2px 7px;
             border: 1px solid var(--border);
             border-radius: 4px;
             background: none;
         }
 
-        .expand-btn:hover {
+        .popout-btn:hover {
+            color: var(--blue);
+            border-color: var(--blue);
+        }
+
+        /* Help (?) — opens a popover with a short description of the panel. */
+        .help-btn {
+            margin-left: 6px;
+            width: 20px;
+            height: 20px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+            font-weight: 700;
+            line-height: 1;
             color: var(--text-secondary);
-            border-color: var(--text-muted);
+            cursor: pointer;
+            padding: 0;
+            border: 1px solid var(--border);
+            border-radius: 50%;
+            background: none;
         }
 
-        .panel.expanded {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            z-index: 100;
+        .help-btn:hover {
+            color: var(--purple);
+            border-color: var(--purple);
+        }
+
+        .help-btn[aria-expanded="true"] {
+            color: var(--purple);
+            border-color: var(--purple);
+            background: rgba(210, 166, 255, 0.12);
+        }
+
+        /* Popover — absolutely positioned anchored under the help button. */
+        .help-popover {
+            position: absolute;
+            z-index: 200;
+            max-width: 360px;
+            min-width: 240px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-accent);
+            border-radius: 8px;
+            box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+            color: var(--text-primary);
+            font-size: 0.78rem;
+            line-height: 1.45;
+            padding: 12px 14px;
+        }
+
+        .help-popover[hidden] { display: none; }
+
+        .help-popover-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--blue);
+        }
+
+        .help-popover-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 0.9rem;
+            padding: 0 2px;
+            line-height: 1;
+        }
+
+        .help-popover-close:hover { color: var(--red); }
+
+        .help-popover-body p { margin: 0 0 6px; }
+        .help-popover-body p:last-child { margin-bottom: 0; }
+        .help-popover-body ul {
+            margin: 4px 0 6px 18px;
+            padding: 0;
+            color: var(--text-secondary);
+        }
+        .help-popover-body code {
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            padding: 1px 5px;
+            font-size: 0.85em;
+            color: var(--cyan);
+        }
+        .help-popover-footer {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid var(--border);
+            font-size: 0.7rem;
+            color: var(--text-muted);
+        }
+
+        /* Arrow above the popover, pointing at the help button. */
+        .help-popover::before {
+            content: "";
+            position: absolute;
+            top: -6px;
+            left: 16px;
+            width: 10px;
+            height: 10px;
+            background: var(--bg-card);
+            border-top: 1px solid var(--border-accent);
+            border-left: 1px solid var(--border-accent);
+            transform: rotate(45deg);
+        }
+
+        /* ---- Solo mode: /?solo=<panelId> renders one panel full-window ---- */
+        body.solo-mode {
+            padding: 0;
+        }
+
+        body.solo-mode header,
+        body.solo-mode .mayor-banner,
+        body.solo-mode .summary-banner,
+        body.solo-mode .quota-drawer,
+        body.solo-mode .output-panel,
+        body.solo-mode .command-palette-overlay,
+        body.solo-mode .panel:not(.solo-target) {
+            display: none !important;
+        }
+
+        body.solo-mode .panels {
+            display: block;
             margin: 0;
+            gap: 0;
+        }
+
+        /* Flex column so panel-body fills whatever's left after the header
+           and any header-level siblings (e.g. Activity's .tl-filters,
+           Git's .git-filters when rendered outside the body). */
+        body.solo-mode .panel.solo-target {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            margin: 0;
+            border: none;
             border-radius: 0;
-            overflow: auto;
-            background: #0f1419; /* Solid opaque background */
         }
 
-        .panel.expanded .panel-body {
-            max-height: calc(100vh - 50px);
+        body.solo-mode .panel.solo-target > * {
+            flex: 0 0 auto;
+        }
+
+        body.solo-mode .panel.solo-target > .panel-body {
+            flex: 1 1 auto;
+            min-height: 0;
+            max-height: none;
+            height: auto;
             overflow: auto;
         }
 
-        .panel.expanded table {
+        /* Lists inside the body (timelines, feeds) should stretch and
+           scroll within the body, not push it. */
+        body.solo-mode .panel.solo-target > .panel-body > .tl-timeline,
+        body.solo-mode .panel.solo-target > .panel-body > .activity-feed,
+        body.solo-mode .panel.solo-target > .panel-body > table {
+            width: 100%;
+        }
+
+        body.solo-mode .panel.solo-target table {
             font-size: 0.95rem;
         }
 
-        .panel.expanded .expand-btn {
-            color: var(--red);
-            border-color: var(--red);
+        /* The panel owns the whole window in solo mode — its own collapse /
+           pop-out controls would be meaningless there. */
+        body.solo-mode .panel.solo-target .collapse-btn,
+        body.solo-mode .panel.solo-target .popout-btn {
+            display: none;
         }
 
-        /* Don't truncate text when expanded */
-        .panel.expanded .pr-title,
-        .panel.expanded .convoy-id,
-        .panel.expanded .polecat-issue,
-        .panel.expanded .issue-title,
-        .panel.expanded .hook-title,
-        .panel.expanded .mail-subject,
-        .panel.expanded .mail-thread-preview,
-        .panel.expanded .mail-thread-left .mail-from,
-        .panel.expanded .feed-summary,
-        .panel.expanded .tl-summary,
-        .panel.expanded td {
+        /* Don't truncate text when a panel has the whole window to itself. */
+        body.solo-mode .panel.solo-target .pr-title,
+        body.solo-mode .panel.solo-target .convoy-id,
+        body.solo-mode .panel.solo-target .polecat-issue,
+        body.solo-mode .panel.solo-target .issue-title,
+        body.solo-mode .panel.solo-target .hook-title,
+        body.solo-mode .panel.solo-target .mail-subject,
+        body.solo-mode .panel.solo-target .mail-thread-preview,
+        body.solo-mode .panel.solo-target .mail-thread-left .mail-from,
+        body.solo-mode .panel.solo-target .feed-summary,
+        body.solo-mode .panel.solo-target .tl-summary,
+        body.solo-mode .panel.solo-target td {
             max-width: none;
             white-space: normal;
             overflow: visible;
             text-overflow: unset;
+        }
+
+        /* Floating "merge back" control shown only in solo windows. */
+        .solo-bar {
+            position: fixed;
+            bottom: 14px;
+            right: 14px;
+            z-index: 1000;
+        }
+
+        .solo-merge-btn {
+            background: var(--bg-card);
+            border: 1px solid var(--border-accent);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 0.8rem;
+            padding: 8px 14px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+        }
+
+        .solo-merge-btn:hover {
+            color: var(--blue);
+            border-color: var(--blue);
         }
 
         /* Small screens / phones (< 600px) */

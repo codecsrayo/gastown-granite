@@ -11,7 +11,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
-    <link rel="stylesheet" href="/static/dashboard.css?v=15">
+    <link rel="stylesheet" href="/static/dashboard.css?v=20">
 </head>
 <body>
     <div class="dashboard" id="dashboard-main" hx-get="/" hx-trigger="sse:dashboard-update, every 30s [!window.pauseRefresh && !window.sseConnected]" hx-swap="morph:outerHTML" hx-ext="morph">
@@ -154,8 +154,9 @@
                     <h2>🚚 Convoys</h2>
                     <span class="count">{{len .Convoys}}</span>
                     <button class="new-convoy-btn" id="new-convoy-btn">+ New Convoy</button>
+                    <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
                     <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="expand-btn">Expand</button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
                 </div>
                 <div class="panel-body">
                     <!-- Convoy List View -->
@@ -298,8 +299,9 @@
                 <div class="panel-header">
                     <h2>👨‍💼 Crew</h2>
                     <span class="count" id="crew-count">0</span>
+                    <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
                     <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="expand-btn">Expand</button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
                 </div>
                 <div class="panel-body">
                     <div class="loading-state" id="crew-loading">Loading crew...</div>
@@ -330,8 +332,9 @@
                 <div class="panel-header">
                     <h2>🦨 Polecats</h2>
                     <span class="count">{{len .Workers}}</span>
+                    <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
                     <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="expand-btn">Expand</button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
                 </div>
                 <div class="panel-body">
                     {{if .Workers}}
@@ -392,8 +395,9 @@
                 <div class="panel-header">
                     <h2>📟 Sessions</h2>
                     <span class="count">{{len .Sessions}}</span>
+                    <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
                     <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="expand-btn">Expand</button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
                 </div>
                 <div class="panel-body">
                     {{if .Sessions}}
@@ -436,8 +440,9 @@
                 <div class="panel-header">
                     <h2>📜 Activity</h2>
                     <span class="count">{{len .Activity}}</span>
+                    <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
                     <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="expand-btn">Expand</button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
                 </div>
                 {{if .Activity}}
                 <div class="tl-filters">
@@ -503,7 +508,9 @@
                     <h2>🌳 Git</h2>
                     <span class="count" id="git-count" hx-preserve="true">0</span>
                     <span class="git-status" id="git-status" title="live stream status" hx-preserve="true" style="font-size:0.75rem;color:var(--text-muted);margin-left:6px;">connecting…</span>
+                    <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
                     <button class="collapse-btn" aria-label="Toggle panel">▼</button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
                 </div>
                 <div class="panel-body">
                     <div class="git-filters" id="git-filters" hx-preserve="true">
@@ -545,8 +552,9 @@
                         <button class="mail-tab" data-tab="all">All Traffic</button>
                     </div>
                     <button class="compose-btn" id="compose-mail-btn" title="Compose new message">✎</button>
+                    <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
                     <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="expand-btn">Expand</button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
                 </div>
                 <div class="panel-body">
                     <!-- Inbox view (threaded conversations via API) -->
@@ -639,8 +647,9 @@
                 <div class="panel-header">
                     <h2>🔀 Merge Queue</h2>
                     <span class="count">{{len .MergeQueue}}</span>
+                    <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
                     <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="expand-btn">Expand</button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
                 </div>
                 <div class="panel-body">
                     <!-- PR List View -->
@@ -726,8 +735,9 @@
                 <div class="panel-header">
                     <h2>🚨 Escalations</h2>
                     <span class="count{{if .Escalations}} count-alert{{end}}">{{len .Escalations}}</span>
+                    <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
                     <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="expand-btn">Expand</button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
                 </div>
                 <div class="panel-body">
                     {{if .Escalations}}
@@ -782,8 +792,9 @@
                 <div class="panel-header">
                     <h2>🏗️ Rigs</h2>
                     <span class="count">{{len .Rigs}}</span>
+                    <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
                     <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="expand-btn">Expand</button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
                 </div>
                 <div class="panel-body">
                     {{if .Rigs}}
@@ -823,8 +834,9 @@
                 <div class="panel-header">
                     <h2>🐕 Dogs</h2>
                     <span class="count">{{len .Dogs}}</span>
+                    <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
                     <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="expand-btn">Expand</button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
                 </div>
                 <div class="panel-body">
                     {{if .Dogs}}
@@ -865,8 +877,9 @@
                 <div class="panel-header">
                     <h2>📋 Queues</h2>
                     <span class="count">{{len .Queues}}</span>
+                    <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
                     <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="expand-btn">Expand</button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
                 </div>
                 <div class="panel-body">
                     <table>
@@ -907,8 +920,9 @@
                     <h2>📋 Work</h2>
                     <span class="count">{{len .Issues}}</span>
                     <button class="new-issue-btn" onclick="openIssueModal()">+ New</button>
+                    <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
                     <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="expand-btn">Expand</button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
                 </div>
                 <div class="panel-tabs">
                     <button class="tab-btn active" data-tab="ready" onclick="switchWorkTab('ready')">Ready</button>
@@ -1020,8 +1034,9 @@
                     <span class="count{{if .Hooks}} {{end}}">{{len .Hooks}}</span>
                     <button class="hook-attach-btn" onclick="openHookAttachForm()">+ Attach</button>
                     {{if .Hooks}}<button class="hook-clear-all-btn" onclick="clearAllHooks()">Clear All</button>{{end}}
+                    <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
                     <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="expand-btn">Expand</button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
                 </div>
                 <div class="panel-body">
                     <!-- Attach Hook Form (hidden by default) -->
@@ -1154,6 +1169,9 @@
     </div>
 
     <script src="/static/terminal-attach.js?v=1"></script>
-    <script src="/static/dashboard.js?v=26"></script>
+    <script src="/static/store.js?v=1"></script>
+    <script src="/static/tear-off.js?v=1"></script>
+    <script src="/static/help-popover.js?v=1"></script>
+    <script src="/static/dashboard.js?v=31"></script>
 </body>
 </html>
