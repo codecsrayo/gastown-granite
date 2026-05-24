@@ -258,9 +258,8 @@ func matchesActor(name, actor string) bool {
 func collectBeadsActivity(townRoot, actor string, since time.Time) ([]AuditEntry, error) {
 	var entries []AuditEntry
 
-	// Find the gastown beads path (where gt- prefix issues live)
-	gastownBeadsPath := filepath.Join(townRoot, "gastown", "mayor", "rig")
-	b := beads.New(gastownBeadsPath)
+	// Town-level beads (where hq-/gt- prefix issues live) sit at the workspace root.
+	b := beads.New(townRoot)
 
 	// List all issues to filter by created_by and assignee
 	issues, err := b.List(beads.ListOptions{
