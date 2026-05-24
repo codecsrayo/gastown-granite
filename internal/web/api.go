@@ -169,6 +169,8 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleSessionAttach(w, r)
 	case path == "/session/preview" && r.Method == http.MethodGet:
 		h.handleSessionPreview(w, r)
+	case path == "/session/kill" && r.Method == http.MethodPost:
+		h.handleSessionKill(w, r)
 	case path == "/quota/summary" && r.Method == http.MethodGet:
 		h.handleQuotaSummary(w, r)
 	default:
@@ -409,6 +411,50 @@ func (h *APIHandler) spawnShellSession() (string, error) {
 		return "", fmt.Errorf("tmux new-session: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return sessionName, nil
+}
+
+// handleSessionKill terminates an ephemeral console tmux session created by
+// spawnConsoleSession / spawnShellSession. Restricted to the "gt-console-"
+// prefix so the endpoint can't be used to kill real rig / crew / polecat
+// sessions — those have their own lifecycle owned by gt.
+func (h *APIHandler) handleSessionKill(w http.ResponseWriter, r *http.Request) {
+	sessionName := r.URL.Query().Get("session")
+	if sessionName == "" {
+		h.sendError(w, "missing session", http.StatusBadRequest)
+		return
+	}
+	if !strings.HasPrefix(sessionName, "gt-console-") {
+		h.sendError(w, "kill restricted to gt-console-* sessions", http.StatusForbidden)
+		return
+	}
+	for _, c := range sessionName {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			h.sendError(w, "invalid session name", http.StatusBadRequest)
+			return
+		}
+	}
+
+	tmuxArgs := []string{}
+	if sock := tmux.GetDefaultSocket(); sock != "" {
+		tmuxArgs = append(tmuxArgs, "-L", sock)
+	}
+	tmuxArgs = append(tmuxArgs, "kill-session", "-t", sessionName)
+
+	cmd := exec.Command("tmux", tmuxArgs...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// "session not found" is benign — treat as already-killed and return ok.
+		msg := strings.TrimSpace(string(out))
+		if strings.Contains(strings.ToLower(msg), "no such session") ||
+			strings.Contains(strings.ToLower(msg), "can't find session") {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"killed": false, "reason": "already gone"})
+			return
+		}
+		h.sendError(w, fmt.Sprintf("kill-session: %v (%s)", err, msg), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"killed": true, "session": sessionName})
 }
 
 // sendError sends a JSON error response.

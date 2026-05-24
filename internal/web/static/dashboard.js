@@ -419,9 +419,19 @@
     document.getElementById('output-close-btn').onclick = function() {
         // Closing the panel must also tear down any live attach — otherwise
         // the WS keeps draining tmux output into a hidden buffer forever.
+        // For gt-console-* sessions (ephemeral consoles spawned by
+        // Interactive commands), also kill the underlying tmux session so
+        // we don't leave zombies in `tmux ls`. Real rig/crew/polecat
+        // sessions (non-gt-console- prefix) are left alone — those have
+        // their own lifecycle owned by gt.
         var termWrap = document.getElementById('output-panel-terminal-wrap');
         if (termWrap && termWrap.style.display !== 'none') {
+            var sess = attachSessionName;
             closeSessionAttachInner();
+            if (sess && sess.indexOf('gt-console-') === 0) {
+                fetch('/api/session/kill?session=' + encodeURIComponent(sess), { method: 'POST' })
+                    .catch(function(err) { console.warn('kill console session failed:', err); });
+            }
         }
         outputPanel.classList.remove('open');
     };
