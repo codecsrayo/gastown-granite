@@ -4184,3 +4184,62 @@
             margin-left: 8px;
             font-weight: 400;
         }
+
+        /* Multi-console tab strip inside the output panel. Each tab is a
+         * live gt-console-* tmux session; click to switch, ✕ to kill. */
+        .output-panel-tabs {
+            display: flex;
+            gap: 2px;
+            padding: 4px 8px 0;
+            background: var(--bg-dark);
+            border-bottom: 1px solid var(--border);
+            overflow-x: auto;
+            flex-shrink: 0;
+        }
+        .output-panel-tabs[hidden] { display: none; }
+        .output-tab {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+            border-bottom: none;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+            padding: 4px 4px 4px 10px;
+            font-size: 0.72rem;
+            font-family: inherit;
+            cursor: pointer;
+            white-space: nowrap;
+            max-width: 240px;
+            position: relative;
+            top: 1px;
+        }
+        .output-tab:hover {
+            background: var(--bg-card-hover);
+            color: var(--text-primary);
+        }
+        .output-tab.active {
+            background: var(--bg-card-hover);
+            color: var(--text-primary);
+            border-color: var(--blue);
+            border-bottom: 1px solid var(--bg-card-hover);
+            z-index: 1;
+        }
+        .output-tab-label {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 200px;
+        }
+        .output-tab-close {
+            color: var(--text-muted);
+            padding: 0 4px;
+            border-radius: 2px;
+            font-size: 0.85em;
+            line-height: 1;
+        }
+        .output-tab-close:hover {
+            background: var(--red);
+            color: #fff;
+        }

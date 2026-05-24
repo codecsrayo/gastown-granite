@@ -303,15 +303,16 @@ func (h *APIHandler) spawnConsoleSession(args []string) (string, error) {
 
 	// Args were already SanitizeArgs'd to safe characters. They're
 	// space-joined into a single shell command for tmux to execute via the
-	// default shell. The trailing wrapper preserves the exit code, prints
-	// it, and blocks on a key-press so the user can read the output before
-	// tmux reaps the pane.
+	// default shell. After the gt command finishes, exec the user's login
+	// shell so the tmux session stays alive — the user reads the output,
+	// runs follow-up commands, and closes the pane when ready (Close in
+	// the dashboard kills the session via /api/session/kill).
 	gtCmd := gtPath
 	for _, a := range args {
 		gtCmd += " " + a
 	}
-	wrapper := gtCmd + `; status=$?; printf '\n[exited %d — press any key to close]\n' "$status"; ` +
-		`(read -n1 -s -r 2>/dev/null || sleep 60)`
+	wrapper := gtCmd + `; printf '\n[exited %d — type exit or close to end]\n' "$?"; ` +
+		`exec "${SHELL:-/bin/bash}" -l`
 
 	sessionName := fmt.Sprintf("gt-console-%d", time.Now().UnixNano())
 

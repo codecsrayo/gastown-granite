@@ -398,16 +398,51 @@
         outputPanel.classList.add('open');
     }
 
-    // showOutputTerminal hosts a live tmux attach in the same output panel
-    // headless commands use. The xterm.js wiring is the same as the
-    // session-preview pane (openSessionAttach), just bound to the output
-    // panel's terminal slot via attachTargets.
-    function showOutputTerminal(cmd, sessionName) {
-        outputCmd.textContent = 'gt ' + cmd;
+    // ---- Multi-console tab state ---------------------------------------
+    // Each tab tracks a live gt-console-* tmux session. Only one terminal
+    // is mounted at a time (the active tab); switching tabs tears the
+    // browser-side attach down and re-attaches to the new session. The
+    // tmux session keeps running headless in the background while inactive,
+    // so the user can flip back and the scrollback survives.
+    var consoleTabs = [];           // [{sessionName, cmdName}]
+    var activeConsoleSession = null;
+    var tabsEl = document.getElementById('output-panel-tabs');
+
+    function renderConsoleTabs() {
+        if (!tabsEl) return;
+        if (consoleTabs.length === 0) {
+            tabsEl.setAttribute('hidden', '');
+            tabsEl.innerHTML = '';
+            return;
+        }
+        tabsEl.removeAttribute('hidden');
+        var html = '';
+        for (var i = 0; i < consoleTabs.length; i++) {
+            var t = consoleTabs[i];
+            var cls = 'output-tab' + (t.sessionName === activeConsoleSession ? ' active' : '');
+            html += '<span class="' + cls + '" data-sess="' + escapeHtml(t.sessionName) + '">';
+            html += '<span class="output-tab-label" title="' + escapeHtml(t.sessionName) + '">' + escapeHtml(t.cmdName || t.sessionName) + '</span>';
+            html += '<span class="output-tab-close" data-sess="' + escapeHtml(t.sessionName) + '" title="Kill session">✕</span>';
+            html += '</span>';
+        }
+        tabsEl.innerHTML = html;
+    }
+
+    function findTab(sessionName) {
+        for (var i = 0; i < consoleTabs.length; i++) {
+            if (consoleTabs[i].sessionName === sessionName) return i;
+        }
+        return -1;
+    }
+
+    function mountConsoleSession(sessionName, cmdName) {
+        outputCmd.textContent = cmdName ? ('gt ' + cmdName) : sessionName;
         outputContent.style.display = 'none';
         outputContent.textContent = '';
         var termWrap = document.getElementById('output-panel-terminal-wrap');
         if (termWrap) termWrap.style.display = 'flex';
+        activeConsoleSession = sessionName;
+        renderConsoleTabs();
         outputPanel.classList.add('open');
         openSessionAttach(sessionName, {
             wrapId:   'output-panel-terminal-wrap',
@@ -416,23 +451,83 @@
         });
     }
 
+    function addConsoleTab(cmdName, sessionName) {
+        if (findTab(sessionName) === -1) {
+            consoleTabs.push({ sessionName: sessionName, cmdName: cmdName });
+        }
+        mountConsoleSession(sessionName, cmdName);
+    }
+
+    function switchConsoleTab(sessionName) {
+        if (sessionName === activeConsoleSession) return;
+        var idx = findTab(sessionName);
+        if (idx === -1) return;
+        mountConsoleSession(sessionName, consoleTabs[idx].cmdName);
+    }
+
+    function killConsoleSession(sessionName) {
+        if (sessionName && sessionName.indexOf('gt-console-') === 0) {
+            fetch('/api/session/kill?session=' + encodeURIComponent(sessionName), { method: 'POST' })
+                .catch(function(err) { console.warn('kill console session failed:', err); });
+        }
+    }
+
+    function closeConsoleTab(sessionName) {
+        var idx = findTab(sessionName);
+        if (idx === -1) return;
+        consoleTabs.splice(idx, 1);
+        killConsoleSession(sessionName);
+        if (activeConsoleSession === sessionName) {
+            closeSessionAttachInner();
+            if (consoleTabs.length > 0) {
+                // Switch to the tab nearest where we just removed.
+                var next = consoleTabs[Math.min(idx, consoleTabs.length - 1)];
+                mountConsoleSession(next.sessionName, next.cmdName);
+            } else {
+                activeConsoleSession = null;
+                renderConsoleTabs();
+                outputPanel.classList.remove('open');
+            }
+        } else {
+            renderConsoleTabs();
+        }
+    }
+
+    // Public entry called by /api/run console_session responses.
+    function showOutputTerminal(cmd, sessionName) {
+        addConsoleTab(cmd, sessionName);
+    }
+
+    // Tab clicks: switch (label) or kill (✕).
+    if (tabsEl) {
+        tabsEl.addEventListener('click', function(e) {
+            var close = e.target.closest('.output-tab-close');
+            if (close) {
+                e.stopPropagation();
+                closeConsoleTab(close.getAttribute('data-sess'));
+                return;
+            }
+            var tab = e.target.closest('.output-tab');
+            if (tab) switchConsoleTab(tab.getAttribute('data-sess'));
+        });
+    }
+
     document.getElementById('output-close-btn').onclick = function() {
-        // Closing the panel must also tear down any live attach — otherwise
-        // the WS keeps draining tmux output into a hidden buffer forever.
-        // For gt-console-* sessions (ephemeral consoles spawned by
-        // Interactive commands), also kill the underlying tmux session so
-        // we don't leave zombies in `tmux ls`. Real rig/crew/polecat
-        // sessions (non-gt-console- prefix) are left alone — those have
-        // their own lifecycle owned by gt.
+        // Close button kills EVERY console session in the tab list — the
+        // user is closing the panel because they're done. Real rig/crew/
+        // polecat sessions wouldn't be in this list (they enter via the
+        // session-preview pane, not the output panel) so we don't touch
+        // their lifecycle.
         var termWrap = document.getElementById('output-panel-terminal-wrap');
         if (termWrap && termWrap.style.display !== 'none') {
-            var sess = attachSessionName;
             closeSessionAttachInner();
-            if (sess && sess.indexOf('gt-console-') === 0) {
-                fetch('/api/session/kill?session=' + encodeURIComponent(sess), { method: 'POST' })
-                    .catch(function(err) { console.warn('kill console session failed:', err); });
-            }
         }
+        for (var i = 0; i < consoleTabs.length; i++) {
+            killConsoleSession(consoleTabs[i].sessionName);
+        }
+        consoleTabs = [];
+        activeConsoleSession = null;
+        renderConsoleTabs();
         outputPanel.classList.remove('open');
     };
 
