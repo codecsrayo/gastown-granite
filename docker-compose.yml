@@ -22,6 +22,8 @@ services:
       - NET_RAW
     environment:
       IS_SANDBOX: 1
+      TZ: ${TZ:-America/Bogota}
+      GT_DOLT_TIME_ZONE: ${TZ:-America/Bogota}
       GIT_USER: ${GIT_USER:-TestUser}
       GIT_EMAIL: ${GIT_EMAIL:-test@example.com}
     volumes:
@@ -33,11 +35,36 @@ services:
       # Dolt data on a proper ext4 volume (not the macOS bind mount) to
       # avoid journal corruption from VirtioFS fsync semantics.
       - dolt-data:/gt/.dolt-data
+    expose:
+      - "8080"
     ports:
-      - "${DASHBOARD_PORT:-8080}:8080"
-    command: sleep infinity
+      # OAuth callback range for `claude auth login` flow. Claude CLI picks a
+      # random ephemeral port; expose a range so browser → host:port → container
+      # works regardless of which port Claude picked.
+      - "44000-44099:44000-44099"
+    command: ["/app/gastown/gt", "dashboard", "--bind", "0.0.0.0", "--port", "8080"]
+    networks:
+      - default
+      - traefik-public
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_PUBLIC_NETWORK:-proyectos-bi-quare}
+      - traefik.http.routers.gastown-http.rule=Host(`${GASTOWN_DOMAIN:-gastown.codecsrayo.com}`)
+      - traefik.http.routers.gastown-http.entrypoints=web
+      - traefik.http.routers.gastown-http.middlewares=gastown-https
+      - traefik.http.routers.gastown.rule=Host(`${GASTOWN_DOMAIN:-gastown.codecsrayo.com}`)
+      - traefik.http.routers.gastown.entrypoints=websecure
+      - traefik.http.routers.gastown.tls=true
+      - traefik.http.routers.gastown.tls.certresolver=netlify
+      - traefik.http.services.gastown.loadbalancer.server.port=8080
+      - traefik.http.middlewares.gastown-https.redirectscheme.scheme=https
 
     # Exec into the container with: docker compose exec gastown zsh
+
+networks:
+  traefik-public:
+    name: ${TRAEFIK_PUBLIC_NETWORK:-proyectos-bi-quare}
+    external: true
 
 volumes:
   agent-home:

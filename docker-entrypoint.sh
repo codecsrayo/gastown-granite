@@ -14,9 +14,11 @@ fi
 if [ ! -f /gt/mayor/town.json ]; then
     echo "Initializing Gas Town workspace at /gt..."
     /app/gastown/gt install /gt --git
-else
+elif [ ! -d /gt/.beads ] || [ ! -f /gt/.beads/issues.jsonl ]; then
     echo "Refreshing Gas Town workspace at /gt..."
     /app/gastown/gt install /gt --git --force
+else
+    echo "Gas Town workspace at /gt already initialized — skipping install --force to preserve beads data."
 fi
 
 exec "$@"
