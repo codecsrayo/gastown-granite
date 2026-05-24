@@ -108,7 +108,10 @@ func (h *APIHandler) handleSessionAttach(w http.ResponseWriter, r *http.Request)
 	// one-shot exec and written directly to the WS — no goroutines yet,
 	// so this WriteMessage is safe.
 	capArgs := append([]string{}, socketArgs...)
-	capArgs = append(capArgs, "capture-pane", "-p", "-e", "-S", "-10000", "-t", sessionName)
+	// -S -50000 matches the consoleHistoryLimit set in spawnConsoleSession
+	// and xterm.js's scrollback option, so the full tmux history survives
+	// every (re-)attach.
+	capArgs = append(capArgs, "capture-pane", "-p", "-e", "-S", "-50000", "-t", sessionName)
 	if capOut, capErr := exec.Command("tmux", capArgs...).Output(); capErr == nil && len(capOut) > 0 {
 		frame := make([]byte, len(capOut)+1)
 		frame[0] = srvOutput

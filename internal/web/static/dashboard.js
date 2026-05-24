@@ -3592,7 +3592,7 @@
             cursorBlink: true,
             convertEol: false,
             allowProposedApi: true,
-            scrollback: 10000,
+            scrollback: 50000,
             scrollOnUserInput: true
         });
         if (window.FitAddon && window.FitAddon.FitAddon) {
