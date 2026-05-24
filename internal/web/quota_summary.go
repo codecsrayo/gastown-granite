@@ -85,7 +85,7 @@ func (h *APIHandler) handleQuotaSummary(w http.ResponseWriter, r *http.Request) 
 		usageReport = report
 	}
 
-	resp := buildQuotaSummary(state, acctCfg, usageReport, time.Now())
+	resp := BuildQuotaSummary(state, acctCfg, usageReport, time.Now())
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		// Header is already sent; just log.
@@ -94,8 +94,10 @@ func (h *APIHandler) handleQuotaSummary(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// buildQuotaSummary is the pure assembly step, split out for unit testing.
-func buildQuotaSummary(
+// BuildQuotaSummary is the pure assembly step, split out for unit testing and
+// reused by the `gt quota status --json` CLI command so both surfaces emit an
+// identical observability shape.
+func BuildQuotaSummary(
 	state *config.QuotaState,
 	acctCfg *config.AccountsConfig,
 	usageReport *quota.UsageReport,

@@ -21,6 +21,7 @@ import (
 	"github.com/steveyegge/gastown/internal/style"
 	ttmux "github.com/steveyegge/gastown/internal/tmux"
 	"github.com/steveyegge/gastown/internal/util"
+	"github.com/steveyegge/gastown/internal/web"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
 
@@ -73,17 +74,6 @@ Examples:
 	RunE: runQuotaStatus,
 }
 
-// QuotaStatusItem represents an account in status output.
-type QuotaStatusItem struct {
-	Handle    string `json:"handle"`
-	Email     string `json:"email"`
-	Status    string `json:"status"`
-	LimitedAt string `json:"limited_at,omitempty"`
-	ResetsAt  string `json:"resets_at,omitempty"`
-	LastUsed  string `json:"last_used,omitempty"`
-	IsDefault bool   `json:"is_default"`
-}
-
 func runQuotaStatus(cmd *cobra.Command, args []string) error {
 	townRoot, err := workspace.FindFromCwd()
 	if err != nil {
@@ -132,28 +122,20 @@ func runQuotaStatus(cmd *cobra.Command, args []string) error {
 	return printQuotaStatusText(acctCfg, state)
 }
 
+// printQuotaStatusJSON emits the full observability snapshot — the same shape
+// served by GET /api/quota/summary — so scripts and the dashboard share one
+// source of truth. Token usage is aggregated best-effort; if the tmux walk
+// trips, the snapshot still carries status, token expiry, rotation counts, the
+// waiting limited sessions, and the last rotation plan.
 func printQuotaStatusJSON(acctCfg *config.AccountsConfig, state *config.QuotaState) error {
-	var items []QuotaStatusItem
-	for _, handle := range slices.Sorted(maps.Keys(acctCfg.Accounts)) {
-		acct := acctCfg.Accounts[handle]
-		qs := state.Accounts[handle]
-		status := string(qs.Status)
-		if status == "" {
-			status = string(config.QuotaStatusAvailable)
-		}
-		items = append(items, QuotaStatusItem{
-			Handle:    handle,
-			Email:     acct.Email,
-			Status:    status,
-			LimitedAt: qs.LimitedAt,
-			ResetsAt:  qs.ResetsAt,
-			LastUsed:  qs.LastUsed,
-			IsDefault: handle == acctCfg.Default,
-		})
+	var usageReport *quota.UsageReport
+	if report, err := quota.AggregateUsage(ttmux.NewTmux(), state, acctCfg, "", time.Now()); err == nil {
+		usageReport = report
 	}
+	resp := web.BuildQuotaSummary(state, acctCfg, usageReport, time.Now())
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	return enc.Encode(items)
+	return enc.Encode(resp)
 }
 
 func printQuotaStatusText(acctCfg *config.AccountsConfig, state *config.QuotaState) error {

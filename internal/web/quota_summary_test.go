@@ -31,7 +31,7 @@ func TestBuildQuotaSummary_CountsByStatusAndDetectsExpiredViaToken(t *testing.T)
 		"gt-a": {Account: "personal", RateLimited: true, ResetsAt: "7pm"},
 	}
 
-	resp := buildQuotaSummary(state, acctCfg, nil, now)
+	resp := BuildQuotaSummary(state, acctCfg, nil, now)
 
 	if resp.Counters.Available != 2 {
 		t.Errorf("available = %d, want 2", resp.Counters.Available)
@@ -77,7 +77,7 @@ func TestBuildQuotaSummary_FoldsUsageWhenAvailable(t *testing.T) {
 		"work": {Handle: "work", Counts: quota.TokenCounts{InputTokens: 42}},
 	}}
 
-	resp := buildQuotaSummary(state, acctCfg, usage, now)
+	resp := BuildQuotaSummary(state, acctCfg, usage, now)
 	if len(resp.Accounts) != 1 {
 		t.Fatalf("accounts = %d", len(resp.Accounts))
 	}
