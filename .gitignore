@@ -121,10 +121,10 @@ docs/fork-info/
 **/feed-*.json
 
 # =============================================================================
-# Runtime state directories
+# Runtime state directories (root-anchored — must not match internal/daemon, etc.)
 # =============================================================================
-daemon/
-logs/
+/daemon/
+/logs/
 
 # =============================================================================
 # Centralized Dolt SQL server data directory
@@ -136,14 +136,14 @@ logs/
 **/.doltcfg/
 
 # =============================================================================
-# Event stream storage
+# Event stream storage (root-anchored)
 # =============================================================================
-events/
+/events/
 
 # =============================================================================
-# HQ beads directory
+# HQ beads directory (root-anchored)
 # =============================================================================
-beads_hq/
+/beads_hq/
 
 # =============================================================================
 # Rig git worktrees (recreate with 'gt sling' or 'gt rig add')
