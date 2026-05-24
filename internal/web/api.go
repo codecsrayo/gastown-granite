@@ -160,10 +160,10 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleReady(w, r)
 	case path == "/events" && r.Method == http.MethodGet:
 		h.handleSSE(w, r)
-	case path == "/session/preview" && r.Method == http.MethodGet:
-		h.handleSessionPreview(w, r)
 	case path == "/session/attach" && r.Method == http.MethodGet:
 		h.handleSessionAttach(w, r)
+	case path == "/session/preview" && r.Method == http.MethodGet:
+		h.handleSessionPreview(w, r)
 	default:
 		http.Error(w, "Not found", http.StatusNotFound)
 	}
@@ -1823,6 +1823,7 @@ type CrewMember struct {
 	HookTitle  string `json:"hook_title,omitempty"`
 	Session    string `json:"session"` // attached, detached, none
 	LastActive string `json:"last_active"`
+	Account    string `json:"account,omitempty"` // active account handle (GT_QUOTA_ACCOUNT, else CLAUDE_CONFIG_DIR basename)
 }
 
 // CrewResponse is the response for /api/crew.
@@ -1891,6 +1892,10 @@ func (h *APIHandler) handleCrew(w http.ResponseWriter, r *http.Request) {
 	for _, c := range crewData {
 		sessionName := session.CrewSessionName(session.PrefixFor(c.Rig), c.Name)
 		state, lastActive, sessionStatus := h.detectCrewState(ctx, sessionName, c.Hook)
+		account := ""
+		if sessionStatus != "none" {
+			account = resolveSessionAccount(ctx, sessionName)
+		}
 
 		member := CrewMember{
 			Name:       c.Name,
@@ -1899,6 +1904,7 @@ func (h *APIHandler) handleCrew(w http.ResponseWriter, r *http.Request) {
 			Hook:       c.Hook,
 			Session:    sessionStatus,
 			LastActive: lastActive,
+			Account:    account,
 		}
 		resp.Crew = append(resp.Crew, member)
 		resp.ByRig[c.Rig] = append(resp.ByRig[c.Rig], member)
@@ -1995,6 +2001,38 @@ func paneCurrentCommandIsAgent(output string) bool {
 		strings.Contains(output, "cursor-agent") ||
 		strings.Contains(output, "copilot") ||
 		output == "agent"
+}
+
+// resolveSessionAccount returns the active account handle for a tmux session.
+// Prefers GT_QUOTA_ACCOUNT (set by keychain-swap rotation), falls back to the
+// basename of CLAUDE_CONFIG_DIR, which by convention matches the account handle
+// (e.g., ~/.claude-accounts/work → "work"). Returns "" when neither is set.
+func resolveSessionAccount(ctx context.Context, sessionName string) string {
+	readEnv := func(key string) string {
+		args := tmuxArgsWithSocket("show-environment", "-t", sessionName, key)
+		cmd := exec.CommandContext(ctx, "tmux", args...)
+		var stdout bytes.Buffer
+		cmd.Stdout = &stdout
+		if err := cmd.Run(); err != nil {
+			return ""
+		}
+		for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
+			line = strings.TrimSpace(line)
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 && parts[0] == key {
+				return strings.TrimSpace(parts[1])
+			}
+		}
+		return ""
+	}
+
+	if v := readEnv("GT_QUOTA_ACCOUNT"); v != "" {
+		return v
+	}
+	if dir := readEnv("CLAUDE_CONFIG_DIR"); dir != "" {
+		return filepath.Base(dir)
+	}
+	return ""
 }
 
 // hasQuestionInPane checks the last output for question indicators.

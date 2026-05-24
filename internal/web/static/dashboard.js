@@ -196,15 +196,6 @@
             // Pause refresh while panel is expanded
             window.pauseRefresh = true;
         }
-        // Re-fit any active xterm so the terminal fills (or restores from) the
-        // new container size. Defer one frame so CSS layout settles first.
-        requestAnimationFrame(function() {
-            if (typeof attachFit !== 'undefined' && attachFit && typeof attachFit.fit === 'function') {
-                try { attachFit.fit(); } catch (e) {}
-            }
-            if (typeof sendAttachResize === 'function') sendAttachResize();
-            window.dispatchEvent(new Event('resize'));
-        });
     });
 
     // ============================================
@@ -1263,6 +1254,10 @@
                             attachCmd = 'gt witness attach';
                         }
 
+                        var accountCell = member.account
+                            ? '<span class="crew-account">' + escapeHtml(member.account) + '</span>'
+                            : '<span class="crew-account crew-account-none">—</span>';
+
                         tr.innerHTML =
                             '<td><span class="crew-name">' + escapeHtml(member.name) + '</span></td>' +
                             '<td><span class="crew-rig">' + escapeHtml(member.rig) + '</span></td>' +
@@ -1270,6 +1265,7 @@
                             '<td><span class="crew-hook">' + (member.hook ? escapeHtml(member.hook) : '—') + '</span></td>' +
                             '<td class="crew-activity">' + (member.last_active || '—') + '</td>' +
                             '<td>' + sessionBadge + '</td>' +
+                            '<td>' + accountCell + '</td>' +
                             '<td><button class="attach-btn" data-cmd="' + escapeHtml(attachCmd) + '" title="Copy attach command">📎 Attach</button></td>';
                         tbody.appendChild(tr);
                     });
@@ -3177,10 +3173,11 @@
     // ============================================
     // SESSION TERMINAL PREVIEW
     // ============================================
-    var sessionPreviewInterval = null;
-    var sessionsTable = null; // will be set when opening preview
+    // Click a session row → open live xterm.js terminal over WebSocket.
+    // Backend dumps tmux scrollback (last 10k lines) before live attach
+    // so users can wheel-scroll up to see historical output.
+    var sessionsTable = null; // table to re-show when preview closes
 
-    // Click on session row to preview terminal output
     document.addEventListener('click', function(e) {
         var sessionRow = e.target.closest('.session-row');
         if (sessionRow) {
@@ -3193,67 +3190,27 @@
     });
 
     function openSessionPreview(sessionName) {
-        window.pauseRefresh = true;
-
         var preview = document.getElementById('session-preview');
         var nameEl = document.getElementById('session-preview-name');
-        var contentEl = document.getElementById('session-preview-content');
-        var statusEl = document.getElementById('session-preview-status');
+        if (!preview) return;
 
-        if (!preview || !contentEl) return;
-
-        // Hide the sessions table, show preview
+        // Hide the sessions table while preview is up.
         sessionsTable = preview.parentNode.querySelector('table');
         if (sessionsTable) sessionsTable.style.display = 'none';
         var emptyState = preview.parentNode.querySelector('.empty-state');
         if (emptyState) emptyState.style.display = 'none';
 
-        nameEl.textContent = sessionName;
-        statusEl.textContent = '';
+        if (nameEl) nameEl.textContent = sessionName;
         preview.style.display = 'block';
 
-        // Skip the read-only snapshot and go straight to interactive tmux
-        // attach. The static preview <pre> stays hidden; xterm takes over.
         openSessionAttach(sessionName);
     }
 
-    function fetchSessionPreview(sessionName, contentEl, statusEl) {
-        fetch('/api/session/preview?session=' + encodeURIComponent(sessionName))
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (data.error) {
-                    contentEl.textContent = 'Error: ' + data.error;
-                    return;
-                }
-                contentEl.textContent = data.content || '(empty)';
-                // Auto-scroll to bottom
-                contentEl.scrollTop = contentEl.scrollHeight;
-                // Show refresh timestamp
-                var now = new Date();
-                var timeStr = now.getHours() + ':' + (now.getMinutes() < 10 ? '0' : '') + now.getMinutes() + ':' + (now.getSeconds() < 10 ? '0' : '') + now.getSeconds();
-                statusEl.textContent = 'refreshed ' + timeStr;
-            })
-            .catch(function(err) {
-                contentEl.textContent = 'Failed to load preview: ' + err.message;
-            });
-    }
-
     function closeSessionPreview() {
-        if (sessionPreviewInterval) {
-            clearInterval(sessionPreviewInterval);
-            sessionPreviewInterval = null;
-        }
-
-        if (typeof closeSessionAttach === 'function') {
-            closeSessionAttach();
-        }
-
+        closeSessionAttachInner();
         var preview = document.getElementById('session-preview');
         if (preview) preview.style.display = 'none';
-
-        // Show the sessions table again
         if (sessionsTable) sessionsTable.style.display = '';
-
         window.pauseRefresh = false;
     }
 
@@ -3266,41 +3223,139 @@
     // ============================================
     // INTERACTIVE TMUX ATTACH (xterm.js + WebSocket)
     // ============================================
+    // Wire protocol: ttyd-compatible single-byte command prefix.
+    //   Server → Client: '0'+bytes=OUTPUT, '1'+text=WINDOW_TITLE, '2'+json=PREFS
+    //   Client → Server: '0'+bytes=INPUT, '1'+json={cols,rows}=RESIZE,
+    //                    '2'=PAUSE, '3'=RESUME
+    //
+    // Single-pane attach: opening a preview for a new session implicitly
+    // detaches the previous one. Multi-terminal (parallel attaches behind
+    // tabs) is a follow-up — state is encapsulated below to make that
+    // refactor mechanical when the UI grows tabs.
     var attachTerm = null;
     var attachFit = null;
     var attachWs = null;
-    var attachSession = null;
     var attachResizeHandler = null;
+    var attachSessionName = '';
+    var attachUserClosed = false;
+    var attachRetryAttempt = 0;
+    var attachRetryTimer = null;
+
+    function scheduleAttachReconnect(reason) {
+        if (attachUserClosed) return;
+        if (!attachSessionName) return;
+        attachRetryAttempt++;
+        // Exponential backoff with jitter, capped at 30s. ttyd/gotty use
+        // the same family of delays so the UX matches what ops expects.
+        var base = Math.min(30000, 500 * Math.pow(2, attachRetryAttempt - 1));
+        var delay = base + Math.floor(Math.random() * 250);
+        var statusEl = document.getElementById('session-preview-status');
+        if (statusEl) {
+            statusEl.textContent = 'reconnecting #' + attachRetryAttempt +
+                ' in ' + Math.round(delay / 1000) + 's — ' + reason;
+        }
+        clearTimeout(attachRetryTimer);
+        attachRetryTimer = setTimeout(function() {
+            if (attachUserClosed) return;
+            connectAttachWs(attachSessionName);
+        }, delay);
+    }
+
+    function wsSendCmd(cmd, payload) {
+        if (!attachWs || attachWs.readyState !== 1) return;
+        var prefix = new Uint8Array([cmd.charCodeAt(0)]);
+        if (payload == null || payload === '') {
+            attachWs.send(prefix);
+            return;
+        }
+        if (typeof payload === 'string') {
+            // Concat as Uint8Array so server sees one frame, raw bytes.
+            var enc = new TextEncoder().encode(payload);
+            var out = new Uint8Array(1 + enc.length);
+            out[0] = prefix[0];
+            out.set(enc, 1);
+            attachWs.send(out);
+        } else {
+            var out2 = new Uint8Array(1 + payload.length);
+            out2[0] = prefix[0];
+            out2.set(payload, 1);
+            attachWs.send(out2);
+        }
+    }
+
+    function connectAttachWs(sessionName) {
+        var statusEl = document.getElementById('session-preview-status');
+        var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var url = proto + '//' + window.location.host + '/api/session/attach?session=' + encodeURIComponent(sessionName);
+        attachWs = new WebSocket(url);
+        attachWs.binaryType = 'arraybuffer';
+
+        attachWs.onopen = function() {
+            attachRetryAttempt = 0;
+            if (statusEl) statusEl.textContent = 'live';
+            sendAttachResize();
+        };
+        attachWs.onmessage = function(ev) {
+            var bytes;
+            if (typeof ev.data === 'string') {
+                bytes = new TextEncoder().encode(ev.data);
+            } else {
+                bytes = new Uint8Array(ev.data);
+            }
+            if (bytes.length === 0) return;
+            var cmd = String.fromCharCode(bytes[0]);
+            var payload = bytes.subarray(1);
+            switch (cmd) {
+                case '0': // OUTPUT
+                    if (attachTerm) attachTerm.write(payload);
+                    break;
+                case '1': // SET_WINDOW_TITLE
+                    var title = new TextDecoder().decode(payload);
+                    var nameEl = document.getElementById('session-preview-name');
+                    if (nameEl) nameEl.title = title;
+                    break;
+                case '2': // SET_PREFERENCES — ignored
+                    break;
+                default:
+                    // Forward-compatible: silently drop unknown opcodes.
+            }
+        };
+        attachWs.onclose = function(ev) {
+            var reason = (ev && ev.reason) ? ev.reason
+                : (ev && ev.code ? 'code ' + ev.code : 'closed');
+            if (attachUserClosed) {
+                if (statusEl) statusEl.textContent = 'disconnected';
+                return;
+            }
+            scheduleAttachReconnect(reason);
+        };
+        attachWs.onerror = function() {
+            if (statusEl && !attachUserClosed) statusEl.textContent = 'ws error';
+        };
+    }
 
     function openSessionAttach(sessionName) {
         if (typeof Terminal === 'undefined') {
-            alert('xterm.js failed to load; attach unavailable');
+            alert('xterm.js failed to load; terminal unavailable');
             return;
         }
-        // Pause snapshot polling; hide preview <pre>, show terminal div.
-        if (sessionPreviewInterval) {
-            clearInterval(sessionPreviewInterval);
-            sessionPreviewInterval = null;
-        }
-        var contentEl = document.getElementById('session-preview-content');
+        var wrapEl = document.getElementById('session-preview-terminal-wrap');
         var termEl = document.getElementById('session-preview-terminal');
-        var statusEl = document.getElementById('session-preview-status');
-        if (contentEl) contentEl.style.display = 'none';
-        if (termEl) termEl.style.display = 'block';
+        if (!termEl || !wrapEl) return;
+        wrapEl.style.display = 'flex';
 
         closeSessionAttachInner(); // drop any prior session
 
-        attachSession = sessionName;
+        attachSessionName = sessionName;
+        attachUserClosed = false;
+        attachRetryAttempt = 0;
+
         attachTerm = new Terminal({
             fontFamily: 'monospace',
             fontSize: 13,
             cursorBlink: true,
             convertEol: false,
             allowProposedApi: true,
-            // Big scrollback so users can review long output. xterm's main
-            // buffer keeps lines that scroll off; alt-screen apps (tmux,
-            // claude UI) don't append here, so we also enable mouse mode on
-            // the tmux server so wheel events trigger tmux copy-mode scroll.
             scrollback: 10000,
             scrollOnUserInput: true
         });
@@ -3308,38 +3363,45 @@
             attachFit = new window.FitAddon.FitAddon();
             attachTerm.loadAddon(attachFit);
         }
+        if (window.WebLinksAddon && window.WebLinksAddon.WebLinksAddon) {
+            attachTerm.loadAddon(new window.WebLinksAddon.WebLinksAddon());
+        }
         attachTerm.open(termEl);
-        if (attachFit) attachFit.fit();
+        if (attachFit) {
+            try { attachFit.fit(); } catch (e) {}
+        }
 
-        var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        var url = proto + '//' + window.location.host + '/api/session/attach?session=' + encodeURIComponent(sessionName);
-        attachWs = new WebSocket(url);
-        attachWs.binaryType = 'arraybuffer';
-
-        attachWs.onopen = function() {
-            if (statusEl) statusEl.textContent = 'attached';
-            sendAttachResize();
-        };
-        attachWs.onmessage = function(ev) {
-            if (typeof ev.data === 'string') {
-                attachTerm.write(ev.data);
-            } else {
-                attachTerm.write(new Uint8Array(ev.data));
+        // Force-route Ctrl+C / Ctrl+Z / Ctrl+\ / Ctrl+D to the PTY instead
+        // of the browser. Without this xterm.js bubbles Ctrl+C to the
+        // browser which treats it as Copy (especially with any selection).
+        // Preserve copy only when text is actively selected.
+        attachTerm.attachCustomKeyEventHandler(function(ev) {
+            if (ev.type !== 'keydown') return true;
+            if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.altKey) return true;
+            var sendByte = null;
+            switch (ev.key) {
+                case 'c': case 'C': sendByte = '\x03'; break;
+                case 'z': case 'Z': sendByte = '\x1a'; break;
+                case '\\':          sendByte = '\x1c'; break;
+                case 'd': case 'D': sendByte = '\x04'; break;
             }
-        };
-        attachWs.onclose = function() {
-            if (statusEl) statusEl.textContent = 'detached';
-        };
-        attachWs.onerror = function() {
-            if (statusEl) statusEl.textContent = 'ws error';
-        };
-
-        attachTerm.onData(function(data) {
-            if (attachWs && attachWs.readyState === 1) {
-                attachWs.send(JSON.stringify({type: 'input', data: data}));
+            if (!sendByte) return true;
+            if (sendByte === '\x03' && attachTerm.hasSelection && attachTerm.hasSelection()) {
+                return true;
             }
+            wsSendCmd('0', sendByte);
+            ev.preventDefault();
+            ev.stopPropagation();
+            return false;
         });
 
+        attachTerm.onData(function(data) {
+            wsSendCmd('0', data);
+        });
+
+        // Resize on window OR when the user drags the terminal's CSS resize
+        // handle. ResizeObserver covers the manual drag; window resize
+        // covers responsive layout changes.
         attachResizeHandler = function() {
             if (attachFit) {
                 try { attachFit.fit(); } catch (e) {}
@@ -3347,53 +3409,125 @@
             sendAttachResize();
         };
         window.addEventListener('resize', attachResizeHandler);
+        if (typeof ResizeObserver !== 'undefined') {
+            attachTerm._gtObserver = new ResizeObserver(attachResizeHandler);
+            attachTerm._gtObserver.observe(termEl);
+        }
 
-        // Focus so keypresses go to terminal.
-        setTimeout(function() { attachTerm.focus(); }, 50);
+        connectAttachWs(sessionName);
+
+        // Pause dashboard re-renders while the terminal is live; morphing
+        // the DOM would wipe the xterm canvas and drop focus, making the
+        // terminal feel broken even though the WS is connected.
+        // hx-preserve on #session-preview is a belt-and-braces second line
+        // of defense in case a refresh slips through.
+        window.pauseRefresh = true;
+        setTimeout(function() {
+            if (attachTerm) attachTerm.focus();
+            var termEl = document.getElementById('session-preview-terminal');
+            if (termEl) {
+                termEl.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+            }
+        }, 50);
     }
 
     function sendAttachResize() {
         if (!attachWs || attachWs.readyState !== 1 || !attachTerm) return;
-        attachWs.send(JSON.stringify({
-            type: 'resize',
+        wsSendCmd('1', JSON.stringify({
             cols: attachTerm.cols,
             rows: attachTerm.rows
         }));
     }
 
     function closeSessionAttachInner() {
+        attachUserClosed = true;
+        if (attachRetryTimer) {
+            clearTimeout(attachRetryTimer);
+            attachRetryTimer = null;
+        }
+        attachRetryAttempt = 0;
+        attachSessionName = '';
         if (attachWs) {
             try { attachWs.close(); } catch (e) {}
             attachWs = null;
         }
         if (attachTerm) {
+            if (attachTerm._gtObserver) {
+                try { attachTerm._gtObserver.disconnect(); } catch (e) {}
+                attachTerm._gtObserver = null;
+            }
             try { attachTerm.dispose(); } catch (e) {}
             attachTerm = null;
         }
         attachFit = null;
-        attachSession = null;
         if (attachResizeHandler) {
             window.removeEventListener('resize', attachResizeHandler);
             attachResizeHandler = null;
         }
     }
 
-    function closeSessionAttach() {
-        closeSessionAttachInner();
-        var termEl = document.getElementById('session-preview-terminal');
-        var contentEl = document.getElementById('session-preview-content');
-        if (termEl) termEl.style.display = 'none';
-        if (contentEl) contentEl.style.display = '';
+    // Back button tears down the live terminal AND restores the sessions
+    // table. closeSessionPreview encapsulates both.
+    var backBtn = document.getElementById('session-preview-back');
+    if (backBtn) {
+        backBtn.addEventListener('click', closeSessionPreview);
     }
 
-    var attachBtn = document.getElementById('session-preview-attach');
-    if (attachBtn) {
-        attachBtn.addEventListener('click', function() {
-            var nameEl = document.getElementById('session-preview-name');
-            var name = nameEl ? nameEl.textContent : '';
-            if (name) openSessionAttach(name);
-        });
-    }
+    // Drag-to-resize for the interactive terminal. Also notifies xterm
+    // fit + tmux WS so the live PTY resizes alongside the visual change.
+    (function() {
+        var handle = document.getElementById('session-preview-terminal-resize');
+        var termEl = document.getElementById('session-preview-terminal');
+        if (!handle || !termEl) return;
+
+        var dragging = false;
+        var startY = 0;
+        var startHeight = 0;
+
+        function onMouseDown(ev) {
+            dragging = true;
+            startY = ev.clientY;
+            startHeight = termEl.getBoundingClientRect().height;
+            handle.classList.add('dragging');
+            document.body.style.cursor = 'ns-resize';
+            // Prevent text selection while dragging.
+            document.body.style.userSelect = 'none';
+            ev.preventDefault();
+        }
+
+        function onMouseMove(ev) {
+            if (!dragging) return;
+            var delta = ev.clientY - startY;
+            var newHeight = Math.max(120, Math.min(window.innerHeight * 0.85, startHeight + delta));
+            termEl.style.height = newHeight + 'px';
+            // Notify xterm fit addon + WS so tmux sees the new size live.
+            if (typeof attachFit !== 'undefined' && attachFit) {
+                try { attachFit.fit(); } catch (e) {}
+            }
+            if (typeof sendAttachResize === 'function') sendAttachResize();
+        }
+
+        function onMouseUp() {
+            if (!dragging) return;
+            dragging = false;
+            handle.classList.remove('dragging');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        }
+
+        handle.addEventListener('mousedown', onMouseDown);
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+
+        // Touch support for tablets.
+        handle.addEventListener('touchstart', function(ev) {
+            if (ev.touches.length === 1) onMouseDown({clientY: ev.touches[0].clientY, preventDefault: function(){ ev.preventDefault(); }});
+        }, {passive: false});
+        document.addEventListener('touchmove', function(ev) {
+            if (dragging && ev.touches.length === 1) onMouseMove({clientY: ev.touches[0].clientY});
+        }, {passive: true});
+        document.addEventListener('touchend', onMouseUp);
+    })();
 
 
     // ============================================

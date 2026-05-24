@@ -61,6 +61,7 @@
             pkgs.gopls
             pkgs.gotools
             pkgs.go-tools
+            pkgs.go-task
           ];
         };
       }
