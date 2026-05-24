@@ -4187,3 +4187,23 @@
             font-size: 0.85rem;
             line-height: 1;
         }
+
+        /* Pop-out icon on each console tab. Mirrors the close icon's
+         * sizing so the three pieces (label, ⇱, ✕) line up. */
+        .output-tab-popout {
+            color: var(--text-muted);
+            padding: 0 4px;
+            border-radius: 2px;
+            font-size: 0.85em;
+            line-height: 1;
+            cursor: pointer;
+        }
+        .output-tab-popout:hover {
+            background: var(--blue);
+            color: #fff;
+        }
+        /* Tab being dragged: fade + cue the user the gesture is captured. */
+        .output-tab.dragging {
+            opacity: 0.55;
+            cursor: grabbing;
+        }

@@ -423,9 +423,12 @@
         for (var i = 0; i < consoleTabs.length; i++) {
             var t = consoleTabs[i];
             var cls = 'output-tab' + (t.sessionName === activeConsoleSession ? ' active' : '');
-            html += '<span class="' + cls + '" data-sess="' + escapeHtml(t.sessionName) + '">';
+            // draggable=true lets the user tear a tab off — drag it
+            // outside the strip and we open it in a standalone window.
+            html += '<span class="' + cls + '" data-sess="' + escapeHtml(t.sessionName) + '" draggable="true">';
             html += '<span class="output-tab-label" title="' + escapeHtml(t.sessionName) + '">' + escapeHtml(t.cmdName || t.sessionName) + '</span>';
-            html += '<span class="output-tab-close" data-sess="' + escapeHtml(t.sessionName) + '" title="Kill session">✕</span>';
+            html += '<span class="output-tab-popout" data-sess="' + escapeHtml(t.sessionName) + '" title="Open in standalone window">⇱</span>';
+            html += '<span class="output-tab-close" data-sess="' + escapeHtml(t.sessionName) + '" title="Close tab">✕</span>';
             html += '</span>';
         }
         tabsEl.innerHTML = html;
@@ -519,9 +522,50 @@
         addConsoleTab(cmd, sessionName);
     }
 
-    // Tab clicks: switch (label) or kill (✕).
+    // Pop-out: open the tab's session in a standalone browser window and
+    // remove the tab from the dashboard (no kill — the popup owns the
+    // attach now). Returning to the dashboard re-adds it via the
+    // BroadcastChannel listener below.
+    function popoutConsoleTab(sessionName) {
+        var idx = findTab(sessionName);
+        if (idx === -1) return;
+        var tab = consoleTabs[idx];
+        var url = '/static/console.html'
+            + '?session=' + encodeURIComponent(sessionName)
+            + '&label='   + encodeURIComponent(tab.cmdName || sessionName);
+        var win = window.open(url, '_blank', 'width=960,height=600,resizable=yes');
+        if (!win) {
+            showToast('error', 'Pop-out blocked', 'Allow popups for this site');
+            return;
+        }
+        // Detach from dashboard without killing: tear down the local
+        // attach if it was the active tab, splice the tab, and switch
+        // to the next sibling (or close the panel if empty).
+        consoleTabs.splice(idx, 1);
+        if (activeConsoleSession === sessionName) {
+            closeSessionAttachInner();
+            if (consoleTabs.length > 0) {
+                var next = consoleTabs[Math.min(idx, consoleTabs.length - 1)];
+                mountConsoleSession(next.sessionName, next.cmdName);
+            } else {
+                activeConsoleSession = null;
+                renderConsoleTabs();
+                outputPanel.classList.remove('open');
+            }
+        } else {
+            renderConsoleTabs();
+        }
+    }
+
+    // Tab clicks: pop-out (⇱), close (✕), or switch (label area).
     if (tabsEl) {
         tabsEl.addEventListener('click', function(e) {
+            var pop = e.target.closest('.output-tab-popout');
+            if (pop) {
+                e.stopPropagation();
+                popoutConsoleTab(pop.getAttribute('data-sess'));
+                return;
+            }
             var close = e.target.closest('.output-tab-close');
             if (close) {
                 e.stopPropagation();
@@ -531,7 +575,47 @@
             var tab = e.target.closest('.output-tab');
             if (tab) switchConsoleTab(tab.getAttribute('data-sess'));
         });
+
+        // Drag-tear-off: if the user drags a tab and releases outside
+        // the tab strip's bounding rect, pop it out into its own window.
+        tabsEl.addEventListener('dragstart', function(e) {
+            var tab = e.target.closest('.output-tab');
+            if (!tab) return;
+            var sess = tab.getAttribute('data-sess');
+            e.dataTransfer.setData('text/plain', sess);
+            e.dataTransfer.effectAllowed = 'move';
+            tab.classList.add('dragging');
+        });
+        tabsEl.addEventListener('dragend', function(e) {
+            var tab = e.target.closest('.output-tab');
+            if (tab) tab.classList.remove('dragging');
+            var sess = tab && tab.getAttribute('data-sess');
+            if (!sess) return;
+            // If the pointer ended outside the tab strip's rect (with a
+            // small fudge factor) we treat it as a tear-off intent.
+            var rect = tabsEl.getBoundingClientRect();
+            var pad = 24;
+            var inside = e.clientX > rect.left - pad && e.clientX < rect.right + pad
+                      && e.clientY > rect.top  - pad && e.clientY < rect.bottom + pad;
+            if (!inside) popoutConsoleTab(sess);
+        });
     }
+
+    // BroadcastChannel listener: a popped-out console can ask to merge
+    // back into the dashboard. We re-add it as a tab (with the same
+    // ephemeral flag) and mount the attach; the popup window closes
+    // itself on its side.
+    try {
+        var mergeChannel = new BroadcastChannel('gastown-console');
+        mergeChannel.addEventListener('message', function(ev) {
+            var msg = ev.data || {};
+            if (msg.type !== 'merge' || !msg.session) return;
+            addConsoleTab(msg.label || msg.session, msg.session, {
+                ephemeral: msg.ephemeral !== false,
+            });
+            showToast('info', 'Merged back', msg.label || msg.session);
+        });
+    } catch (e) { /* BroadcastChannel unsupported — silent fallback */ }
 
     document.getElementById('output-close-btn').onclick = function() {
         // Close button reaps every EPHEMERAL session in the tab list (the
