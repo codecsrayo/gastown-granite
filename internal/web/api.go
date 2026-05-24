@@ -214,10 +214,18 @@ func (h *APIHandler) handleRun(w http.ResponseWriter, r *http.Request) {
 	var sessionName string
 	var spawnErr error
 	// "console" is the bare-shell variant — no gt subcommand, just a tmux
-	// pane with the user's default shell.
-	if len(args) > 0 && args[0] == "console" {
+	// pane with the user's default shell. "git graph" renders an ASCII
+	// commit graph (gitgraph-style) in a console then drops to a shell.
+	switch {
+	case len(args) > 0 && args[0] == "console":
 		sessionName, spawnErr = h.spawnShellSession()
-	} else {
+	case len(args) >= 2 && args[0] == "git" && args[1] == "graph":
+		rigArg := ""
+		if len(args) >= 3 {
+			rigArg = args[2]
+		}
+		sessionName, spawnErr = h.spawnGitGraphSession(rigArg)
+	default:
 		sessionName, spawnErr = h.spawnConsoleSession(args)
 	}
 	resp := CommandResponse{
@@ -308,6 +316,19 @@ func (h *APIHandler) spawnConsoleSession(args []string) (string, error) {
 // in the browser for ad-hoc commands.
 func (h *APIHandler) spawnShellSession() (string, error) {
 	return spawnTmuxConsole(h.workDir, "")
+}
+
+// spawnGitGraphSession opens a console rendering an ASCII commit graph,
+// backing the palette `git graph` entry. When rig is non-empty the graph
+// runs in that rig's repo; otherwise it falls back to the HQ workDir.
+func (h *APIHandler) spawnGitGraphSession(rig string) (string, error) {
+	dir := h.workDir
+	if rig != "" {
+		if resolved := resolveRigGitDir(h.workDir, rig); resolved != "" {
+			dir = resolved
+		}
+	}
+	return spawnTmuxConsole(dir, gitGraphConsoleWrapper())
 }
 
 // handleSessionKill terminates an ephemeral console tmux session created by

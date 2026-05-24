@@ -33,6 +33,17 @@ func gtConsoleExitWrapper(gtPath string, args []string) string {
 		`exec "${SHELL:-/bin/bash}" -l`
 }
 
+// gitGraphConsoleWrapper renders an ASCII commit graph (gitgraph-style) in
+// the spawned console, then drops to an interactive shell so the user can
+// re-run git commands or close the pane. Colour is forced because the pane
+// is a real TTY under tmux. Capped at 300 commits to keep the initial paint
+// fast on large repos.
+func gitGraphConsoleWrapper() string {
+	return `git log --graph --oneline --decorate --all --color=always -n 300; ` +
+		`printf '\n[git graph above — wheel to scroll, type exit or close to end]\n'; ` +
+		`exec "${SHELL:-/bin/bash}" -l`
+}
+
 // spawnTmuxConsole creates a detached tmux session with a unique
 // gt-console-<unix-nano> name and the bumped history-limit applied
 // BEFORE the pane is created (tmux freezes history-limit at pane-creation

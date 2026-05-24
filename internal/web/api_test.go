@@ -44,6 +44,12 @@ func TestValidateCommand(t *testing.T) {
 			wantSafe: true,
 		},
 		{
+			name:     "git graph",
+			command:  "git graph",
+			wantErr:  false,
+			wantSafe: true,
+		},
+		{
 			name:     "mail inbox",
 			command:  "mail inbox",
 			wantErr:  false,

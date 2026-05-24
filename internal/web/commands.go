@@ -55,6 +55,11 @@ var AllowedCommands = map[string]CommandMeta{
 	// operator gets a live terminal in the browser without any gt command
 	// pre-baked. Handy for ad-hoc commands, debugging, or following logs.
 	"console":        {Desc: "Open a terminal console (live tmux session)", Category: "Diagnostics"},
+
+	// Git graph — opens a console rendering an ASCII commit graph for a rig's
+	// repo (not the HQ root). Pass a rig name; omit to graph the HQ workspace.
+	// Complements the live Git activity feed panel.
+	"git graph": {Safe: true, Desc: "Show commit graph (gitgraph) for a rig", Category: "Diagnostics", Args: "<rig>", ArgType: "rigs"},
 	"hooks list":  {Safe: true, Desc: "List hooks", Category: "Hooks"},
 	"activity":    {Safe: true, Desc: "Show recent activity", Category: "Status"},
 	"info":        {Safe: true, Desc: "Show workspace info", Category: "Status"},
