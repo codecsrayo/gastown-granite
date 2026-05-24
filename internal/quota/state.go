@@ -364,6 +364,23 @@ func RecordRotation(state *config.QuotaState, sourceHandle string, now time.Time
 	state.Accounts[sourceHandle] = acct
 }
 
+// MarkLimitedState flips an account to limited in-memory, preserving token
+// and rotation fields. Used on the rotate path so the account a session was
+// rotated *away* from is recorded as limited — otherwise the respawn clears
+// the rate-limit text from the pane and the next scan never re-detects it,
+// leaving the blocked account showing "available" on the dashboard.
+// Caller must hold the quota lock or invoke this within WithLock.
+func MarkLimitedState(state *config.QuotaState, handle, resetsAt string, now time.Time) {
+	if handle == "" {
+		return
+	}
+	acct := state.Accounts[handle]
+	acct.Status = config.QuotaStatusLimited
+	acct.LimitedAt = now.UTC().Format(time.RFC3339)
+	acct.ResetsAt = resetsAt
+	state.Accounts[handle] = acct
+}
+
 // parseResetTimePattern matches formats like "7pm", "11am", "3:30pm", "7:00pm"
 var parseResetTimePattern = regexp.MustCompile(`(?i)^(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b`)
 

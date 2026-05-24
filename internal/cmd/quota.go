@@ -339,6 +339,18 @@ func persistPlanArtifacts(mgr *quota.Manager, plan *quota.RotatePlan) error {
 	})
 }
 
+// resetsBySession maps each rate-limited session to its parsed reset time so
+// the rotate path can stamp ResetsAt on the account it rotates away from.
+func resetsBySession(limited []quota.ScanResult) map[string]string {
+	m := make(map[string]string, len(limited))
+	for _, r := range limited {
+		if r.ResetsAt != "" {
+			m[r.Session] = r.ResetsAt
+		}
+	}
+	return m
+}
+
 // planSnapshotFrom freezes a plan into the persistence schema.
 func planSnapshotFrom(plan *quota.RotatePlan) *config.RotationPlanSnapshot {
 	limited := make([]string, 0, len(plan.LimitedSessions))
@@ -709,10 +721,11 @@ func runQuotaRotate(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 	}
 	swappedConfigDirs := make(map[string]*quota.KeychainCredential)
+	resetsBySession := resetsBySession(plan.LimitedSessions)
 	var results []quota.RotateResult
 	for _, session := range sortedSessions {
 		newAccount := plan.Assignments[session]
-		result := executeKeychainRotation(t, mgr, acctCfg, session, newAccount, swappedConfigDirs)
+		result := executeKeychainRotation(t, mgr, acctCfg, session, newAccount, resetsBySession[session], swappedConfigDirs)
 		results = append(results, result)
 		emitRotationOutcome(result)
 
@@ -815,7 +828,7 @@ func executeKeychainRotation(
 	t *ttmux.Tmux,
 	mgr *quota.Manager,
 	acctCfg *config.AccountsConfig,
-	session, newAccount string,
+	session, newAccount, oldResetsAt string,
 	swappedConfigDirs map[string]*quota.KeychainCredential,
 ) quota.RotateResult {
 	result := quota.RotateResult{
@@ -937,8 +950,15 @@ func executeKeychainRotation(
 		if loadErr != nil {
 			return loadErr
 		}
-		quota.RecordRotation(state, newAccount, time.Now())
+		now := time.Now()
+		quota.RecordRotation(state, newAccount, now)
 		quota.RecordSwap(state, currentConfigDir, newAccount)
+		// Record the account we rotated *off* as limited so the dashboard
+		// shows it blocked (with its unlock countdown). Skip when the old
+		// account is unknown or identical to the incoming one.
+		if result.OldAccount != "" && result.OldAccount != newAccount {
+			quota.MarkLimitedState(state, result.OldAccount, oldResetsAt, now)
+		}
 		return mgr.SaveUnlocked(state)
 	}); err != nil {
 		style.PrintWarning("could not update quota state for %s: %v", newAccount, err)
@@ -1127,9 +1147,10 @@ func runWatchCycle(townRoot string, acctCfg *config.AccountsConfig) {
 
 	// Execute rotation
 	swappedConfigDirs := make(map[string]*quota.KeychainCredential)
+	resetsBySession := resetsBySession(plan.LimitedSessions)
 	for _, session := range slices.Sorted(maps.Keys(plan.Assignments)) {
 		newAccount := plan.Assignments[session]
-		result := executeKeychainRotation(t, mgr, acctCfg, session, newAccount, swappedConfigDirs)
+		result := executeKeychainRotation(t, mgr, acctCfg, session, newAccount, resetsBySession[session], swappedConfigDirs)
 		emitRotationOutcome(result)
 		if result.Rotated {
 			fmt.Printf(" [%s] %s %s → %s\n",
