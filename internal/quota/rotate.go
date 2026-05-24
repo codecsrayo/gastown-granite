@@ -2,6 +2,7 @@ package quota
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/util"
@@ -41,6 +42,16 @@ type RotatePlan struct {
 	// SkippedAccounts maps handle -> reason for accounts that were
 	// available by quota status but had invalid/expired tokens.
 	SkippedAccounts map[string]string `json:"skipped_accounts,omitempty"`
+
+	// TokenExpiries maps handle -> RFC3339 token expiry parsed during planning.
+	// Empty string for accounts whose token format is opaque. Populated for
+	// every registered account that the planner inspected, regardless of
+	// rotation outcome. Lets the caller persist the data without re-reading
+	// the keychain.
+	TokenExpiries map[string]string `json:"token_expiries,omitempty"`
+
+	// PlannedAt is the RFC3339 timestamp when PlanRotation finished.
+	PlannedAt string `json:"planned_at,omitempty"`
 }
 
 // PlanOpts configures the rotation planning behavior.
@@ -112,9 +123,18 @@ func PlanRotation(scanner *Scanner, mgr *Manager, acctCfg *config.AccountsConfig
 	// The caller persists confirmed rate-limit state after execution.
 	available := mgr.AvailableAccounts(state)
 
-	// Validate tokens for available accounts — skip accounts with expired or
-	// revoked tokens. This prevents swapping a bad token into the target's
-	// keychain entry, which would leave the session non-functional.
+	// Inspect every registered account's token so callers can persist the
+	// expiry on the dashboard, then validate the candidate pool — skip
+	// accounts whose tokens are known expired so we don't swap a bad token
+	// into a target's keychain.
+	expiries := make(map[string]string)
+	for handle, acct := range acctCfg.Accounts {
+		configDir := util.ExpandHome(acct.ConfigDir)
+		if exp, _ := InspectKeychainToken(configDir); !exp.IsZero() {
+			expiries[handle] = exp.UTC().Format(time.RFC3339)
+		}
+	}
+
 	skipped := make(map[string]string)
 	var validAvailable []string
 	for _, handle := range available {
@@ -211,5 +231,7 @@ func PlanRotation(scanner *Scanner, mgr *Manager, acctCfg *config.AccountsConfig
 		Assignments:       assignments,
 		ConfigDirSwaps:    configDirSwaps,
 		SkippedAccounts:   skipped,
+		TokenExpiries:     expiries,
+		PlannedAt:         time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }

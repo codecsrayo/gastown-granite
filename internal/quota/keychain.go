@@ -200,20 +200,18 @@ func RestoreOAuthAccount(targetConfigDir string, backup json.RawMessage) error {
 	return os.WriteFile(targetPath, out, 0600)
 }
 
-// ValidateKeychainToken checks if the OAuth token for a config dir is still usable.
-// It attempts local validation first (JSON credential expiry, JWT expiry), then
-// falls back to a lightweight API call. Returns nil if the token appears valid
-// or if the token can't be read (the actual swap will fail clearly in that case).
-func ValidateKeychainToken(configDir string) error {
+// InspectKeychainToken parses the stored OAuth token and returns its expiry
+// time alongside a validity error. A non-nil error means the token is known
+// expired; a zero expiry means the token format was opaque and the caller
+// should treat the expiry as "unknown" rather than "expired".
+func InspectKeychainToken(configDir string) (time.Time, error) {
 	svc := KeychainServiceName(configDir)
 	raw, err := ReadKeychainToken(svc)
 	if err != nil {
-		// Can't read the token — don't block planning. The swap itself will
-		// fail with a clear error if the keychain entry doesn't exist.
-		return nil
+		return time.Time{}, nil
 	}
 	if raw == "" {
-		return nil
+		return time.Time{}, nil
 	}
 
 	// Strategy 1: Parse as JSON credential with expires_at field.
@@ -222,10 +220,11 @@ func ValidateKeychainToken(configDir string) error {
 		ExpiresAt int64 `json:"expires_at"`
 	}
 	if json.Unmarshal([]byte(raw), &cred) == nil && cred.ExpiresAt > 0 {
-		if time.Now().Unix() >= cred.ExpiresAt {
-			return fmt.Errorf("token expired at %s", time.Unix(cred.ExpiresAt, 0).Format(time.RFC3339))
+		expiry := time.Unix(cred.ExpiresAt, 0)
+		if time.Now().After(expiry) {
+			return expiry, fmt.Errorf("token expired at %s", expiry.Format(time.RFC3339))
 		}
-		return nil
+		return expiry, nil
 	}
 
 	// Strategy 2: Parse as JWT — decode payload, check exp claim.
@@ -237,10 +236,11 @@ func ValidateKeychainToken(configDir string) error {
 				Exp int64 `json:"exp"`
 			}
 			if json.Unmarshal(payload, &claims) == nil && claims.Exp > 0 {
-				if time.Now().Unix() >= claims.Exp {
-					return fmt.Errorf("JWT expired at %s", time.Unix(claims.Exp, 0).Format(time.RFC3339))
+				expiry := time.Unix(claims.Exp, 0)
+				if time.Now().After(expiry) {
+					return expiry, fmt.Errorf("JWT expired at %s", expiry.Format(time.RFC3339))
 				}
-				return nil
+				return expiry, nil
 			}
 		}
 	}
@@ -249,7 +249,15 @@ func ValidateKeychainToken(configDir string) error {
 	// Claude Code uses OAuth tokens that authenticate through a different flow
 	// than Bearer tokens against the Anthropic API, so HTTP validation would
 	// always return 401 for valid OAuth tokens. Assume valid if present.
-	return nil
+	return time.Time{}, nil
+}
+
+// ValidateKeychainToken returns an error only if the stored token is known
+// expired. Opaque tokens pass validation; the actual swap will surface a
+// clearer error later if they are unusable.
+func ValidateKeychainToken(configDir string) error {
+	_, err := InspectKeychainToken(configDir)
+	return err
 }
 
 // validateTokenHTTP sends a minimal request to the Anthropic API to check if a

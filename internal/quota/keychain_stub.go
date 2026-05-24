@@ -5,6 +5,7 @@ package quota
 import (
 	"encoding/json"
 	"errors"
+	"time"
 )
 
 var errNotDarwin = errors.New("keychain operations are not supported on this OS")
@@ -23,4 +24,5 @@ func RestoreKeychainToken(_ *KeychainCredential) error                          
 func SwapOAuthAccount(_, _ string) (json.RawMessage, error)                        { return nil, errNotDarwin }
 func RestoreOAuthAccount(_ string, _ json.RawMessage) error                        { return errNotDarwin }
 func ValidateKeychainToken(_ string) error                                         { return nil }
+func InspectKeychainToken(_ string) (time.Time, error)                             { return time.Time{}, nil }
 func SyncSwappedTokens(_ map[string]string) int                                    { return 0 }

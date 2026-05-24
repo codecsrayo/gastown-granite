@@ -162,19 +162,22 @@ func RestoreOAuthAccount(targetConfigDir string, backup json.RawMessage) error {
 	return os.WriteFile(targetPath, out, 0600)
 }
 
-// ValidateKeychainToken checks if the stored credentials are still usable.
-// Parses the JSON credential's expires_at (Claude Code OAuth format, ms epoch),
-// then falls back to a raw JWT exp claim if the blob looks like a JWT.
-// Returns nil if the token appears valid, the file can't be read, or its
-// format is opaque (the actual swap will surface a clearer error later).
-func ValidateKeychainToken(configDir string) error {
+// InspectKeychainToken parses the stored credentials and returns the expiry
+// timestamp alongside a validity error. A non-nil error means the token is
+// known to be expired (or otherwise definitively unusable). A zero expiry
+// means the format was opaque to the parser — the caller should treat the
+// token as "unknown" rather than expired.
+//
+// Always-nil error with zero time is normal for opaque blobs that we cannot
+// verify without an HTTP probe (Claude OAuth flow can't be cheaply checked).
+func InspectKeychainToken(configDir string) (time.Time, error) {
 	raw, err := ReadKeychainToken(configDir)
 	if err != nil {
-		return nil
+		return time.Time{}, nil
 	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil
+		return time.Time{}, nil
 	}
 
 	// Strategy 1: Claude Code's nested {claudeAiOauth:{expiresAt: <ms>}} format.
@@ -187,9 +190,9 @@ func ValidateKeychainToken(configDir string) error {
 		// expiresAt is in milliseconds since epoch.
 		expiry := time.Unix(0, oauthDoc.ClaudeAiOauth.ExpiresAt*int64(time.Millisecond))
 		if time.Now().After(expiry) {
-			return fmt.Errorf("token expired at %s", expiry.Format(time.RFC3339))
+			return expiry, fmt.Errorf("token expired at %s", expiry.Format(time.RFC3339))
 		}
-		return nil
+		return expiry, nil
 	}
 
 	// Strategy 2: flat {expires_at: <seconds>} format (matches Darwin parser).
@@ -197,10 +200,11 @@ func ValidateKeychainToken(configDir string) error {
 		ExpiresAt int64 `json:"expires_at"`
 	}
 	if json.Unmarshal([]byte(raw), &flat) == nil && flat.ExpiresAt > 0 {
-		if time.Now().Unix() >= flat.ExpiresAt {
-			return fmt.Errorf("token expired at %s", time.Unix(flat.ExpiresAt, 0).Format(time.RFC3339))
+		expiry := time.Unix(flat.ExpiresAt, 0)
+		if time.Now().After(expiry) {
+			return expiry, fmt.Errorf("token expired at %s", expiry.Format(time.RFC3339))
 		}
-		return nil
+		return expiry, nil
 	}
 
 	// Strategy 3: raw JWT (rare for Claude Code OAuth, kept for parity).
@@ -212,15 +216,24 @@ func ValidateKeychainToken(configDir string) error {
 				Exp int64 `json:"exp"`
 			}
 			if json.Unmarshal(payload, &claims) == nil && claims.Exp > 0 {
-				if time.Now().Unix() >= claims.Exp {
-					return fmt.Errorf("JWT expired at %s", time.Unix(claims.Exp, 0).Format(time.RFC3339))
+				expiry := time.Unix(claims.Exp, 0)
+				if time.Now().After(expiry) {
+					return expiry, fmt.Errorf("JWT expired at %s", expiry.Format(time.RFC3339))
 				}
-				return nil
+				return expiry, nil
 			}
 		}
 	}
 
-	return nil
+	return time.Time{}, nil
+}
+
+// ValidateKeychainToken returns an error only if the stored credentials are
+// known to be expired. Opaque tokens are treated as valid (the actual swap
+// will surface a clearer error later).
+func ValidateKeychainToken(configDir string) error {
+	_, err := InspectKeychainToken(configDir)
+	return err
 }
 
 // SyncSwappedTokens propagates fresh credentials from source accounts to target

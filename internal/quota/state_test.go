@@ -571,8 +571,8 @@ func TestClearExpired_ClearsPassedResetTime(t *testing.T) {
 	// Override now for testing by calling ClearExpiredAt
 	cleared := clearExpiredAt(mgr, state, now)
 
-	if cleared != 1 {
-		t.Errorf("expected 1 cleared, got %d", cleared)
+	if len(cleared) != 1 || cleared[0] != "expired" {
+		t.Errorf("expected [expired] cleared, got %v", cleared)
 	}
 	if state.Accounts["expired"].Status != config.QuotaStatusAvailable {
 		t.Errorf("expected expired account to be available, got %s", state.Accounts["expired"].Status)
@@ -600,8 +600,8 @@ func TestClearExpired_NoResetsAt(t *testing.T) {
 	}
 
 	cleared := mgr.ClearExpired(state)
-	if cleared != 0 {
-		t.Errorf("expected 0 cleared, got %d", cleared)
+	if len(cleared) != 0 {
+		t.Errorf("expected 0 cleared, got %v", cleared)
 	}
 	if state.Accounts["no_reset"].Status != config.QuotaStatusLimited {
 		t.Errorf("expected no_reset to remain limited")

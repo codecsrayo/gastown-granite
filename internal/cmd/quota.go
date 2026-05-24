@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/constants"
+	"github.com/steveyegge/gastown/internal/events"
 	"github.com/steveyegge/gastown/internal/quota"
 	"github.com/steveyegge/gastown/internal/style"
 	ttmux "github.com/steveyegge/gastown/internal/tmux"
@@ -115,9 +116,13 @@ func runQuotaStatus(cmd *cobra.Command, args []string) error {
 	mgr.EnsureAccountsTracked(state, acctCfg.Accounts)
 
 	// Auto-clear accounts whose reset time has passed
-	if cleared := mgr.ClearExpired(state); cleared > 0 {
+	if cleared := mgr.ClearExpired(state); len(cleared) > 0 {
 		if err := mgr.Save(state); err != nil {
 			style.PrintWarning("could not persist expired account clearance: %v", err)
+		}
+		for _, handle := range cleared {
+			_ = events.LogFeed(events.TypeQuotaCleared, "quota",
+				events.QuotaClearedPayload(handle, state.Accounts[handle].ResetsAt))
 		}
 	}
 
@@ -256,6 +261,10 @@ func runQuotaScan(cmd *cobra.Command, args []string) error {
 		if err := updateQuotaState(townRoot, results, acctCfg); err != nil {
 			return fmt.Errorf("updating quota state: %w", err)
 		}
+		mgr := quota.NewManager(townRoot)
+		if st, loadStateErr := mgr.Load(); loadStateErr == nil {
+			emitScanEvents(results, len(mgr.AvailableAccounts(st)))
+		}
 	}
 
 	if quotaJSON {
@@ -277,17 +286,155 @@ func updateQuotaState(townRoot string, results []quota.ScanResult, acctCfg *conf
 		for _, r := range results {
 			if r.RateLimited && r.AccountHandle != "" {
 				existing := state.Accounts[r.AccountHandle]
-				state.Accounts[r.AccountHandle] = config.AccountQuotaState{
-					Status:    config.QuotaStatusLimited,
-					LimitedAt: now,
-					ResetsAt:  r.ResetsAt,
-					LastUsed:  existing.LastUsed,
-				}
+				existing.Status = config.QuotaStatusLimited
+				existing.LimitedAt = now
+				existing.ResetsAt = r.ResetsAt
+				state.Accounts[r.AccountHandle] = existing
 			}
 		}
+		recordScanSnapshot(state, results, now)
 
 		return mgr.SaveUnlocked(state)
 	})
+}
+
+// recordScanSnapshot overwrites the LimitedSessions map from a scan pass.
+// Sessions that no longer match a rate-limit or near-limit signal are dropped
+// so the dashboard never shows stale "waiting" entries.
+func recordScanSnapshot(state *config.QuotaState, results []quota.ScanResult, now string) {
+	snap := make(map[string]config.LimitedSessionState)
+	for _, r := range results {
+		if !r.RateLimited && !r.NearLimit {
+			continue
+		}
+		snap[r.Session] = config.LimitedSessionState{
+			Account:     r.AccountHandle,
+			ConfigDir:   r.ConfigDir,
+			RateLimited: r.RateLimited,
+			NearLimit:   r.NearLimit,
+			ResetsAt:    r.ResetsAt,
+			MatchedLine: r.MatchedLine,
+			DetectedAt:  now,
+		}
+	}
+	quota.RecordLimitedSessions(state, snap)
+}
+
+// emitScanEvents fires per-session limited/near-limit events plus a single
+// summary event for a scan pass. Best-effort; logging failures are dropped.
+func emitScanEvents(results []quota.ScanResult, availableCount int) {
+	limited := 0
+	near := 0
+	for _, r := range results {
+		if r.RateLimited {
+			limited++
+			_ = events.LogFeed(events.TypeQuotaLimited, "quota",
+				events.QuotaLimitedPayload(r.Session, r.AccountHandle, r.ResetsAt))
+		} else if r.NearLimit {
+			near++
+			_ = events.LogAudit(events.TypeQuotaNearLimit, "quota",
+				events.QuotaNearLimitPayload(r.Session, r.AccountHandle, r.MatchedLine))
+		}
+	}
+	_ = events.LogAudit(events.TypeQuotaScanned, "quota",
+		events.QuotaScannedPayload(len(results), limited, near, availableCount))
+}
+
+// persistPlanArtifacts writes the LastPlan snapshot plus token expiries from
+// a planning pass under a single quota-lock acquisition.
+func persistPlanArtifacts(mgr *quota.Manager, plan *quota.RotatePlan) error {
+	if plan == nil {
+		return nil
+	}
+	return mgr.WithLock(func() error {
+		state, err := mgr.Load()
+		if err != nil {
+			return err
+		}
+		quota.ApplyTokenExpiries(state, plan.TokenExpiries)
+		quota.RecordLastPlan(state, planSnapshotFrom(plan))
+		return mgr.SaveUnlocked(state)
+	})
+}
+
+// planSnapshotFrom freezes a plan into the persistence schema.
+func planSnapshotFrom(plan *quota.RotatePlan) *config.RotationPlanSnapshot {
+	limited := make([]string, 0, len(plan.LimitedSessions))
+	for _, r := range plan.LimitedSessions {
+		limited = append(limited, r.Session)
+	}
+	sort.Strings(limited)
+
+	unassignable := 0
+	for _, r := range plan.LimitedSessions {
+		if _, ok := plan.Assignments[r.Session]; !ok {
+			unassignable++
+		}
+	}
+
+	ts := plan.PlannedAt
+	if ts == "" {
+		ts = time.Now().UTC().Format(time.RFC3339)
+	}
+	return &config.RotationPlanSnapshot{
+		Timestamp:         ts,
+		Assignments:       cloneStringMap(plan.Assignments),
+		ConfigDirSwaps:    cloneStringMap(plan.ConfigDirSwaps),
+		AvailablePool:     append([]string(nil), plan.AvailableAccounts...),
+		SkippedAccounts:   cloneStringMap(plan.SkippedAccounts),
+		LimitedSessions:   limited,
+		UnassignableCount: unassignable,
+	}
+}
+
+// emitPlanEvents fires quota_assigned plus a quota_token_expired event for
+// every account that was skipped due to an expired token. Best-effort; emit
+// failures are dropped.
+func emitPlanEvents(plan *quota.RotatePlan) {
+	if plan == nil {
+		return
+	}
+	limited := 0
+	near := 0
+	for _, r := range plan.LimitedSessions {
+		if r.RateLimited {
+			limited++
+		} else if r.NearLimit {
+			near++
+		}
+	}
+	for _, r := range plan.NearLimitSessions {
+		if r.NearLimit {
+			near++
+		}
+	}
+	_ = events.LogAudit(events.TypeQuotaScanned, "quota",
+		events.QuotaScannedPayload(
+			len(plan.LimitedSessions)+len(plan.NearLimitSessions),
+			limited, near, len(plan.AvailableAccounts),
+		))
+
+	if len(plan.Assignments) > 0 {
+		_ = events.LogFeed(events.TypeQuotaAssigned, "quota",
+			events.QuotaAssignedPayload(plan.Assignments, plan.AvailableAccounts))
+	}
+
+	for handle, reason := range plan.SkippedAccounts {
+		expiresAt := plan.TokenExpiries[handle]
+		_ = events.LogFeed(events.TypeQuotaTokenExpired, "quota",
+			events.QuotaTokenExpiredPayload(handle, expiresAt, reason))
+	}
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func printScanJSON(results []quota.ScanResult) error {
@@ -429,11 +576,15 @@ func runQuotaRotate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("planning rotation: %w", err)
 	}
 
-	// NOTE: We intentionally do NOT persist scan-detected rate limits here.
-	// Stale sessions (e.g., parked rigs with old rate-limit messages in the
-	// pane) would poison the available account pool, blocking rotation of
-	// sessions that actually need it. Account state is updated only after
-	// successful rotation execution (LastUsed in executeKeychainRotation).
+	// NOTE: We intentionally do NOT persist scan-detected rate limits to the
+	// per-account Status field here (stale sessions would poison the pool).
+	// The artifacts below are pure observability: LastPlan/LimitedSessions
+	// snapshots for the dashboard, plus per-account token expiry parsed at
+	// plan time. Status mutation still only happens after successful execute.
+	if err := persistPlanArtifacts(mgr, plan); err != nil {
+		style.PrintWarning("could not persist plan artifacts: %v", err)
+	}
+	emitPlanEvents(plan)
 
 	if len(plan.LimitedSessions) == 0 {
 		if quotaJSON {
@@ -581,6 +732,7 @@ func runQuotaRotate(cmd *cobra.Command, args []string) error {
 		newAccount := plan.Assignments[session]
 		result := executeKeychainRotation(t, mgr, acctCfg, session, newAccount, swappedConfigDirs)
 		results = append(results, result)
+		emitRotationOutcome(result)
 
 		if !quotaJSON {
 			if result.Rotated {
@@ -795,27 +947,38 @@ func executeKeychainRotation(
 	// Context recovery is handled by --continue in the restart command.
 	result.ResumedSession = "continue"
 
-	// Update quota state: mark account as used and record swap mapping
+	// Update quota state: mark account as used, bump rotation counter, and
+	// record the swap mapping so SyncSwappedTokens can later propagate fresh
+	// tokens if the source account re-authenticates.
 	if err := mgr.WithLock(func() error {
 		state, loadErr := mgr.Load()
 		if loadErr != nil {
 			return loadErr
 		}
-		existing := state.Accounts[newAccount]
-		existing.LastUsed = time.Now().UTC().Format(time.RFC3339)
-		state.Accounts[newAccount] = existing
-
-		// Record the swap mapping so SyncSwappedTokens can propagate
-		// fresh tokens if the source account re-authenticates later.
+		quota.RecordRotation(state, newAccount, time.Now())
 		quota.RecordSwap(state, currentConfigDir, newAccount)
-
 		return mgr.SaveUnlocked(state)
 	}); err != nil {
-		style.PrintWarning("could not update LastUsed for %s: %v", newAccount, err)
+		style.PrintWarning("could not update quota state for %s: %v", newAccount, err)
 	}
 
 	result.Rotated = true
 	return result
+}
+
+// emitRotationOutcome fires quota_rotated for a successful rotation or
+// quota_swap_failed when the result carries an error. Best-effort.
+func emitRotationOutcome(r quota.RotateResult) {
+	if r.Rotated {
+		_ = events.LogFeed(events.TypeQuotaRotated, "quota",
+			events.QuotaRotatedPayload(r.Session, r.OldAccount, r.NewAccount,
+				r.ResumedSession != "", r.KeychainSwap))
+		return
+	}
+	if r.Error != "" {
+		_ = events.LogFeed(events.TypeQuotaSwapFailed, "quota",
+			events.QuotaSwapFailedPayload(r.Session, r.NewAccount, r.Error))
+	}
 }
 
 
@@ -921,6 +1084,26 @@ func runWatchCycle(townRoot string, acctCfg *config.AccountsConfig) {
 		return
 	}
 
+	if err := persistPlanArtifacts(mgr, plan); err != nil {
+		style.PrintWarning("could not persist plan artifacts: %v", err)
+	}
+	emitPlanEvents(plan)
+
+	// Persist a LimitedSessions snapshot from the watch scan so the dashboard
+	// can render "waiting for unlock" without re-scanning tmux.
+	if err := mgr.WithLock(func() error {
+		state, loadErr := mgr.Load()
+		if loadErr != nil {
+			return loadErr
+		}
+		all := append([]quota.ScanResult{}, plan.LimitedSessions...)
+		all = append(all, plan.NearLimitSessions...)
+		recordScanSnapshot(state, all, time.Now().UTC().Format(time.RFC3339))
+		return mgr.SaveUnlocked(state)
+	}); err != nil {
+		style.PrintWarning("could not persist scan snapshot: %v", err)
+	}
+
 	// Rotation-blocked detection: limited sessions exist but no plan assignments
 	// were produced (typically because every account had an expired token).
 	// Emit a throttled escalation so operators see it on the dashboard / via mail.
@@ -965,6 +1148,7 @@ func runWatchCycle(townRoot string, acctCfg *config.AccountsConfig) {
 	for _, session := range slices.Sorted(maps.Keys(plan.Assignments)) {
 		newAccount := plan.Assignments[session]
 		result := executeKeychainRotation(t, mgr, acctCfg, session, newAccount, swappedConfigDirs)
+		emitRotationOutcome(result)
 		if result.Rotated {
 			fmt.Printf(" [%s] %s %s → %s\n",
 				style.Dim.Render(now),
@@ -1007,6 +1191,9 @@ func maybeEmitRotationBlockedAlert(mgr *quota.Manager, plan *quota.RotatePlan) {
 		sessions = append(sessions, s.Session)
 	}
 	sort.Strings(sessions)
+
+	_ = events.LogFeed(events.TypeQuotaBlocked, "quota",
+		events.QuotaBlockedPayload(sessions, plan.SkippedAccounts))
 
 	skippedHandles := make([]string, 0, len(plan.SkippedAccounts))
 	for h := range plan.SkippedAccounts {

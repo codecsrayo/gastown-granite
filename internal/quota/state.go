@@ -240,15 +240,16 @@ func ResolveSwapSourceDirs(activeSwaps map[string]string, accounts map[string]co
 }
 
 // ClearExpired checks all limited accounts and marks them available if their
-// ResetsAt time has passed. Returns the number of accounts cleared.
+// ResetsAt time has passed. Returns the handles of accounts that were cleared
+// (in deterministic input order is not preserved — caller should sort if needed).
 // The caller is responsible for persisting state if changes were made.
-func (m *Manager) ClearExpired(state *config.QuotaState) int {
+func (m *Manager) ClearExpired(state *config.QuotaState) []string {
 	return clearExpiredAt(m, state, time.Now())
 }
 
 // clearExpiredAt is the testable core of ClearExpired, accepting a reference time.
-func clearExpiredAt(_ *Manager, state *config.QuotaState, now time.Time) int {
-	cleared := 0
+func clearExpiredAt(_ *Manager, state *config.QuotaState, now time.Time) []string {
+	var cleared []string
 	for handle, acctState := range state.Accounts {
 		if acctState.Status != config.QuotaStatusLimited {
 			continue
@@ -261,14 +262,67 @@ func clearExpiredAt(_ *Manager, state *config.QuotaState, now time.Time) int {
 			continue // can't parse — leave as-is
 		}
 		if now.After(resetTime) {
-			state.Accounts[handle] = config.AccountQuotaState{
-				Status:   config.QuotaStatusAvailable,
-				LastUsed: acctState.LastUsed,
+			preserved := config.AccountQuotaState{
+				Status:           config.QuotaStatusAvailable,
+				LastUsed:         acctState.LastUsed,
+				TokenExpiresAt:   acctState.TokenExpiresAt,
+				TokenLastChecked: acctState.TokenLastChecked,
+				RotationCount:    acctState.RotationCount,
+				LastRotatedAt:    acctState.LastRotatedAt,
 			}
-			cleared++
+			state.Accounts[handle] = preserved
+			cleared = append(cleared, handle)
 		}
 	}
 	return cleared
+}
+
+// ApplyTokenExpiries records inspected token expiries onto state.Accounts.
+// Accounts whose handle is missing from the inspection map are left untouched.
+// Handles unknown to state.Accounts are ignored — we never invent entries.
+// Caller must hold the quota lock or invoke this within WithLock.
+func ApplyTokenExpiries(state *config.QuotaState, expiries map[string]string) {
+	if len(expiries) == 0 {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	for handle, expiresAt := range expiries {
+		acct, ok := state.Accounts[handle]
+		if !ok {
+			continue
+		}
+		acct.TokenExpiresAt = expiresAt
+		acct.TokenLastChecked = now
+		state.Accounts[handle] = acct
+	}
+}
+
+// RecordLimitedSessions overwrites the LimitedSessions snapshot on state.
+// `sessions` is the canonical map keyed by tmux session name. Pass an empty
+// map to clear the snapshot — quota.json should not retain stale entries.
+// Caller must hold the quota lock or invoke this within WithLock.
+func RecordLimitedSessions(state *config.QuotaState, sessions map[string]config.LimitedSessionState) {
+	if len(sessions) == 0 {
+		state.LimitedSessions = nil
+		return
+	}
+	state.LimitedSessions = sessions
+}
+
+// RecordLastPlan overwrites the LastPlan snapshot. Pass nil to clear.
+// Caller must hold the quota lock or invoke this within WithLock.
+func RecordLastPlan(state *config.QuotaState, plan *config.RotationPlanSnapshot) {
+	state.LastPlan = plan
+}
+
+// RecordRotation bumps the rotation counter and stamps the rotation time
+// for the source account. Caller must hold the quota lock.
+func RecordRotation(state *config.QuotaState, sourceHandle string, now time.Time) {
+	acct := state.Accounts[sourceHandle]
+	acct.RotationCount++
+	acct.LastRotatedAt = now.UTC().Format(time.RFC3339)
+	acct.LastUsed = acct.LastRotatedAt
+	state.Accounts[sourceHandle] = acct
 }
 
 // parseResetTimePattern matches formats like "7pm", "11am", "3:30pm", "7:00pm"
