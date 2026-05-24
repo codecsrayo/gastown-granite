@@ -47,6 +47,95 @@
             }
         });
 
+        // Surgical panel dispatch.
+        // Each typed event maps to the panel(s) that depend on it. The
+        // panels re-fetch / and morph in just that fragment via hx-select,
+        // avoiding a full-page re-render while still keeping the SSE handler
+        // dumb (server doesn't need per-panel endpoints).
+        //
+        // Event types come from internal/events/events.go.
+        var EVENT_TO_PANELS = {
+            // Escalation lifecycle
+            escalation_sent:        ['#escalations-panel'],
+            escalation_acked:       ['#escalations-panel'],
+            escalation_closed:      ['#escalations-panel'],
+            escalation_reassigned:  ['#escalations-panel'],
+            // Mail flow
+            mail_sent:              ['#mail-panel'],
+            mail_received:          ['#mail-panel'],
+            // Session / agent lifecycle
+            session_start:          ['#convoy-panel', '#polecats-panel', '#sessions-panel', '#activity-panel'],
+            session_end:            ['#convoy-panel', '#polecats-panel', '#sessions-panel', '#activity-panel'],
+            boot:                   ['#convoy-panel', '#polecats-panel', '#sessions-panel'],
+            nudge:                  ['#activity-panel'],
+            handoff:                ['#convoy-panel', '#activity-panel'],
+            // Work assignment
+            sling:                  ['#convoy-panel', '#hooks-panel', '#work-panel'],
+            done:                   ['#convoy-panel', '#hooks-panel', '#merge-queue-panel'],
+            hook_attached:          ['#hooks-panel'],
+            hook_detached:          ['#hooks-panel'],
+            // Merge queue
+            merge_started:          ['#merge-queue-panel'],
+            merged:                 ['#merge-queue-panel', '#convoy-panel'],
+            merge_failed:           ['#merge-queue-panel', '#escalations-panel'],
+            // Polecat health
+            polecat_checked:        ['#polecats-panel'],
+            polecat_nudged:         ['#polecats-panel', '#activity-panel'],
+            mass_death:             ['#polecats-panel', '#escalations-panel'],
+        };
+
+        function refreshPanel(selector) {
+            var el = document.querySelector(selector);
+            if (!el || typeof htmx === 'undefined' || window.pauseRefresh) return;
+            // Re-fetch the full page but only swap in this panel's outerHTML.
+            htmx.ajax('GET', '/', {
+                target: selector,
+                select: selector,
+                swap: 'outerHTML',
+            });
+        }
+
+        // Login URL detected in a session pane — show a persistent toast
+        // with a one-click copy button so the user doesn't have to fight
+        // tmux selection to grab the OAuth URL.
+        evtSource.addEventListener('login_required', function(e) {
+            try {
+                var data = JSON.parse(e.data || '{}');
+                var payload = data.payload || {};
+                var session = payload.session || 'unknown session';
+                var url = payload.url || '';
+                if (!url) return;
+                showActionToast({
+                    tag: 'login:' + session,
+                    type: 'warning',
+                    icon: '🔐',
+                    title: 'Account needs login',
+                    message: session + ' is waiting on OAuth — open the URL in a browser to authenticate.',
+                    actionValue: url,
+                    actionLabel: '📋 Copy URL',
+                });
+            } catch (err) {
+                console.warn('login_required: bad payload', err);
+            }
+        });
+
+        Object.keys(EVENT_TO_PANELS).forEach(function(evtType) {
+            evtSource.addEventListener(evtType, function(e) {
+                if (window.pauseRefresh) return;
+                var panels = EVENT_TO_PANELS[evtType] || [];
+                // Debounce per-panel: collapse rapid bursts into one fetch.
+                panels.forEach(function(sel) {
+                    if (refreshPanel._timers && refreshPanel._timers[sel]) {
+                        clearTimeout(refreshPanel._timers[sel]);
+                    }
+                    refreshPanel._timers = refreshPanel._timers || {};
+                    refreshPanel._timers[sel] = setTimeout(function() {
+                        refreshPanel(sel);
+                    }, 250);
+                });
+            });
+        });
+
         evtSource.onerror = function() {
             window.sseConnected = false;
             updateConnectionStatus('reconnecting');
@@ -107,6 +196,15 @@
             // Pause refresh while panel is expanded
             window.pauseRefresh = true;
         }
+        // Re-fit any active xterm so the terminal fills (or restores from) the
+        // new container size. Defer one frame so CSS layout settles first.
+        requestAnimationFrame(function() {
+            if (typeof attachFit !== 'undefined' && attachFit && typeof attachFit.fit === 'function') {
+                try { attachFit.fit(); } catch (e) {}
+            }
+            if (typeof sendAttachResize === 'function') sendAttachResize();
+            window.dispatchEvent(new Event('resize'));
+        });
     });
 
     // ============================================
@@ -744,6 +842,53 @@
         };
     }
 
+    // Persistent toast for actions the user must take (login URL, etc).
+    // Stays until the user dismisses it or clicks the action button.
+    // De-dup by tag — repeated calls with the same tag replace the existing
+    // toast rather than stacking new ones.
+    var _persistentToastsByTag = {};
+    function showActionToast(opts) {
+        opts = opts || {};
+        var tag = opts.tag || ('action-' + Date.now());
+        if (_persistentToastsByTag[tag] && _persistentToastsByTag[tag].parentNode) {
+            _persistentToastsByTag[tag].parentNode.removeChild(_persistentToastsByTag[tag]);
+        }
+        var toast = document.createElement('div');
+        toast.className = 'toast ' + (opts.type || 'info') + ' toast-persistent';
+        var icon = opts.icon || 'ℹ';
+        var actionLabel = opts.actionLabel || 'Copy';
+        var actionValue = opts.actionValue || '';
+        toast.innerHTML = '<span class="toast-icon">' + icon + '</span>' +
+            '<div class="toast-content">' +
+            '<div class="toast-title">' + escapeHtml(opts.title || '') + '</div>' +
+            '<div class="toast-message">' + escapeHtml(opts.message || '') + '</div>' +
+            (actionValue ? '<div class="toast-action-value">' + escapeHtml(actionValue) + '</div>' : '') +
+            '</div>' +
+            (actionValue ? '<button class="toast-action-btn">' + escapeHtml(actionLabel) + '</button>' : '') +
+            '<button class="toast-close">✕</button>';
+        toastContainer.appendChild(toast);
+        _persistentToastsByTag[tag] = toast;
+
+        var actionBtn = toast.querySelector('.toast-action-btn');
+        if (actionBtn) {
+            actionBtn.onclick = function() {
+                if (navigator.clipboard && actionValue) {
+                    navigator.clipboard.writeText(actionValue).then(function() {
+                        actionBtn.textContent = '✓ Copied';
+                        actionBtn.classList.add('copied');
+                    }).catch(function() {
+                        actionBtn.textContent = 'Copy failed';
+                    });
+                }
+            };
+        }
+
+        toast.querySelector('.toast-close').onclick = function() {
+            if (toast.parentNode) toast.parentNode.removeChild(toast);
+            delete _persistentToastsByTag[tag];
+        };
+    }
+
     // SINGLE click handler for command palette
     resultsDiv.addEventListener('click', function(e) {
         var item = e.target.closest('.command-item');
@@ -766,11 +911,53 @@
             openPalette();
             return;
         }
+        var launchBtn = e.target.closest('#launch-agents-btn');
+        if (launchBtn) {
+            e.preventDefault();
+            launchAgents(launchBtn);
+            return;
+        }
         // Click on overlay background closes palette
         if (e.target === overlay) {
             closePalette();
         }
     });
+
+    function launchAgents(btn) {
+        if (btn.disabled) return;
+        if (!window.confirm('Run `gt up --restore`?\n\nStarts daemon, deacon, mayor, all witnesses, refineries, crew, and pinned polecats.\nIdempotent — running services are not touched.')) {
+            return;
+        }
+        var origText = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<span>⏳</span> Launching...';
+        showToast('info', 'Running...', 'gt up --restore');
+
+        fetch('/api/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command: 'up --restore', confirmed: true })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.success) {
+                showToast('success', 'Launched', 'Agents starting — reloading dashboard in 3s');
+                // Give sessions a moment to register before reloading so the
+                // refreshed page shows the new running state, not the
+                // pre-launch snapshot.
+                setTimeout(function() { window.location.reload(); }, 3000);
+            } else {
+                showToast('error', 'Failed', data.error || 'Unknown error');
+                btn.disabled = false;
+                btn.innerHTML = origText;
+            }
+        })
+        .catch(function(err) {
+            showToast('error', 'Error', err.message || 'Request failed');
+            btn.disabled = false;
+            btn.innerHTML = origText;
+        });
+    }
 
     // Keyboard handling
     document.addEventListener('keydown', function(e) {
@@ -3022,18 +3209,12 @@
         if (emptyState) emptyState.style.display = 'none';
 
         nameEl.textContent = sessionName;
-        contentEl.textContent = 'Loading...';
         statusEl.textContent = '';
         preview.style.display = 'block';
 
-        // Fetch immediately
-        fetchSessionPreview(sessionName, contentEl, statusEl);
-
-        // Auto-refresh every 3 seconds
-        if (sessionPreviewInterval) clearInterval(sessionPreviewInterval);
-        sessionPreviewInterval = setInterval(function() {
-            fetchSessionPreview(sessionName, contentEl, statusEl);
-        }, 3000);
+        // Skip the read-only snapshot and go straight to interactive tmux
+        // attach. The static preview <pre> stays hidden; xterm takes over.
+        openSessionAttach(sessionName);
     }
 
     function fetchSessionPreview(sessionName, contentEl, statusEl) {
@@ -3115,7 +3296,13 @@
             fontSize: 13,
             cursorBlink: true,
             convertEol: false,
-            allowProposedApi: true
+            allowProposedApi: true,
+            // Big scrollback so users can review long output. xterm's main
+            // buffer keeps lines that scroll off; alt-screen apps (tmux,
+            // claude UI) don't append here, so we also enable mouse mode on
+            // the tmux server so wheel events trigger tmux copy-mode scroll.
+            scrollback: 10000,
+            scrollOnUserInput: true
         });
         if (window.FitAddon && window.FitAddon.FitAddon) {
             attachFit = new window.FitAddon.FitAddon();

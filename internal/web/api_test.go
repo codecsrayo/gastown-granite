@@ -880,6 +880,49 @@ func TestAPIHandler_SSE_ContentType(t *testing.T) {
 	}
 }
 
+// TestParseAgentsFromStatus_IncludesRigAgents verifies that rig-scoped
+// agents are surfaced as "rig/agent" entries in the reassign dropdown.
+func TestParseAgentsFromStatus_IncludesRigAgents(t *testing.T) {
+	jsonStr := `{
+		"agents": [
+			{"name": "mayor", "running": true, "state": "running"},
+			{"name": "deacon", "running": false, "state": "stopped"}
+		],
+		"rigs": [
+			{
+				"name": "plane",
+				"agents": [
+					{"name": "witness", "running": true},
+					{"name": "refinery", "running": false},
+					{"name": "amber", "running": true, "state": "busy"}
+				]
+			}
+		]
+	}`
+
+	agents := parseAgentsFromStatus(jsonStr)
+	got := make(map[string]string, len(agents))
+	for _, a := range agents {
+		got[a.Name] = a.Status
+	}
+
+	want := map[string]string{
+		"mayor/":         "running",
+		"deacon/":        "stopped",
+		"plane/witness":  "running",
+		"plane/refinery": "stopped",
+		"plane/amber":    "busy",
+	}
+	for name, status := range want {
+		if got[name] != status {
+			t.Errorf("agent %q: status = %q, want %q", name, got[name], status)
+		}
+	}
+	if len(agents) != len(want) {
+		t.Errorf("agent count = %d, want %d (got %+v)", len(agents), len(want), agents)
+	}
+}
+
 // TestOptionsCacheConcurrentAccess verifies that concurrent cache reads and
 // writes don't race. The read lock is held through serialization so a
 // concurrent writer can't replace the cached pointer mid-encode.

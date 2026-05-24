@@ -10,7 +10,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
-    <link rel="stylesheet" href="/static/dashboard.css">
+    <link rel="stylesheet" href="/static/dashboard.css?v=4">
 </head>
 <body>
     <div class="dashboard" id="dashboard-main" hx-get="/" hx-trigger="sse:dashboard-update, every 30s [!window.pauseRefresh && !window.sseConnected]" hx-swap="morph:outerHTML" hx-ext="morph">
@@ -20,6 +20,9 @@
 | [/\ /\ |`._`.   | || \/ | 'V' || | ' | | \_| \/ | | ' | | | | v / \/ | |_  | \_| _|| | ' | | | | _|| v /
  \__/_||_||___/   |_| \__/!_/ \_!|_|\__|  \__/\__/|_|\__| |_| |_|_\\__/|___|  \__/___|_|\__| |_| |___|_|_\</pre>
             <div style="display: flex; align-items: center; gap: 12px;">
+                <button class="cmd-btn" id="launch-agents-btn" title="gt up --restore — start daemon, deacon, mayor, witnesses, refineries, crew, polecats">
+                    <span>🚀</span> Launch Agents
+                </button>
                 <button class="cmd-btn" id="open-palette-btn">
                     <span>⌘</span> Commands <kbd>⌘K</kbd>
                 </button>
@@ -298,7 +301,7 @@
             </div>
 
             <!-- Polecats Panel -->
-            <div class="panel">
+            <div class="panel" id="polecats-panel">
                 <div class="panel-header">
                     <h2>🦨 Polecats</h2>
                     <span class="count">{{len .Workers}}</span>
@@ -360,7 +363,7 @@
             </div>
 
             <!-- Sessions Panel -->
-            <div class="panel">
+            <div class="panel" id="sessions-panel">
                 <div class="panel-header">
                     <h2>📟 Sessions</h2>
                     <span class="count">{{len .Sessions}}</span>
@@ -665,7 +668,7 @@
             </div>
 
             <!-- Escalations Panel -->
-            <div class="panel">
+            <div class="panel" id="escalations-panel">
                 <div class="panel-header">
                     <h2>🚨 Escalations</h2>
                     <span class="count{{if .Escalations}} count-alert{{end}}">{{len .Escalations}}</span>
@@ -721,7 +724,7 @@
             <!-- Row 3: Rigs, Dogs, Health -->
 
             <!-- Rigs Panel -->
-            <div class="panel">
+            <div class="panel" id="rigs-panel">
                 <div class="panel-header">
                     <h2>🏗️ Rigs</h2>
                     <span class="count">{{len .Rigs}}</span>
@@ -762,7 +765,7 @@
             </div>
 
             <!-- Dogs Panel -->
-            <div class="panel">
+            <div class="panel" id="dogs-panel">
                 <div class="panel-header">
                     <h2>🐕 Dogs</h2>
                     <span class="count">{{len .Dogs}}</span>
@@ -804,7 +807,7 @@
 
             <!-- Queues Panel (optional, only show if there are queues) -->
             {{if .Queues}}
-            <div class="panel">
+            <div class="panel" id="queues-panel">
                 <div class="panel-header">
                     <h2>📋 Queues</h2>
                     <span class="count">{{len .Queues}}</span>
@@ -957,7 +960,7 @@
             </div>
 
             <!-- Hooks Panel -->
-            <div class="panel">
+            <div class="panel" id="hooks-panel">
                 <div class="panel-header">
                     <h2>🪝 Hooks</h2>
                     <span class="count{{if .Hooks}} {{end}}">{{len .Hooks}}</span>
@@ -1079,6 +1082,6 @@
         <div id="output-panel-content" class="output-panel-content"></div>
     </div>
 
-    <script src="/static/dashboard.js?v=4"></script>
+    <script src="/static/dashboard.js?v=8"></script>
 </body>
 </html>

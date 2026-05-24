@@ -1,11 +1,13 @@
 package web
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -16,8 +18,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/config"
+	"github.com/steveyegge/gastown/internal/events"
 	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/tmux"
 )
@@ -186,13 +190,24 @@ func (h *APIHandler) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine timeout
+	// Determine timeout. Most commands cap at h.maxRunTimeout, but a command
+	// may declare a higher MaxTimeoutSec for known long-running bring-up work.
+	timeoutCap := h.maxRunTimeout
+	if meta.MaxTimeoutSec > 0 {
+		if override := time.Duration(meta.MaxTimeoutSec) * time.Second; override > timeoutCap {
+			timeoutCap = override
+		}
+	}
 	timeout := h.defaultRunTimeout
 	if req.Timeout > 0 {
 		timeout = time.Duration(req.Timeout) * time.Second
-		if timeout > h.maxRunTimeout {
-			timeout = h.maxRunTimeout
-		}
+	} else if meta.MaxTimeoutSec > 0 {
+		// No client-supplied timeout: use the command's own cap so long
+		// bring-ups don't die at the default 30s.
+		timeout = timeoutCap
+	}
+	if timeout > timeoutCap {
+		timeout = timeoutCap
 	}
 
 	// Parse command into args
@@ -819,10 +834,11 @@ func (h *APIHandler) handleOptions(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Fetch agents - shorter timeout, skip if slow
+	// Fetch agents - use --fast to skip bead/MQ lookups (full status can take
+	// 100+ s in some workspaces; --fast returns in ~1-2s with the same agent list).
 	go func() {
 		defer wg.Done()
-		if output, err := h.runGtCommand(r.Context(), 5*time.Second, []string{"status", "--json"}); err == nil {
+		if output, err := h.runGtCommand(r.Context(), 5*time.Second, []string{"status", "--json", "--fast"}); err == nil {
 			mu.Lock()
 			resp.Agents = parseAgentsFromStatus(output)
 			mu.Unlock()
@@ -1050,21 +1066,27 @@ func parseCrewListOutput(output string) []string {
 }
 
 // parseAgentsFromStatus extracts agents with status from "gt status --json" output.
+// Includes both global agents (mayor, deacon) and rig-scoped agents
+// (witness, refinery, polecats) — rig agents are returned as "rig/agent".
 func parseAgentsFromStatus(jsonStr string) []OptionItem {
+	type agentEntry struct {
+		Name    string `json:"name"`
+		Running bool   `json:"running"`
+		State   string `json:"state"`
+	}
 	var status struct {
-		Agents []struct {
-			Name    string `json:"name"`
-			Running bool   `json:"running"`
-			State   string `json:"state"`
-		} `json:"agents"`
+		Agents []agentEntry `json:"agents"`
+		Rigs   []struct {
+			Name   string       `json:"name"`
+			Agents []agentEntry `json:"agents"`
+		} `json:"rigs"`
 	}
 
 	if err := json.Unmarshal([]byte(jsonStr), &status); err != nil {
 		return nil
 	}
 
-	var agents []OptionItem
-	for _, a := range status.Agents {
+	makeItem := func(a agentEntry, name string) OptionItem {
 		state := a.State
 		if state == "" {
 			if a.Running {
@@ -1073,11 +1095,19 @@ func parseAgentsFromStatus(jsonStr string) []OptionItem {
 				state = "stopped"
 			}
 		}
-		agents = append(agents, OptionItem{
-			Name:    a.Name,
-			Status:  state,
-			Running: a.Running,
-		})
+		return OptionItem{Name: name, Status: state, Running: a.Running}
+	}
+
+	var agents []OptionItem
+	// Global agents (mayor, deacon) use the "<name>/" address form to match
+	// how existing escalations record assignees.
+	for _, a := range status.Agents {
+		agents = append(agents, makeItem(a, a.Name+"/"))
+	}
+	for _, r := range status.Rigs {
+		for _, a := range r.Agents {
+			agents = append(agents, makeItem(a, r.Name+"/"+a.Name))
+		}
 	}
 	return agents
 }
@@ -2195,10 +2225,17 @@ func parseCommandArgs(command string) []string {
 	return args
 }
 
-// handleSSE streams Server-Sent Events to the dashboard client.
-// It polls key dashboard state every 2 seconds and sends an event when
-// changes are detected, allowing the client to trigger a re-render.
-// Falls through gracefully if the client disconnects.
+// handleSSE streams Server-Sent Events to the dashboard client by tailing
+// the events feed (.events.jsonl) with fsnotify. Each event line is parsed
+// and forwarded to the client as a typed SSE event so the dashboard can
+// trigger surgical panel refreshes instead of full re-renders.
+//
+// Compared to the previous polling implementation, this:
+//   - Avoids `gt status --json` subprocesses (which can take 100+ s inside
+//     containers and frequently time out).
+//   - Reflects state changes in <100 ms instead of up to 30 s.
+//   - Preserves event semantics so the client knows WHAT changed, not just
+//     that something changed.
 func (h *APIHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -2213,15 +2250,155 @@ func (h *APIHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Send initial connection event
 	fmt.Fprintf(w, "event: connected\ndata: ok\n\n")
 	flusher.Flush()
 
-	var lastHash string
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
+	// Resolve events file path. Fall back to a polled hash if not available
+	// (e.g. running outside a Gas Town workspace).
+	eventsPath := h.eventsFilePath()
+	if eventsPath == "" {
+		h.serveSSEFallback(ctx, w, flusher)
+		return
+	}
 
-	// Send keepalive comment every 15 seconds to prevent connection timeouts
+	h.serveSSEEvents(ctx, w, flusher, eventsPath)
+}
+
+// eventsFilePath returns the absolute path of the town's events feed file
+// (.events.jsonl) or empty string if it cannot be located.
+func (h *APIHandler) eventsFilePath() string {
+	if h.workDir == "" {
+		return ""
+	}
+	return filepath.Join(h.workDir, events.EventsFile)
+}
+
+// serveSSEEvents tails the events feed with fsnotify and forwards each new
+// line to the client. The connection is closed when the request context is
+// cancelled (client disconnect).
+func (h *APIHandler) serveSSEEvents(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, eventsPath string) {
+	// Best-effort: create the file so fsnotify has something to watch.
+	if _, err := os.Stat(eventsPath); os.IsNotExist(err) {
+		if f, createErr := os.OpenFile(eventsPath, os.O_CREATE|os.O_WRONLY, 0644); createErr == nil {
+			_ = f.Close()
+		}
+	}
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("SSE: fsnotify watcher: %v — falling back to polling", err)
+		h.serveSSEFallback(ctx, w, flusher)
+		return
+	}
+	defer watcher.Close()
+
+	if err := watcher.Add(eventsPath); err != nil {
+		log.Printf("SSE: watch %s: %v — falling back to polling", eventsPath, err)
+		h.serveSSEFallback(ctx, w, flusher)
+		return
+	}
+
+	f, err := os.Open(eventsPath) //nolint:gosec // G304: eventsPath built from workDir
+	if err != nil {
+		log.Printf("SSE: open %s: %v — falling back to polling", eventsPath, err)
+		h.serveSSEFallback(ctx, w, flusher)
+		return
+	}
+	defer f.Close()
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		log.Printf("SSE: seek end: %v", err)
+	}
+
+	keepalive := time.NewTicker(15 * time.Second)
+	defer keepalive.Stop()
+	reader := bufio.NewReader(f)
+	buf := &bytes.Buffer{}
+
+	// Throttle dashboard-update emissions so a burst of events doesn't
+	// trigger a server-side re-render every few milliseconds. Typed events
+	// pass through unthrottled — surgical clients can react to each one.
+	var lastDashboardUpdate time.Time
+	const dashboardUpdateMinGap = 800 * time.Millisecond
+
+	emitLine := func(line []byte) {
+		var parsed struct {
+			Type string `json:"type"`
+		}
+		_ = json.Unmarshal(line, &parsed)
+		evtType := parsed.Type
+		if evtType == "" {
+			evtType = "feed-event"
+		}
+		clean := bytes.ReplaceAll(line, []byte("\n"), []byte(" "))
+		// Typed event: emit every line so clients can react surgically.
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evtType, clean)
+		// Coalesced dashboard-update for the legacy full-page trigger.
+		if time.Since(lastDashboardUpdate) >= dashboardUpdateMinGap {
+			fmt.Fprintf(w, "event: dashboard-update\ndata: %s\n\n", evtType)
+			lastDashboardUpdate = time.Now()
+		}
+		flusher.Flush()
+	}
+
+	drainNewLines := func() {
+		for {
+			chunk, err := reader.ReadBytes('\n')
+			if len(chunk) > 0 {
+				buf.Write(chunk)
+				if chunk[len(chunk)-1] == '\n' {
+					line := bytes.TrimRight(buf.Bytes(), "\r\n")
+					if len(line) > 0 {
+						emitLine(line)
+					}
+					buf.Reset()
+				}
+			}
+			if err != nil {
+				// io.EOF or other read error — stop draining for this round.
+				return
+			}
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-keepalive.C:
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		case ev, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if ev.Op&fsnotify.Write == fsnotify.Write || ev.Op&fsnotify.Create == fsnotify.Create {
+				drainNewLines()
+			}
+			if ev.Op&fsnotify.Remove == fsnotify.Remove || ev.Op&fsnotify.Rename == fsnotify.Rename {
+				// File rotated/truncated. Re-open and continue.
+				_ = watcher.Add(eventsPath)
+				if nf, err := os.Open(eventsPath); err == nil { //nolint:gosec
+					f.Close()
+					f = nf
+					reader.Reset(f)
+				}
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Printf("SSE: watcher error: %v", err)
+		}
+	}
+}
+
+// serveSSEFallback runs the legacy polling path when fsnotify is unavailable
+// or no events file exists. Preserves behavior for environments where the
+// event-driven path can't run.
+func (h *APIHandler) serveSSEFallback(ctx context.Context, w http.ResponseWriter, flusher http.Flusher) {
+	var lastHash string
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 	keepalive := time.NewTicker(15 * time.Second)
 	defer keepalive.Stop()
 

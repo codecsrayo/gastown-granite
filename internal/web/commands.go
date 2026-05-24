@@ -20,6 +20,9 @@ type CommandMeta struct {
 	Args string
 	// ArgType specifies what kind of options to show (rigs, polecats, convoys, agents, hooks)
 	ArgType string
+	// MaxTimeoutSec, if > 0, overrides the default maxRunTimeout cap for this
+	// command. Used for long-running bring-up commands like `up --restore`.
+	MaxTimeoutSec int
 }
 
 // AllowedCommands defines which gt commands can be executed from the dashboard.
@@ -37,6 +40,11 @@ var AllowedCommands = map[string]CommandMeta{
 	"rig list":    {Safe: true, Desc: "List rigs", Category: "Rigs"},
 	"rig show":    {Safe: true, Desc: "Show rig details", Category: "Rigs", Args: "<rig-name>", ArgType: "rigs"},
 	"doctor":      {Safe: true, Desc: "Health check", Category: "Diagnostics"},
+
+	// Account / quota status (read-only)
+	"account list":   {Safe: true, Desc: "List registered Claude accounts", Category: "Accounts"},
+	"account status": {Safe: true, Desc: "Show current account + active session", Category: "Accounts"},
+	"quota status":   {Safe: true, Desc: "Show account quota / rate-limit status", Category: "Accounts"},
 	"hooks list":  {Safe: true, Desc: "List hooks", Category: "Hooks"},
 	"activity":    {Safe: true, Desc: "Show recent activity", Category: "Status"},
 	"info":        {Safe: true, Desc: "Show workspace info", Category: "Status"},
@@ -75,6 +83,8 @@ var AllowedCommands = map[string]CommandMeta{
 	"rig start": {Confirm: true, Desc: "Start rig", Category: "Rigs", Args: "<rig-name>", ArgType: "rigs"},
 
 	// Agent lifecycle (careful)
+	"up":             {Confirm: true, Desc: "Bring up all services", Category: "Agents", MaxTimeoutSec: 300},
+	"up --restore":   {Confirm: true, Desc: "Bring up all services + crew + polecats", Category: "Agents", MaxTimeoutSec: 600},
 	"witness start":  {Confirm: true, Desc: "Start witness", Category: "Agents", Args: "<rig-name>", ArgType: "rigs"},
 	"refinery start": {Confirm: true, Desc: "Start refinery", Category: "Agents", Args: "<rig-name>", ArgType: "rigs"},
 	"mayor attach":   {Confirm: true, Desc: "Attach mayor", Category: "Agents"},

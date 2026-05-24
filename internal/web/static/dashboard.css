@@ -3494,11 +3494,37 @@
 
         .toast.success { border-left: 3px solid var(--green); }
         .toast.error { border-left: 3px solid var(--red); }
+        .toast.warning { border-left: 3px solid var(--orange, #d18616); }
+        .toast.toast-persistent { max-width: 480px; }
 
         .toast-icon { font-size: 1.1rem; }
-        .toast-content { flex: 1; }
+        .toast-content { flex: 1; min-width: 0; }
         .toast-title { font-weight: 500; color: var(--text-primary); }
         .toast-message { font-size: 0.85rem; color: var(--text-muted); margin-top: 2px; }
+        .toast-action-value {
+            margin-top: 6px;
+            font-family: var(--font-mono, monospace);
+            font-size: 0.78rem;
+            color: var(--text-primary);
+            background: var(--bg-secondary, rgba(0,0,0,0.2));
+            padding: 4px 6px;
+            border-radius: 4px;
+            word-break: break-all;
+            user-select: all;
+        }
+        .toast-action-btn {
+            align-self: flex-start;
+            background: var(--accent, #2563eb);
+            color: #fff;
+            border: none;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .toast-action-btn.copied { background: var(--green, #16a34a); }
+        .toast-action-btn:hover { filter: brightness(1.1); }
         .toast-close {
             background: none;
             border: none;
@@ -3707,6 +3733,43 @@
         #session-preview-terminal .xterm-viewport,
         #session-preview-terminal .xterm-screen {
             height: 100% !important;
+        }
+
+        /* Expanded panel: stretch session preview/terminal to fill viewport.
+           Use viewport units directly — the parent panel-body has its own
+           overflow:auto BFC which breaks flex-fill from outside. */
+        .panel.expanded .panel-body {
+            max-height: calc(100vh - 50px);
+            height: calc(100vh - 50px);
+            padding: 8px;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+        .panel.expanded #session-preview {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            margin: 0;
+        }
+        .panel.expanded .session-preview-header {
+            flex: 0 0 auto;
+        }
+        .panel.expanded .session-preview-content {
+            flex: 1 1 0;
+            max-height: none;
+            min-height: 0;
+            overflow: auto;
+        }
+        .panel.expanded #session-preview-terminal {
+            flex: 1 1 0;
+            height: auto !important;
+            min-height: 0;
+        }
+        .panel.expanded #session-preview-terminal .xterm,
+        .panel.expanded #session-preview-terminal .xterm-viewport,
+        .panel.expanded #session-preview-terminal .xterm-screen {
+            height: 100% !important;
+            width: 100% !important;
         }
 
         @keyframes slideIn {

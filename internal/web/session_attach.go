@@ -73,9 +73,10 @@ func (h *APIHandler) handleSessionAttach(w http.ResponseWriter, r *http.Request)
 	if sock := tmux.GetDefaultSocket(); sock != "" {
 		args = append(args, "-L", sock)
 	}
-	// `-u` forces UTF-8. `attach -t` joins the existing session shared with
-	// other clients; closing the WebSocket only detaches this client.
-	args = append(args, "-u", "attach", "-t", sessionName)
+	// `-u` forces UTF-8. `attach -d` detaches any other clients so tmux
+	// honors this client's window size (otherwise it picks MIN across all
+	// attached clients, leaving the browser pane stuck at 80x24).
+	args = append(args, "-u", "attach", "-d", "-t", sessionName)
 
 	cmd := exec.Command("tmux", args...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
