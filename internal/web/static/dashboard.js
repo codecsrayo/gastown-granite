@@ -3458,6 +3458,12 @@
             alert('xterm.js failed to load; terminal unavailable');
             return;
         }
+        // Tear down any prior attach BEFORE swapping targets — otherwise
+        // closeSessionAttachInner would read the new attachTargets and hide
+        // the wrap we're about to mount into, leaving xterm in a 0×0
+        // hidden node.
+        closeSessionAttachInner();
+
         // Update module-scope targets so child fns (connectAttachWs,
         // closeSessionAttachInner) bind to the right DOM nodes. Default to
         // the session-preview pane for back-compat with session-row clicks.
@@ -3470,8 +3476,6 @@
         var termEl = document.getElementById(attachTargets.termId);
         if (!termEl || !wrapEl) return;
         wrapEl.style.display = 'flex';
-
-        closeSessionAttachInner(); // drop any prior session
 
         attachSessionName = sessionName;
         attachUserClosed = false;
