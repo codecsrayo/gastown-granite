@@ -45,6 +45,14 @@ var AllowedCommands = map[string]CommandMeta{
 	"account list":   {Safe: true, Desc: "List registered Claude accounts", Category: "Accounts"},
 	"account status": {Safe: true, Desc: "Show current account + active session", Category: "Accounts"},
 	"quota status":   {Safe: true, Desc: "Show account quota / rate-limit status", Category: "Accounts"},
+
+	// Account actions — surfaced so the dashboard "needs relogin" CTA has a
+	// reachable command in the palette. `account login` execs the interactive
+	// Claude OAuth flow and needs a TTY; running it through /api/run will
+	// fail non-interactively, but discoverability matters more than the
+	// gotcha (the user can copy the command and run it in their shell).
+	"account login":  {Confirm: true, Desc: "Re-authenticate an account (refresh expired token)", Category: "Accounts", Args: "<handle>"},
+	"account switch": {Confirm: true, Desc: "Switch the active account", Category: "Accounts", Args: "<handle>"},
 	"hooks list":  {Safe: true, Desc: "List hooks", Category: "Hooks"},
 	"activity":    {Safe: true, Desc: "Show recent activity", Category: "Status"},
 	"info":        {Safe: true, Desc: "Show workspace info", Category: "Status"},
