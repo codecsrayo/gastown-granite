@@ -3560,11 +3560,39 @@
             z-index: 9000;
             display: none;
             flex-direction: column;
-            max-height: 50vh;
+            /* Default opens at ~40% viewport so the panel has real space
+             * without dominating the dashboard. JS may override via the
+             * drag handle (persisted to localStorage). */
+            height: 40vh;
+            min-height: 220px;
+            max-height: 90vh;
         }
 
         .output-panel.open {
             display: flex;
+        }
+
+        .output-panel-resize {
+            height: 8px;
+            background: var(--border);
+            cursor: ns-resize;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+            color: var(--text-muted);
+            font-size: 0.7rem;
+            line-height: 1;
+            flex-shrink: 0;
+            transition: background 0.15s;
+        }
+        .output-panel-resize:hover,
+        .output-panel-resize.dragging {
+            background: var(--blue);
+            color: #fff;
+        }
+        .output-panel-resize-grip {
+            letter-spacing: 2px;
         }
 
         .output-panel-header {

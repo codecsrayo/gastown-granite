@@ -432,6 +432,52 @@
         });
     };
 
+    // Drag-to-resize on the top edge of the output panel. Persists the chosen
+    // height in localStorage so the layout survives page refresh. When a live
+    // terminal is mounted, fits the xterm on every move so the PTY tracks the
+    // new viewport size in real time.
+    (function() {
+        var handle = document.getElementById('output-panel-resize');
+        if (!handle) return;
+        var STORAGE_KEY = 'gastown.outputpanel.height';
+        var MIN_PX = 220;
+        function maxPx() { return Math.max(MIN_PX, window.innerHeight - 80); }
+        function applyHeight(px) {
+            px = Math.max(MIN_PX, Math.min(maxPx(), px));
+            outputPanel.style.height = px + 'px';
+            try { localStorage.setItem(STORAGE_KEY, String(px)); } catch (e) {}
+            // Refit any live attach so xterm + PTY agree on cols/rows.
+            if (attachFit) {
+                try { attachFit.fit(); } catch (e) {}
+            }
+            if (typeof sendAttachResize === 'function') sendAttachResize();
+        }
+        var saved = NaN;
+        try { saved = parseInt(localStorage.getItem(STORAGE_KEY), 10); } catch (e) {}
+        if (!isNaN(saved)) applyHeight(saved);
+
+        var dragging = false, startY = 0, startHeight = 0;
+        handle.addEventListener('mousedown', function(e) {
+            dragging = true;
+            startY = e.clientY;
+            startHeight = outputPanel.getBoundingClientRect().height;
+            document.body.style.userSelect = 'none';
+            handle.classList.add('dragging');
+            e.preventDefault();
+        });
+        window.addEventListener('mousemove', function(e) {
+            if (!dragging) return;
+            // Panel grows upward, so mouse moving up = larger height.
+            applyHeight(startHeight + (startY - e.clientY));
+        });
+        window.addEventListener('mouseup', function() {
+            if (!dragging) return;
+            dragging = false;
+            document.body.style.userSelect = '';
+            handle.classList.remove('dragging');
+        });
+    })();
+
     // Load commands once
     fetch('/api/commands')
         .then(function(r) { return r.json(); })
