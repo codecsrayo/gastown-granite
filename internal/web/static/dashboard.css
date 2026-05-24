@@ -3860,3 +3860,230 @@
         .sling-dropdown-item + .sling-dropdown-item {
             border-top: 1px solid var(--border);
         }
+
+        /* ------------------------------------------------------------------
+         * Quota stat bar + drawer (Mosaic grid)
+         * Surfaces /api/quota/summary as a collapsed counter in the summary
+         * banner; click expands a drawer with one card per account showing
+         * status, token expiry, rotation count, active sessions, and live
+         * token usage. Hydrated by dashboard.js; re-fetched on quota_* SSE
+         * events and after htmx swaps.
+         * ----------------------------------------------------------------*/
+        .stat.clickable {
+            cursor: pointer;
+            user-select: none;
+            transition: opacity 0.15s ease;
+        }
+        .stat.clickable:hover { opacity: 0.85; }
+        .stat.clickable:focus-visible {
+            outline: 2px solid var(--blue);
+            outline-offset: 2px;
+            border-radius: 4px;
+        }
+
+        .stat-quota .stat-value {
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 0.5px;
+        }
+        .stat-quota .qv-avail { color: var(--green); }
+        .stat-quota .qv-lim   { color: var(--orange); }
+        .stat-quota .qv-exp   { color: var(--red); }
+        .stat-quota .qv-cool  { color: var(--yellow); }
+        .stat-quota .qv-sep   { color: var(--text-muted); padding: 0 4px; }
+
+        .quota-drawer {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin-bottom: 16px;
+        }
+        .quota-drawer[hidden] { display: none; }
+
+        .quota-drawer-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        .quota-drawer-header h2 {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin: 0;
+        }
+        .quota-drawer-meta {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            flex: 1;
+        }
+        .quota-drawer-close {
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 0.85rem;
+            padding: 2px 8px;
+            line-height: 1;
+        }
+        .quota-drawer-close:hover {
+            background: var(--bg-card-hover);
+            color: var(--text-primary);
+        }
+
+        .quota-mosaic {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 12px;
+        }
+
+        .quota-card {
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--border-accent);
+            border-radius: 6px;
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 0;
+        }
+        .quota-card.status-available { border-left-color: var(--green); }
+        .quota-card.status-limited   { border-left-color: var(--orange); }
+        .quota-card.status-cooldown  { border-left-color: var(--yellow); }
+        .quota-card.status-expired   { border-left-color: var(--red); }
+
+        .quota-card-head {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+        }
+        .quota-card-handle {
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: var(--text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .quota-card-handle .default-marker {
+            color: var(--yellow);
+            margin-right: 2px;
+        }
+        .quota-card-status {
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 1px 8px;
+            border-radius: 10px;
+            margin-left: auto;
+            text-transform: lowercase;
+        }
+        .quota-card-status.s-available { background: rgba(194, 217, 76, 0.18); color: var(--green); }
+        .quota-card-status.s-limited   { background: rgba(255, 143, 64, 0.18); color: var(--orange); }
+        .quota-card-status.s-cooldown  { background: rgba(255, 180, 84, 0.18); color: var(--yellow); }
+        .quota-card-status.s-expired   { background: rgba(240, 113, 120, 0.20); color: var(--red); }
+
+        .quota-card-email {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .quota-card-meta {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 2px 8px;
+            font-size: 0.72rem;
+        }
+        .quota-card-meta dt {
+            color: var(--text-muted);
+        }
+        .quota-card-meta dd {
+            color: var(--text-primary);
+            font-variant-numeric: tabular-nums;
+            margin: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .quota-card-meta dd.warn { color: var(--orange); }
+        .quota-card-meta dd.bad  { color: var(--red); }
+
+        .quota-card-sessions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+        .quota-card-session {
+            font-size: 0.65rem;
+            background: var(--bg-card-hover);
+            color: var(--text-secondary);
+            border-radius: 3px;
+            padding: 1px 6px;
+            font-family: inherit;
+        }
+        .quota-card-session.rate-limited { color: var(--red); }
+
+        .quota-card-usage {
+            margin-top: 2px;
+        }
+        .quota-card-usage-bar {
+            height: 4px;
+            border-radius: 2px;
+            background: var(--border);
+            overflow: hidden;
+        }
+        .quota-card-usage-fill {
+            height: 100%;
+            background: var(--blue);
+            transition: width 0.3s ease;
+        }
+        .quota-card-usage-fill.near { background: var(--yellow); }
+        .quota-card-usage-fill.over { background: var(--red); }
+        .quota-card-usage-label {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            margin-top: 2px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .quota-waiting,
+        .quota-plan {
+            margin-top: 12px;
+            border-top: 1px dashed var(--border);
+            padding-top: 8px;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+        .quota-waiting[hidden],
+        .quota-plan[hidden] { display: none; }
+        .quota-waiting h3,
+        .quota-plan h3 {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+            font-weight: 600;
+        }
+        .quota-waiting ul,
+        .quota-plan ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .quota-waiting li,
+        .quota-plan li {
+            background: var(--bg-card-hover);
+            border-radius: 3px;
+            padding: 2px 6px;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }

@@ -82,11 +82,31 @@
             polecat_checked:        ['#polecats-panel'],
             polecat_nudged:         ['#polecats-panel', '#activity-panel'],
             mass_death:             ['#polecats-panel', '#escalations-panel'],
+            // Account quota rotation — hydrated by loadQuotaSummary, not by
+            // re-fetching the full dashboard page. refreshPanel special-cases
+            // '#quota-drawer' to call window.refreshQuotaDrawer instead of
+            // htmx.ajax so the JSON-driven mosaic isn't blown away.
+            quota_scanned:          ['#quota-drawer'],
+            quota_rotated:          ['#quota-drawer'],
+            quota_swap_failed:      ['#quota-drawer'],
+            quota_limited:          ['#quota-drawer'],
+            quota_near_limit:       ['#quota-drawer'],
+            quota_cleared:          ['#quota-drawer'],
+            quota_token_expired:    ['#quota-drawer'],
+            quota_blocked:          ['#quota-drawer'],
+            quota_assigned:         ['#quota-drawer'],
         };
 
         function refreshPanel(selector) {
             var el = document.querySelector(selector);
             if (!el || typeof htmx === 'undefined' || window.pauseRefresh) return;
+            // Quota drawer is JSON-hydrated — defer to the dedicated loader so
+            // the page-fetch swap doesn't replace the mosaic with the empty
+            // server-side placeholder.
+            if (selector === '#quota-drawer') {
+                if (window.refreshQuotaDrawer) window.refreshQuotaDrawer();
+                return;
+            }
             // Re-fetch the full page but only swap in this panel's outerHTML.
             htmx.ajax('GET', '/', {
                 target: selector,
@@ -237,6 +257,8 @@
         // Reload dynamic panels after swap (handled via window functions)
         if (window.refreshCrewPanel) window.refreshCrewPanel();
         if (window.refreshReadyPanel) window.refreshReadyPanel();
+        if (window.refreshQuotaDrawer) window.refreshQuotaDrawer();
+        if (window.restoreQuotaDrawerState) window.restoreQuotaDrawerState();
         // Update connection status indicator after morph
         updateConnectionStatus(window.sseConnected ? 'live' : 'reconnecting');
     });
@@ -3680,5 +3702,297 @@
         html += '</div>';
         cell.innerHTML = html;
     }
+
+    // ==========================================================================
+    // QUOTA DRAWER (Mosaic grid)
+    //
+    // Hydrated from /api/quota/summary (same shape as `gt quota status --json`).
+    // The collapsed `🎫 Quota` stat in the summary banner shows live counters
+    // (available | limited | expired); clicking it toggles the drawer with a
+    // mosaic of per-account cards: status, token expiry, rotation count,
+    // active sessions, and live token usage. Refreshed on quota_* SSE events
+    // and after every htmx swap (the morph re-renders the empty placeholder).
+    // Open/closed state persists across refreshes via localStorage so the
+    // drawer doesn't snap closed under the 30s polling refresh.
+    // ==========================================================================
+    var QUOTA_DRAWER_STATE_KEY = 'gastown.quota.drawer';
+
+    function quotaDrawerIsOpen() {
+        try { return localStorage.getItem(QUOTA_DRAWER_STATE_KEY) === 'open'; }
+        catch (e) { return false; }
+    }
+    function setQuotaDrawerState(open) {
+        try { localStorage.setItem(QUOTA_DRAWER_STATE_KEY, open ? 'open' : 'closed'); }
+        catch (e) { /* private mode — accept ephemeral state */ }
+    }
+
+    function applyQuotaDrawerVisibility() {
+        var drawer = document.getElementById('quota-drawer');
+        var trigger = document.getElementById('quota-stat-trigger');
+        if (!drawer) return;
+        var open = quotaDrawerIsOpen();
+        if (open) {
+            drawer.removeAttribute('hidden');
+        } else {
+            drawer.setAttribute('hidden', '');
+        }
+        if (trigger) trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    function toggleQuotaDrawer() {
+        setQuotaDrawerState(!quotaDrawerIsOpen());
+        applyQuotaDrawerVisibility();
+        // Refresh on open so the user sees current data immediately.
+        if (quotaDrawerIsOpen()) loadQuotaSummary();
+    }
+
+    function fmtRelative(rfc3339) {
+        if (!rfc3339) return '';
+        var t = Date.parse(rfc3339);
+        if (isNaN(t)) return rfc3339;
+        var delta = (t - Date.now()) / 1000;
+        var abs = Math.abs(delta);
+        var sign = delta >= 0 ? 'in ' : '';
+        var suffix = delta >= 0 ? '' : ' ago';
+        var unit;
+        if (abs < 60) { unit = Math.round(abs) + 's'; }
+        else if (abs < 3600) { unit = Math.round(abs / 60) + 'm'; }
+        else if (abs < 86400) { unit = Math.round(abs / 3600) + 'h'; }
+        else { unit = Math.round(abs / 86400) + 'd'; }
+        return sign + unit + suffix;
+    }
+
+    function fmtTokens(n) {
+        if (!n || n <= 0) return '0';
+        if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+        if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+        if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+        return String(n);
+    }
+
+    function escapeHTML(s) {
+        if (s == null) return '';
+        return String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    // Soft usage ceiling for the per-account bar. Anthropic doesn't expose a
+    // remaining-tokens API, so we treat this as a visual hint, not a quota.
+    // Bumped via testing; tweak if your account class differs.
+    var QUOTA_USAGE_SOFT_CEILING = 8000000;
+
+    function renderQuotaStatbar(counters) {
+        var el = document.getElementById('quota-stat-summary');
+        if (!el) return;
+        var c = counters || {};
+        var parts = [];
+        parts.push('<span class="qv-avail">' + (c.available || 0) + '●</span>');
+        if (c.limited)  { parts.push('<span class="qv-sep">|</span><span class="qv-lim">' + c.limited + '⚠</span>'); }
+        if (c.expired)  { parts.push('<span class="qv-sep">|</span><span class="qv-exp">' + c.expired + '✕</span>'); }
+        if (c.cooldown) { parts.push('<span class="qv-sep">|</span><span class="qv-cool">' + c.cooldown + '⏳</span>'); }
+        el.innerHTML = parts.join('');
+    }
+
+    function renderQuotaCard(a, limitedSessions) {
+        var statusKey = a.status || 'available';
+        var classes = 'quota-card status-' + statusKey;
+        var html = '<article class="' + classes + '">';
+        html += '<div class="quota-card-head">';
+        html += '<span class="quota-card-handle">';
+        if (a.is_default) html += '<span class="default-marker" title="Default account">★</span>';
+        html += escapeHTML(a.handle);
+        html += '</span>';
+        html += '<span class="quota-card-status s-' + statusKey + '">' + escapeHTML(statusKey) + '</span>';
+        html += '</div>';
+
+        if (a.email) {
+            html += '<div class="quota-card-email">' + escapeHTML(a.email) + '</div>';
+        }
+
+        html += '<dl class="quota-card-meta">';
+        if (a.token_expires_at) {
+            var exp = Date.parse(a.token_expires_at);
+            var cls = '';
+            if (!isNaN(exp)) {
+                if (exp < Date.now()) cls = 'bad';
+                else if (exp - Date.now() < 24 * 3600 * 1000) cls = 'warn';
+            }
+            html += '<dt>token</dt><dd class="' + cls + '">' + escapeHTML(fmtRelative(a.token_expires_at)) + '</dd>';
+        }
+        if (a.resets_at) {
+            html += '<dt>resets</dt><dd class="warn">' + escapeHTML(a.resets_at) + '</dd>';
+        }
+        if (a.rotation_count) {
+            var lr = a.last_rotated_at ? ' · ' + fmtRelative(a.last_rotated_at) : '';
+            html += '<dt>rotated</dt><dd>' + a.rotation_count + '×' + escapeHTML(lr) + '</dd>';
+        }
+        if (a.last_used && !a.rotation_count) {
+            html += '<dt>last use</dt><dd>' + escapeHTML(fmtRelative(a.last_used)) + '</dd>';
+        }
+        html += '</dl>';
+
+        if (a.active_sessions && a.active_sessions.length) {
+            html += '<div class="quota-card-sessions">';
+            for (var i = 0; i < a.active_sessions.length; i++) {
+                var sess = a.active_sessions[i];
+                var sessInfo = limitedSessions && limitedSessions[sess];
+                var sessCls = sessInfo && sessInfo.rate_limited ? 'quota-card-session rate-limited' : 'quota-card-session';
+                html += '<span class="' + sessCls + '" title="' + escapeHTML(sess) + '">' + escapeHTML(sess) + '</span>';
+            }
+            html += '</div>';
+        }
+
+        if (a.usage && a.usage.counts) {
+            var total = (a.usage.counts.input_tokens || 0) +
+                        (a.usage.counts.output_tokens || 0) +
+                        (a.usage.counts.cache_read_tokens || 0) +
+                        (a.usage.counts.cache_creation_tokens || 0);
+            var pct = Math.min(100, Math.round((total / QUOTA_USAGE_SOFT_CEILING) * 100));
+            var fillCls = 'quota-card-usage-fill';
+            if (pct >= 90) fillCls += ' over';
+            else if (pct >= 70) fillCls += ' near';
+            html += '<div class="quota-card-usage">';
+            html += '<div class="quota-card-usage-bar"><div class="' + fillCls + '" style="width:' + pct + '%"></div></div>';
+            html += '<div class="quota-card-usage-label">';
+            html += '<span>' + fmtTokens(total) + ' tok</span>';
+            html += '<span>' + pct + '%</span>';
+            html += '</div>';
+            html += '</div>';
+        }
+
+        html += '</article>';
+        return html;
+    }
+
+    function renderQuotaMosaic(resp) {
+        var mosaic = document.getElementById('quota-mosaic');
+        if (!mosaic) return;
+        var accounts = resp.accounts || [];
+        if (accounts.length === 0) {
+            mosaic.innerHTML = '<div class="quota-card-empty" style="color:var(--text-muted);font-size:0.8rem;padding:8px">No accounts registered. Run <code>gt account add &lt;handle&gt;</code>.</div>';
+            return;
+        }
+        var html = '';
+        for (var i = 0; i < accounts.length; i++) {
+            html += renderQuotaCard(accounts[i], resp.limited_sessions);
+        }
+        mosaic.innerHTML = html;
+
+        var meta = document.getElementById('quota-drawer-meta');
+        if (meta) {
+            var when = resp.generated_at ? fmtRelative(resp.generated_at) : '';
+            meta.textContent = when ? 'snapshot ' + when : '';
+        }
+
+        renderQuotaWaiting(resp.limited_sessions);
+        renderQuotaPlan(resp.last_plan);
+    }
+
+    function renderQuotaWaiting(limitedSessions) {
+        var el = document.getElementById('quota-waiting');
+        if (!el) return;
+        var sessions = [];
+        if (limitedSessions) {
+            for (var sess in limitedSessions) {
+                if (Object.prototype.hasOwnProperty.call(limitedSessions, sess)) {
+                    sessions.push({ id: sess, info: limitedSessions[sess] });
+                }
+            }
+        }
+        if (sessions.length === 0) {
+            el.setAttribute('hidden', '');
+            el.innerHTML = '';
+            return;
+        }
+        sessions.sort(function(a, b) { return a.id.localeCompare(b.id); });
+        var html = '<h3>Waiting on unlock</h3><ul>';
+        for (var i = 0; i < sessions.length; i++) {
+            var s = sessions[i];
+            var reset = s.info.resets_at ? ' (resets ' + escapeHTML(s.info.resets_at) + ')' : '';
+            var acct = s.info.account ? ' → ' + escapeHTML(s.info.account) : '';
+            html += '<li>' + escapeHTML(s.id) + acct + reset + '</li>';
+        }
+        html += '</ul>';
+        el.innerHTML = html;
+        el.removeAttribute('hidden');
+    }
+
+    function renderQuotaPlan(plan) {
+        var el = document.getElementById('quota-plan');
+        if (!el) return;
+        if (!plan || !plan.assignments || Object.keys(plan.assignments).length === 0) {
+            el.setAttribute('hidden', '');
+            el.innerHTML = '';
+            return;
+        }
+        var when = plan.timestamp ? fmtRelative(plan.timestamp) : '';
+        var html = '<h3>Last rotation plan' + (when ? ' · ' + escapeHTML(when) : '') + '</h3><ul>';
+        var keys = Object.keys(plan.assignments).sort();
+        for (var i = 0; i < keys.length; i++) {
+            html += '<li>' + escapeHTML(keys[i]) + ' → ' + escapeHTML(plan.assignments[keys[i]]) + '</li>';
+        }
+        html += '</ul>';
+        el.innerHTML = html;
+        el.removeAttribute('hidden');
+    }
+
+    var quotaLoadInflight = false;
+    function loadQuotaSummary() {
+        if (quotaLoadInflight) return;
+        quotaLoadInflight = true;
+        fetch('/api/quota/summary', { headers: { 'Accept': 'application/json' } })
+            .then(function(r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function(resp) {
+                renderQuotaStatbar(resp.counters);
+                renderQuotaMosaic(resp);
+            })
+            .catch(function(err) {
+                console.warn('quota summary load failed:', err);
+                var el = document.getElementById('quota-stat-summary');
+                if (el) el.textContent = '?';
+            })
+            .then(function() { quotaLoadInflight = false; });
+    }
+
+    function bindQuotaDrawerToggle() {
+        var trigger = document.getElementById('quota-stat-trigger');
+        if (trigger && !trigger._quotaBound) {
+            trigger.addEventListener('click', toggleQuotaDrawer);
+            trigger.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    toggleQuotaDrawer();
+                }
+            });
+            trigger._quotaBound = true;
+        }
+        var close = document.getElementById('quota-drawer-close');
+        if (close && !close._quotaBound) {
+            close.addEventListener('click', function() {
+                setQuotaDrawerState(false);
+                applyQuotaDrawerVisibility();
+            });
+            close._quotaBound = true;
+        }
+    }
+
+    // Export for the post-swap reload pipeline above.
+    window.refreshQuotaDrawer = loadQuotaSummary;
+    window.restoreQuotaDrawerState = function() {
+        applyQuotaDrawerVisibility();
+        bindQuotaDrawerToggle();
+    };
+
+    // Initial wire-up: bind controls, restore prior state, fetch first snapshot.
+    bindQuotaDrawerToggle();
+    applyQuotaDrawerVisibility();
+    loadQuotaSummary();
 
 })();

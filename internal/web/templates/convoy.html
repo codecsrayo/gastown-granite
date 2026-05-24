@@ -11,7 +11,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
-    <link rel="stylesheet" href="/static/dashboard.css?v=6">
+    <link rel="stylesheet" href="/static/dashboard.css?v=7">
 </head>
 <body>
     <div class="dashboard" id="dashboard-main" hx-get="/" hx-trigger="sse:dashboard-update, every 30s [!window.pauseRefresh && !window.sseConnected]" hx-swap="morph:outerHTML" hx-ext="morph">
@@ -95,6 +95,13 @@
                     <span class="stat-value">{{.Summary.EscalationCount}}</span>
                     <span class="stat-label">⚠️ Escalations</span>
                 </div>
+                <div class="stat stat-quota clickable" id="quota-stat-trigger"
+                     role="button" tabindex="0"
+                     aria-controls="quota-drawer" aria-expanded="false"
+                     title="Toggle Quota drawer">
+                    <span class="stat-value" id="quota-stat-summary">·</span>
+                    <span class="stat-label">🎫 Quota</span>
+                </div>
             </div>
             {{if .Summary.HasAlerts}}
             <div class="summary-alerts">
@@ -121,6 +128,21 @@
             {{end}}
         </div>
         {{end}}
+
+        <!-- Quota drawer (Mosaic grid) — hydrated by dashboard.js via /api/quota/summary -->
+        <aside id="quota-drawer" class="quota-drawer" hidden aria-labelledby="quota-drawer-title">
+            <header class="quota-drawer-header">
+                <h2 id="quota-drawer-title">🎫 Account Quota</h2>
+                <span class="quota-drawer-meta" id="quota-drawer-meta"></span>
+                <button class="quota-drawer-close" id="quota-drawer-close"
+                        type="button" aria-label="Close Quota drawer">✕</button>
+            </header>
+            <div class="quota-drawer-body">
+                <div class="quota-mosaic" id="quota-mosaic"></div>
+                <div class="quota-waiting" id="quota-waiting" hidden></div>
+                <div class="quota-plan" id="quota-plan" hidden></div>
+            </div>
+        </aside>
 
         <div class="panels">
             <!-- Row 1: Convoys, Polecats, Sessions -->
@@ -1090,6 +1112,6 @@
         <div id="output-panel-content" class="output-panel-content"></div>
     </div>
 
-    <script src="/static/dashboard.js?v=11"></script>
+    <script src="/static/dashboard.js?v=12"></script>
 </body>
 </html>
