@@ -44,6 +44,11 @@ type CommandResponse struct {
 	Error      string `json:"error,omitempty"`
 	DurationMs int64  `json:"duration_ms"`
 	Command    string `json:"command"`
+	// ConsoleSession is set when the command was dispatched into a fresh
+	// tmux session (Interactive: true commands). The dashboard opens the
+	// xterm.js attach panel pointed at this session so the user can drive
+	// the interactive flow (e.g., Claude's /login OAuth REPL).
+	ConsoleSession string `json:"console_session,omitempty"`
 }
 
 // CommandListResponse is the JSON response from /api/commands.
@@ -222,6 +227,30 @@ func (h *APIHandler) handleRun(w http.ResponseWriter, r *http.Request) {
 	// Sanitize args
 	args = SanitizeArgs(args)
 
+	// Interactive commands need a real TTY (Claude OAuth REPL, etc.). Spawn
+	// a fresh tmux session and let the dashboard attach to it via the
+	// existing session_attach WebSocket — the command never touches the
+	// HTTP request's headless stdout.
+	if meta.Interactive {
+		start := time.Now()
+		sessionName, spawnErr := h.spawnConsoleSession(args)
+		resp := CommandResponse{
+			Command:    req.Command,
+			DurationMs: time.Since(start).Milliseconds(),
+		}
+		if spawnErr != nil {
+			resp.Success = false
+			resp.Error = spawnErr.Error()
+		} else {
+			resp.Success = true
+			resp.ConsoleSession = sessionName
+			resp.Output = "Opened console: " + sessionName
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+		return
+	}
+
 	// Execute command
 	start := time.Now()
 	output, err := h.runGtCommand(r.Context(), timeout, args)
@@ -305,6 +334,47 @@ func (h *APIHandler) runGtCommand(ctx context.Context, timeout time.Duration, ar
 	}
 
 	return output, nil
+}
+
+// spawnConsoleSession creates a detached tmux session that runs the gt
+// command and keeps the pane open afterwards so the user can read the exit
+// banner. Returns the tmux session name, which the dashboard hands off to
+// the existing session_attach WebSocket. The name starts with "gt-" so it
+// passes session.HasKnownPrefix in handleSessionAttach.
+func (h *APIHandler) spawnConsoleSession(args []string) (string, error) {
+	gtPath := h.gtPath
+	if gtPath == "" {
+		gtPath = "gt"
+	}
+
+	// Args were already SanitizeArgs'd to safe characters. They're
+	// space-joined into a single shell command for tmux to execute via the
+	// default shell. The trailing wrapper preserves the exit code, prints
+	// it, and blocks on a key-press so the user can read the output before
+	// tmux reaps the pane.
+	gtCmd := gtPath
+	for _, a := range args {
+		gtCmd += " " + a
+	}
+	wrapper := gtCmd + `; status=$?; printf '\n[exited %d — press any key to close]\n' "$status"; ` +
+		`(read -n1 -s -r 2>/dev/null || sleep 60)`
+
+	sessionName := fmt.Sprintf("gt-console-%d", time.Now().UnixNano())
+
+	tmuxArgs := []string{}
+	if sock := tmux.GetDefaultSocket(); sock != "" {
+		tmuxArgs = append(tmuxArgs, "-L", sock)
+	}
+	tmuxArgs = append(tmuxArgs, "new-session", "-d", "-s", sessionName, wrapper)
+
+	cmd := exec.Command("tmux", tmuxArgs...)
+	if h.workDir != "" {
+		cmd.Dir = h.workDir
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("tmux new-session: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return sessionName, nil
 }
 
 // sendError sends a JSON error response.

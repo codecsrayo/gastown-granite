@@ -811,6 +811,17 @@
         })
         .then(function(r) { return r.json(); })
         .then(function(data) {
+            // Interactive commands (e.g. `account login`) are dispatched into
+            // a fresh tmux session server-side; the response carries the
+            // session name. Open the xterm.js attach panel so the user can
+            // drive the OAuth flow / interactive prompt directly.
+            if (data.success && data.console_session) {
+                showToast('info', 'Console opened', 'gt ' + cmdName + ' → ' + data.console_session);
+                if (typeof openSessionPreview === 'function') {
+                    openSessionPreview(data.console_session);
+                }
+                return;
+            }
             if (data.success) {
                 showToast('success', 'Success', 'gt ' + cmdName);
                 if (data.output && data.output.trim()) {

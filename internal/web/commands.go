@@ -23,6 +23,12 @@ type CommandMeta struct {
 	// MaxTimeoutSec, if > 0, overrides the default maxRunTimeout cap for this
 	// command. Used for long-running bring-up commands like `up --restore`.
 	MaxTimeoutSec int
+	// Interactive commands need a real TTY (e.g., `account login` execs
+	// `claude` for its OAuth REPL). When true, /api/run skips the headless
+	// capture path and instead spawns a tmux session running the command;
+	// the dashboard opens the session in its xterm.js panel so the user can
+	// drive it like a real terminal.
+	Interactive bool
 }
 
 // AllowedCommands defines which gt commands can be executed from the dashboard.
@@ -51,7 +57,7 @@ var AllowedCommands = map[string]CommandMeta{
 	// Claude OAuth flow and needs a TTY; running it through /api/run will
 	// fail non-interactively, but discoverability matters more than the
 	// gotcha (the user can copy the command and run it in their shell).
-	"account login":  {Confirm: true, Desc: "Re-authenticate an account (refresh expired token)", Category: "Accounts", Args: "<handle>"},
+	"account login":  {Confirm: true, Interactive: true, Desc: "Re-authenticate an account (refresh expired token)", Category: "Accounts", Args: "<handle>"},
 	"account switch": {Confirm: true, Desc: "Switch the active account", Category: "Accounts", Args: "<handle>"},
 	"hooks list":  {Safe: true, Desc: "List hooks", Category: "Hooks"},
 	"activity":    {Safe: true, Desc: "Show recent activity", Category: "Status"},
@@ -209,13 +215,14 @@ func GetCommandList() []CommandInfo {
 	commands := make([]CommandInfo, 0, len(AllowedCommands))
 	for name, meta := range AllowedCommands {
 		commands = append(commands, CommandInfo{
-			Name:     name,
-			Desc:     meta.Desc,
-			Category: meta.Category,
-			Safe:     meta.Safe,
-			Confirm:  meta.Confirm,
-			Args:     meta.Args,
-			ArgType:  meta.ArgType,
+			Name:        name,
+			Desc:        meta.Desc,
+			Category:    meta.Category,
+			Safe:        meta.Safe,
+			Confirm:     meta.Confirm,
+			Args:        meta.Args,
+			ArgType:     meta.ArgType,
+			Interactive: meta.Interactive,
 		})
 	}
 	return commands
@@ -223,11 +230,12 @@ func GetCommandList() []CommandInfo {
 
 // CommandInfo is the JSON-serializable form of a command for the UI.
 type CommandInfo struct {
-	Name     string `json:"name"`
-	Desc     string `json:"desc"`
-	Category string `json:"category"`
-	Safe     bool   `json:"safe"`
-	Confirm  bool   `json:"confirm"`
-	Args     string `json:"args,omitempty"`
-	ArgType  string `json:"argType,omitempty"`
+	Name        string `json:"name"`
+	Desc        string `json:"desc"`
+	Category    string `json:"category"`
+	Safe        bool   `json:"safe"`
+	Confirm     bool   `json:"confirm"`
+	Args        string `json:"args,omitempty"`
+	ArgType     string `json:"argType,omitempty"`
+	Interactive bool   `json:"interactive,omitempty"`
 }
