@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/style"
+	"github.com/steveyegge/gastown/internal/util"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
 
@@ -35,7 +37,9 @@ Commands:
   gt account list              List registered accounts
   gt account add <handle>      Add a new account
   gt account default <handle>  Set the default account
-  gt account status            Show current account info`,
+  gt account status            Show current account info
+  gt account switch <handle>   Switch the active account
+  gt account login <handle>    Re-authenticate (refresh expired token)`,
 }
 
 var accountListCmd = &cobra.Command{
@@ -275,6 +279,28 @@ Examples:
 	RunE: runAccountStatus,
 }
 
+var accountLoginCmd = &cobra.Command{
+	Use:   "login <handle>",
+	Short: "Re-authenticate an account (refresh expired token)",
+	Long: `Launch Claude Code with the named account's CLAUDE_CONFIG_DIR set so
+the OAuth login lands in that account's credentials, then exit when done.
+
+Use this when the quota dashboard shows the account as "expired" — the
+underlying OAuth token has aged out and Claude needs to be re-authenticated.
+
+Steps the command runs:
+  1. Resolves the account's config_dir from accounts.json.
+  2. Execs ` + "`claude`" + ` with CLAUDE_CONFIG_DIR pointed at that dir.
+  3. Inside the Claude prompt, type /login and complete the browser flow.
+  4. Exit Claude — the refreshed token now lives in the account's dir.
+
+Examples:
+  gt account login codecsrayo
+  gt account login work`,
+	Args: cobra.ExactArgs(1),
+	RunE: runAccountLogin,
+}
+
 var accountSwitchCmd = &cobra.Command{
 	Use:   "switch <handle>",
 	Short: "Switch to a different account",
@@ -464,6 +490,64 @@ func runAccountSwitch(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// runAccountLogin re-authenticates an account by launching `claude` with the
+// account's CLAUDE_CONFIG_DIR set. The user types /login inside the Claude
+// prompt; the refreshed OAuth token persists into the account dir on exit.
+// This is the recovery path the quota dashboard surfaces for expired tokens.
+func runAccountLogin(cmd *cobra.Command, args []string) error {
+	handle := args[0]
+
+	townRoot, err := workspace.FindFromCwd()
+	if err != nil {
+		return fmt.Errorf("finding town root: %w", err)
+	}
+
+	accountsPath := constants.MayorAccountsPath(townRoot)
+	cfg, err := config.LoadAccountsConfig(accountsPath)
+	if err != nil {
+		return fmt.Errorf("loading accounts config: %w", err)
+	}
+
+	acct := cfg.GetAccount(handle)
+	if acct == nil {
+		// List what does exist so the user can spot a typo without another command.
+		known := make([]string, 0, len(cfg.Accounts))
+		for h := range cfg.Accounts {
+			known = append(known, h)
+		}
+		sort.Strings(known)
+		return fmt.Errorf("account %q not registered (known: %v)", handle, known)
+	}
+
+	configDir := util.ExpandHome(acct.ConfigDir)
+	if _, err := os.Stat(configDir); err != nil {
+		return fmt.Errorf("config dir %s not accessible: %w", configDir, err)
+	}
+
+	claudePath, err := exec.LookPath("claude")
+	if err != nil {
+		return fmt.Errorf("`claude` binary not found in PATH — install Claude Code first: %w", err)
+	}
+
+	fmt.Printf("%s %s\n", style.Bold.Render("Re-authenticating"), style.Bold.Render(handle))
+	fmt.Printf("Config dir: %s\n", configDir)
+	fmt.Println(style.Dim.Render("Inside Claude, type /login and complete the browser flow, then exit (Ctrl-D)."))
+	fmt.Println()
+
+	c := exec.Command(claudePath) //nolint:gosec // G204: launching the user's own claude CLI by design
+	c.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+configDir)
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("claude exited with error: %w", err)
+	}
+
+	fmt.Println()
+	fmt.Println(style.Success.Render("Done."), "Run", style.Bold.Render("gt quota status"), "to confirm the refreshed token.")
+	return nil
+}
+
 // ensureSharedCommandsSymlink creates a symlink from configDir/commands to the
 // global commands directory (~/.claude/commands) so that custom commands (e.g.,
 // SuperClaude) are available regardless of which account is active via CLAUDE_CONFIG_DIR.
@@ -516,6 +600,7 @@ func init() {
 	accountCmd.AddCommand(accountDefaultCmd)
 	accountCmd.AddCommand(accountStatusCmd)
 	accountCmd.AddCommand(accountSwitchCmd)
+	accountCmd.AddCommand(accountLoginCmd)
 
 	rootCmd.AddCommand(accountCmd)
 }
