@@ -269,6 +269,20 @@ func (b *Beads) CloseEscalation(id, closedBy, reason string) error {
 	return err
 }
 
+// ReassignEscalation changes the assignee of an escalation bead.
+// Verifies the issue is an escalation before updating.
+func (b *Beads) ReassignEscalation(id, newAssignee string) error {
+	target := b.forIssueID(id)
+	issue, err := target.Show(id)
+	if err != nil {
+		return err
+	}
+	if !HasLabel(issue, "gt:escalation") {
+		return fmt.Errorf("issue %s is not an escalation bead (missing gt:escalation label)", id)
+	}
+	return target.Update(id, UpdateOptions{Assignee: &newAssignee})
+}
+
 // GetEscalationBead retrieves an escalation bead by ID.
 // Returns nil if not found.
 func (b *Beads) GetEscalationBead(id string) (*Issue, *EscalationFields, error) {

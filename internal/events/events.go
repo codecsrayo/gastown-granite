@@ -58,9 +58,14 @@ const (
 	TypePatrolStarted   = "patrol_started"
 	TypePolecatChecked  = "polecat_checked"
 	TypePolecatNudged   = "polecat_nudged"
-	TypeEscalationSent   = "escalation_sent"
-	TypeEscalationAcked  = "escalation_acked"
-	TypeEscalationClosed = "escalation_closed"
+	TypeEscalationSent       = "escalation_sent"
+	TypeEscalationAcked      = "escalation_acked"
+	TypeEscalationClosed     = "escalation_closed"
+	TypeEscalationReassigned = "escalation_reassigned"
+
+	// TypeLoginRequired fires when the login_watch patrol detects an OAuth
+	// URL in a tmux session pane. Payload includes session, url, context.
+	TypeLoginRequired = "login_required"
 	TypePatrolComplete   = "patrol_complete"
 
 	// Merge queue events (emitted by refinery)

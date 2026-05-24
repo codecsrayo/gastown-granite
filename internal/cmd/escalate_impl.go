@@ -370,6 +370,38 @@ func runEscalateClose(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func runEscalateReassign(cmd *cobra.Command, args []string) error {
+	escalationID := args[0]
+	newAssignee := strings.TrimSpace(args[1])
+	if newAssignee == "" {
+		return fmt.Errorf("new assignee cannot be empty")
+	}
+
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+
+	reassignedBy := detectSender()
+	if reassignedBy == "" {
+		reassignedBy = "unknown"
+	}
+
+	bd := beads.New(beads.ResolveBeadsDir(townRoot))
+	if err := bd.ReassignEscalation(escalationID, newAssignee); err != nil {
+		return fmt.Errorf("reassigning escalation: %w", err)
+	}
+
+	_ = events.LogFeed(events.TypeEscalationReassigned, reassignedBy, map[string]interface{}{
+		"escalation_id": escalationID,
+		"reassigned_by": reassignedBy,
+		"new_assignee":  newAssignee,
+	})
+
+	fmt.Printf("%s Escalation reassigned: %s → %s\n", style.Bold.Render("✓"), escalationID, newAssignee)
+	return nil
+}
+
 func runEscalateStale(cmd *cobra.Command, args []string) error {
 	townRoot, err := workspace.FindFromCwdOrError()
 	if err != nil {

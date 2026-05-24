@@ -124,6 +124,21 @@ Examples:
 	RunE: runEscalateStale,
 }
 
+var escalateReassignCmd = &cobra.Command{
+	Use:   "reassign <escalation-id> <new-assignee>",
+	Short: "Reassign an escalation to another agent",
+	Long: `Change the assignee of an open escalation.
+
+The new assignee should be an agent identity such as "mayor", "deacon",
+or "<rig>/<agent>" (e.g., "plane/refinery", "plane/amber").
+
+Examples:
+  gt escalate reassign hq-abc123 mayor
+  gt escalate reassign hq-abc123 plane/refinery`,
+	Args: cobra.ExactArgs(2),
+	RunE: runEscalateReassign,
+}
+
 var escalateShowCmd = &cobra.Command{
 	Use:   "show <escalation-id>",
 	Short: "Show details of an escalation",
@@ -167,6 +182,7 @@ func init() {
 	escalateCmd.AddCommand(escalateCloseCmd)
 	escalateCmd.AddCommand(escalateStaleCmd)
 	escalateCmd.AddCommand(escalateShowCmd)
+	escalateCmd.AddCommand(escalateReassignCmd)
 
 	rootCmd.AddCommand(escalateCmd)
 }
