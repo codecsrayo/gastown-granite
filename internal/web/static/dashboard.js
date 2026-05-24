@@ -190,6 +190,206 @@
     connectSSE();
 
     // ============================================
+    // GIT ACTIVITY FEED
+    // ============================================
+    // Subscribes to /api/git/events (separate SSE stream from the main
+    // dashboard channel) and renders each ref change in the #git-feed panel.
+    // Backend buffers the last ~200 events so newly-opened tabs see history.
+    (function gitFeedInit() {
+        var feed = document.getElementById('git-feed');
+        var emptyEl = document.getElementById('git-empty');
+        var countEl = document.getElementById('git-count');
+        var statusEl = document.getElementById('git-status');
+        var repoFilterEl = document.getElementById('git-repo-filter');
+        var clearBtn = document.getElementById('git-clear-btn');
+        var kindBtns = document.querySelectorAll('.git-kind-btn');
+        if (!feed) return;
+
+        var MAX_ENTRIES = 200;
+        var entries = [];
+        var gitSource = null;
+        var reconnectDelay = 1000;
+        var reconnectMax = 30000;
+
+        // Filters
+        var repos = new Set();
+        var activeKindGroups = new Set();
+        kindBtns.forEach(function(b) { activeKindGroups.add(b.dataset.kind); });
+
+        function kindGroup(kind) {
+            if (kind === 'commit') return 'commit';
+            if (kind === 'branch_create' || kind === 'branch_delete') return 'branch';
+            if (kind === 'remote_update' || kind === 'remote_create' || kind === 'remote_delete') return 'remote';
+            if (kind === 'head_change') return 'head_change';
+            return 'other';
+        }
+
+        function eventMatches(ev) {
+            var repoSel = repoFilterEl ? repoFilterEl.value : 'all';
+            if (repoSel !== 'all' && ev.repo_label !== repoSel) return false;
+            if (!activeKindGroups.has(kindGroup(ev.kind))) return false;
+            return true;
+        }
+
+        function ensureRepoOption(label) {
+            if (!repoFilterEl || !label || repos.has(label)) return;
+            repos.add(label);
+            var opt = document.createElement('option');
+            opt.value = label;
+            opt.textContent = label;
+            repoFilterEl.appendChild(opt);
+        }
+
+        function applyFilters() {
+            var rows = feed.querySelectorAll('.git-event');
+            var visible = 0;
+            rows.forEach(function(row) {
+                var match = activeKindGroups.has(kindGroup(row.dataset.kind)) &&
+                    ((repoFilterEl && repoFilterEl.value === 'all') || row.dataset.repo === repoFilterEl.value);
+                row.classList.toggle('git-hidden', !match);
+                if (match) visible++;
+            });
+            if (countEl) countEl.textContent = String(visible);
+        }
+
+        function setStatus(state) {
+            if (!statusEl) return;
+            if (state === 'live') {
+                statusEl.textContent = 'live';
+                statusEl.className = 'git-status connected';
+            } else if (state === 'reconnect') {
+                statusEl.textContent = 'reconnecting…';
+                statusEl.className = 'git-status disconnected';
+            } else {
+                statusEl.textContent = 'connecting…';
+                statusEl.className = 'git-status';
+            }
+        }
+
+        function fmtTime(iso) {
+            var d = new Date(iso);
+            if (isNaN(d.getTime())) return '';
+            var hh = String(d.getHours()).padStart(2, '0');
+            var mm = String(d.getMinutes()).padStart(2, '0');
+            var ss = String(d.getSeconds()).padStart(2, '0');
+            return hh + ':' + mm + ':' + ss;
+        }
+
+        function esc(s) {
+            if (s == null) return '';
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        function render(ev) {
+            var row = document.createElement('div');
+            row.className = 'git-event kind-' + esc(ev.kind || 'unknown');
+            row.dataset.kind = ev.kind || '';
+            row.dataset.repo = ev.repo_label || '';
+            var bodyHTML = '';
+            if (ev.kind === 'commit' || ev.kind === 'remote_update') {
+                var prefix = ev.kind === 'remote_update' ? '↑ ' : '';
+                bodyHTML =
+                    '<span class="git-sha">' + esc(ev.short_sha || '') + '</span>' +
+                    '<span class="git-branch">' + esc(prefix + (ev.branch || '')) + '</span>' +
+                    '<span class="git-subject" title="' + esc(ev.subject || '') + '">' +
+                        esc(ev.subject || '(no subject)') +
+                    '</span>' +
+                    (ev.author ? '<span class="git-author">' + esc(ev.author) + '</span>' : '');
+            } else if (ev.kind === 'branch_create' || ev.kind === 'remote_create') {
+                bodyHTML =
+                    '<span class="git-branch">+ ' + esc(ev.branch || '') + '</span>' +
+                    '<span class="git-sha">' + esc(ev.short_sha || '') + '</span>' +
+                    (ev.subject ? '<span class="git-subject">' + esc(ev.subject) + '</span>' : '');
+            } else if (ev.kind === 'branch_delete' || ev.kind === 'remote_delete') {
+                bodyHTML = '<span class="git-branch">− ' + esc(ev.branch || '') + '</span>';
+            } else if (ev.kind === 'head_change') {
+                bodyHTML = '<span class="git-branch">→ ' + esc(ev.branch || '') + '</span>';
+            } else {
+                bodyHTML = '<span class="git-subject">' + esc(JSON.stringify(ev)) + '</span>';
+            }
+            row.innerHTML =
+                '<span class="git-time">' + esc(fmtTime(ev.ts)) + '</span>' +
+                '<span class="git-kind">' + esc(ev.kind || '') + '</span>' +
+                '<span class="git-repo" title="' + esc(ev.repo || '') + '">' + esc(ev.repo_label || '') + '</span>' +
+                '<span class="git-body">' + bodyHTML + '</span>';
+            if (!eventMatches(ev)) row.classList.add('git-hidden');
+            return row;
+        }
+
+        function pushEvent(ev) {
+            if (!ev || !ev.kind) return;
+            if (emptyEl && emptyEl.parentNode) emptyEl.remove();
+            ensureRepoOption(ev.repo_label);
+            entries.push(ev);
+            var atBottom = (feed.scrollHeight - feed.scrollTop - feed.clientHeight) < 24;
+            feed.appendChild(render(ev));
+            while (feed.children.length > MAX_ENTRIES) {
+                feed.removeChild(feed.firstChild);
+            }
+            while (entries.length > MAX_ENTRIES) entries.shift();
+            var visible = feed.querySelectorAll('.git-event:not(.git-hidden)').length;
+            if (countEl) countEl.textContent = String(visible);
+            if (atBottom) feed.scrollTop = feed.scrollHeight;
+        }
+
+        function clearAll() {
+            entries = [];
+            feed.querySelectorAll('.git-event').forEach(function(el) { el.remove(); });
+            if (countEl) countEl.textContent = '0';
+        }
+
+        kindBtns.forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var k = btn.dataset.kind;
+                if (activeKindGroups.has(k)) {
+                    activeKindGroups.delete(k);
+                    btn.classList.remove('active');
+                } else {
+                    activeKindGroups.add(k);
+                    btn.classList.add('active');
+                }
+                applyFilters();
+            });
+        });
+        if (repoFilterEl) repoFilterEl.addEventListener('change', applyFilters);
+        if (clearBtn) clearBtn.addEventListener('click', clearAll);
+
+        function connect() {
+            if (gitSource) {
+                try { gitSource.close(); } catch (e) {}
+            }
+            setStatus('connect');
+            gitSource = new EventSource('/api/git/events');
+            gitSource.addEventListener('connected', function() {
+                reconnectDelay = 1000;
+                setStatus('live');
+            });
+            gitSource.addEventListener('git-event', function(e) {
+                try {
+                    var data = JSON.parse(e.data);
+                    pushEvent(data);
+                } catch (err) {
+                    console.warn('git-event parse failed', err);
+                }
+            });
+            gitSource.onerror = function() {
+                setStatus('reconnect');
+                try { gitSource.close(); } catch (e) {}
+                setTimeout(function() {
+                    reconnectDelay = Math.min(reconnectDelay * 2, reconnectMax);
+                    connect();
+                }, reconnectDelay);
+            };
+        }
+
+        connect();
+    })();
+
+    // ============================================
     // EXPAND BUTTON HANDLER
     // ============================================
     document.addEventListener('click', function(e) {

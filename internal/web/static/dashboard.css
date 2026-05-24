@@ -4207,3 +4207,125 @@
             opacity: 0.55;
             cursor: grabbing;
         }
+
+        /* Git activity feed — live ref-change stream from all rigs + polecats. */
+        #git-panel .panel-body { padding: 8px !important; }
+        .git-feed {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-height: 320px;
+            overflow-y: auto;
+            font-family: var(--font-mono, monospace);
+            font-size: 0.78rem;
+        }
+        .git-event {
+            display: grid;
+            grid-template-columns: 60px 70px 90px 1fr;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 8px;
+            background: rgba(0, 0, 0, 0.18);
+            border-left: 3px solid var(--border);
+            border-radius: 3px;
+        }
+        .git-event.kind-commit { border-left-color: var(--green, #3fb950); }
+        .git-event.kind-branch_create { border-left-color: var(--blue, #58a6ff); }
+        .git-event.kind-branch_delete { border-left-color: var(--red, #f85149); }
+        .git-event.kind-head_change { border-left-color: var(--yellow, #d29922); }
+        .git-event.kind-remote_update { border-left-color: var(--orange, #db6d28); }
+        .git-event.kind-remote_create { border-left-color: var(--orange, #db6d28); }
+        .git-event.kind-remote_delete { border-left-color: var(--red, #f85149); }
+        .git-event.git-hidden { display: none; }
+        .git-filters {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px;
+            padding: 4px 8px 8px 8px;
+            font-size: 0.78rem;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 6px;
+        }
+        .git-filter-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .git-filter-group label {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .git-filters select {
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            padding: 2px 6px;
+            font-family: var(--font-mono, monospace);
+            font-size: 0.78rem;
+            max-width: 220px;
+        }
+        .git-kind-btn, .git-clear-btn {
+            background: transparent;
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            padding: 2px 8px;
+            font-family: inherit;
+            font-size: 0.72rem;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .git-kind-btn.active {
+            color: var(--text-primary);
+            background: var(--bg-card-hover);
+            border-color: var(--blue, #58a6ff);
+        }
+        .git-kind-btn:hover, .git-clear-btn:hover {
+            color: var(--text-primary);
+            background: var(--bg-card-hover);
+        }
+        .git-clear-btn { margin-left: auto; }
+        .git-event .git-time { color: var(--text-muted); }
+        .git-event .git-kind {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-secondary);
+        }
+        .git-event .git-repo {
+            color: var(--blue, #58a6ff);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .git-event .git-body {
+            display: flex;
+            gap: 6px;
+            align-items: baseline;
+            min-width: 0;
+        }
+        .git-event .git-sha {
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+        .git-event .git-branch {
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+        .git-event .git-subject {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--text-primary);
+        }
+        .git-event .git-author {
+            color: var(--text-muted);
+            margin-left: 6px;
+        }
+        .git-status.connected { color: var(--green, #3fb950); }
+        .git-status.disconnected { color: var(--red, #f85149); }

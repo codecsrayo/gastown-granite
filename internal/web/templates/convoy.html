@@ -497,6 +497,42 @@
                 </div>
             </div>
 
+            <!-- Git activity feed: live ref changes across rigs + polecat worktrees -->
+            <div class="panel" id="git-panel">
+                <div class="panel-header">
+                    <h2>🌳 Git</h2>
+                    <span class="count" id="git-count" hx-preserve="true">0</span>
+                    <span class="git-status" id="git-status" title="live stream status" hx-preserve="true" style="font-size:0.75rem;color:var(--text-muted);margin-left:6px;">connecting…</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
+                </div>
+                <div class="panel-body">
+                    <div class="git-filters" id="git-filters" hx-preserve="true">
+                        <div class="git-filter-group">
+                            <label>Repo:</label>
+                            <select id="git-repo-filter">
+                                <option value="all">All</option>
+                            </select>
+                        </div>
+                        <div class="git-filter-group">
+                            <label>Show:</label>
+                            <button class="git-kind-btn active" data-kind="commit">commit</button>
+                            <button class="git-kind-btn active" data-kind="branch">branch</button>
+                            <button class="git-kind-btn active" data-kind="remote">remote</button>
+                            <button class="git-kind-btn active" data-kind="head_change">checkout</button>
+                        </div>
+                        <button class="git-clear-btn" id="git-clear-btn" title="Clear feed">clear</button>
+                    </div>
+                    <!-- hx-preserve: the dashboard outer re-renders via idiomorph
+                         every ~30s; this preserves the JS-populated feed so live
+                         git events aren't wiped on each refresh. -->
+                    <div class="git-feed" id="git-feed" hx-preserve="true">
+                        <div class="empty-state" id="git-empty">
+                            <p>No git activity yet. Commit, push, or switch branches in any rig or polecat to see events here.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Row 2: Mail, Merge Queue, Escalations -->
 
             <!-- Mail Panel -->

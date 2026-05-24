@@ -68,6 +68,11 @@ type APIHandler struct {
 	cmdSem chan struct{}
 	// csrfToken is validated on POST requests to prevent cross-site request forgery.
 	csrfToken string
+	// gitWatcher polls all known repos (rigs + polecat worktrees) and
+	// broadcasts ref changes to /api/git/events subscribers. Started lazily
+	// on the first subscriber so test handlers don't spawn background polls.
+	gitWatcher    *gitWatcher
+	gitWatcherCtx context.Context
 }
 
 // tmuxArgsWithSocket prepends `-L <socket>` to tmux args when a default
@@ -98,12 +103,15 @@ func NewAPIHandler(csrfToken string) *APIHandler {
 	// Use PATH lookup for gt binary. Do NOT use os.Executable() here - during
 	// tests it returns the test binary, causing fork bombs when executed.
 	workDir, _ := os.Getwd()
-	return &APIHandler{
-		gtPath:    "gt",
-		workDir:   workDir,
-		cmdSem:    make(chan struct{}, maxConcurrentCommands),
-		csrfToken: csrfToken,
+	h := &APIHandler{
+		gtPath:        "gt",
+		workDir:       workDir,
+		cmdSem:        make(chan struct{}, maxConcurrentCommands),
+		csrfToken:     csrfToken,
+		gitWatcherCtx: context.Background(),
 	}
+	h.gitWatcher = newGitWatcher(workDir, h.gtPath)
+	return h
 }
 
 // ServeHTTP routes API requests to the appropriate handler.
@@ -160,6 +168,10 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleReady(w, r)
 	case path == "/events" && r.Method == http.MethodGet:
 		h.handleSSE(w, r)
+	case path == "/git/events" && r.Method == http.MethodGet:
+		h.handleGitEvents(w, r)
+	case path == "/git/log" && r.Method == http.MethodGet:
+		h.handleGitLog(w, r)
 	case path == "/session/attach" && r.Method == http.MethodGet:
 		h.handleSessionAttach(w, r)
 	case path == "/session/preview" && r.Method == http.MethodGet:
@@ -2706,4 +2718,81 @@ func (h *APIHandler) handleRigAdd(w http.ResponseWriter, r *http.Request) {
 		"message": fmt.Sprintf("Rig '%s' created successfully", req.Name),
 		"output":  output,
 	})
+}
+
+// handleGitLog returns the recent-events ring buffer as JSON for initial
+// page render. The SSE stream picks up from there.
+func (h *APIHandler) handleGitLog(w http.ResponseWriter, _ *http.Request) {
+	if h.gitWatcher == nil {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("[]"))
+		return
+	}
+	h.gitWatcher.Start(h.gitWatcherCtx)
+	events := h.gitWatcher.Snapshot()
+	if events == nil {
+		events = []GitEvent{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(events)
+}
+
+// handleGitEvents streams GitEvents over Server-Sent Events. Each subscriber
+// gets a backfill of recent events on connect, then live updates until the
+// request context is cancelled (client disconnect).
+func (h *APIHandler) handleGitEvents(w http.ResponseWriter, r *http.Request) {
+	if h.gitWatcher == nil {
+		http.Error(w, "git watcher unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	h.gitWatcher.Start(h.gitWatcherCtx)
+	ch, backfill, cancel := h.gitWatcher.Subscribe()
+	defer cancel()
+
+	fmt.Fprintf(w, "event: connected\ndata: ok\n\n")
+	flusher.Flush()
+
+	for _, ev := range backfill {
+		writeGitSSE(w, ev)
+	}
+	flusher.Flush()
+
+	keepalive := time.NewTicker(15 * time.Second)
+	defer keepalive.Stop()
+	ctx := r.Context()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-keepalive.C:
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		case ev, ok := <-ch:
+			if !ok {
+				return
+			}
+			writeGitSSE(w, ev)
+			flusher.Flush()
+		}
+	}
+}
+
+func writeGitSSE(w http.ResponseWriter, ev GitEvent) {
+	buf, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "event: git-event\ndata: %s\n\n", buf)
 }
