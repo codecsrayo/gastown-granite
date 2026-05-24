@@ -447,6 +447,8 @@
         activeConsoleSession = sessionName;
         renderConsoleTabs();
         outputPanel.classList.add('open');
+        // New / switched tab → expand if the panel was minimized.
+        outputPanel.classList.remove('minimized');
         openSessionAttach(sessionName, {
             wrapId:   'output-panel-terminal-wrap',
             termId:   'output-panel-terminal',
@@ -560,11 +562,36 @@
         outputPanel.classList.remove('open');
     };
 
-    document.getElementById('output-copy-btn').onclick = function() {
-        navigator.clipboard.writeText(outputContent.textContent).then(function() {
-            showToast('success', 'Copied', 'Output copied to clipboard');
+    // Minimize collapses the panel to its header strip without killing any
+    // tabs or attaches — the user can re-expand by clicking the header,
+    // and switching tabs / running a new command auto-restores.
+    var minBtn = document.getElementById('output-min-btn');
+    function setOutputMinimized(min) {
+        if (min) outputPanel.classList.add('minimized');
+        else     outputPanel.classList.remove('minimized');
+        // Refit the active terminal after the height changes so xterm
+        // matches the new visible area.
+        if (attachFit) {
+            try { attachFit.fit(); } catch (e) {}
+        }
+        if (typeof sendAttachResize === 'function') sendAttachResize();
+    }
+    if (minBtn) {
+        minBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            setOutputMinimized(!outputPanel.classList.contains('minimized'));
         });
-    };
+    }
+    var outHeader = document.querySelector('#output-panel .output-panel-header');
+    if (outHeader) {
+        outHeader.addEventListener('click', function(e) {
+            // Only restore when minimized AND click wasn't on an action
+            // button (otherwise close/minimize would also trigger restore).
+            if (!outputPanel.classList.contains('minimized')) return;
+            if (e.target.closest('.output-panel-btn')) return;
+            setOutputMinimized(false);
+        });
+    }
 
     // Drag-to-resize on the top edge of the output panel. Persists the chosen
     // height in localStorage so the layout survives page refresh. When a live

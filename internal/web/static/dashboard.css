@@ -4157,3 +4157,33 @@
             background: var(--red);
             color: #fff;
         }
+
+        /* Minimized output panel: collapses to the header strip. Click
+         * the header (anywhere outside the action buttons) to restore.
+         * Sessions and tabs stay alive; only the visual area shrinks. */
+        .output-panel.minimized {
+            height: auto !important;
+            min-height: 0 !important;
+        }
+        .output-panel.minimized .output-panel-tabs,
+        .output-panel.minimized .output-panel-content,
+        .output-panel.minimized #output-panel-terminal-wrap,
+        .output-panel.minimized #output-panel-resize {
+            display: none !important;
+        }
+        .output-panel.minimized .output-panel-header {
+            cursor: pointer;
+        }
+
+        /* Icon-only buttons in the output panel header. Sized for square
+         * touch targets so the ✕ and 🗕 glyphs stay centered. */
+        .output-panel-icon-btn {
+            width: 26px;
+            height: 24px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            line-height: 1;
+        }
