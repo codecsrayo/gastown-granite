@@ -9,6 +9,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
+    <script src="/static/terminal-attach.js?v=1"></script>
     <style>
         :root {
             --bg: #0f1419;
@@ -93,7 +94,6 @@
 
     <script>
     (function() {
-        // ---- Parse URL params ----------------------------------------
         var params = new URLSearchParams(window.location.search);
         var sessionName = params.get('session') || '';
         var label = params.get('label') || sessionName;
@@ -106,123 +106,25 @@
         document.getElementById('console-title').textContent = label;
         document.title = 'gt: ' + label;
 
-        // ---- xterm setup --------------------------------------------
-        var term = new Terminal({
-            fontFamily: 'monospace',
-            fontSize: 13,
-            cursorBlink: true,
-            convertEol: false,
-            allowProposedApi: true,
-            scrollback: 50000,
-            scrollOnUserInput: true,
-        });
-        var fit = null;
-        if (window.FitAddon && window.FitAddon.FitAddon) {
-            fit = new window.FitAddon.FitAddon();
-            term.loadAddon(fit);
-        }
-        if (window.WebLinksAddon && window.WebLinksAddon.WebLinksAddon) {
-            term.loadAddon(new window.WebLinksAddon.WebLinksAddon());
-        }
-        term.open(document.getElementById('terminal'));
-        if (fit) { try { fit.fit(); } catch (e) {} }
-
-        // ---- WebSocket attach ---------------------------------------
-        // Same wire protocol as the dashboard's session_attach.go path.
-        var ws = null;
-        var userClosed = false;
-        var retryDelay = 500;
         var statusEl = document.getElementById('console-status');
-
-        function setStatus(text, cls) {
-            statusEl.textContent = text;
-            statusEl.className = 'console-status ' + (cls || '');
+        function setStatus(text, level) {
+            statusEl.textContent = text === 'live' ? 'live' : text;
+            statusEl.className = 'console-status ' + (level === 'ok' ? 'live' : (level === 'warn' ? 'warn' : ''));
         }
 
-        function sendCmd(c, payload) {
-            if (!ws || ws.readyState !== 1) return;
-            var enc;
-            if (typeof payload === 'string') enc = new TextEncoder().encode(payload);
-            else if (payload) enc = payload;
-            else enc = new Uint8Array(0);
-            var out = new Uint8Array(enc.length + 1);
-            out[0] = c.charCodeAt(0);
-            out.set(enc, 1);
-            ws.send(out);
-        }
-        function sendResize() {
-            if (!term || !ws || ws.readyState !== 1) return;
-            sendCmd('1', JSON.stringify({ cols: term.cols, rows: term.rows }));
-        }
-
-        function connect() {
-            var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(proto + '//' + window.location.host + '/api/session/attach?session=' + encodeURIComponent(sessionName));
-            ws.binaryType = 'arraybuffer';
-            ws.onopen = function() {
-                setStatus('live', 'live');
-                retryDelay = 500;
-                sendResize();
-            };
-            ws.onmessage = function(ev) {
-                var bytes = typeof ev.data === 'string'
-                    ? new TextEncoder().encode(ev.data)
-                    : new Uint8Array(ev.data);
-                if (bytes.length === 0) return;
-                var cmd = String.fromCharCode(bytes[0]);
-                var payload = bytes.subarray(1);
-                if (cmd === '0') {
-                    term.write(payload);
-                } else if (cmd === '1') {
-                    var title = new TextDecoder().decode(payload);
-                    document.title = title;
-                }
-            };
-            ws.onclose = function() {
-                if (userClosed) { setStatus('closed'); return; }
-                setStatus('reconnecting…', 'warn');
-                retryDelay = Math.min(30000, retryDelay * 2);
-                setTimeout(connect, retryDelay);
-            };
-            ws.onerror = function() {
-                if (!userClosed) setStatus('ws error', 'warn');
-            };
-        }
-
-        // Force-route Ctrl+C/Z/\/D into the PTY (xterm would otherwise
-        // bubble them to the browser as Copy / etc.).
-        term.attachCustomKeyEventHandler(function(ev) {
-            if (ev.type !== 'keydown') return true;
-            if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.altKey) return true;
-            var byte = null;
-            switch (ev.key) {
-                case 'c': case 'C': byte = '\x03'; break;
-                case 'z': case 'Z': byte = '\x1a'; break;
-                case '\\':          byte = '\x1c'; break;
-                case 'd': case 'D': byte = '\x04'; break;
-            }
-            if (!byte) return true;
-            if (byte === '\x03' && term.hasSelection && term.hasSelection()) return true;
-            sendCmd('0', byte);
-            ev.preventDefault();
-            return false;
+        // All xterm + WebSocket + wire-protocol plumbing lives in the
+        // shared factory (terminal-attach.js); the popup only wires the
+        // header chrome (title, status, merge, close).
+        var attach = window.GTTerminalAttach.create({
+            sessionName: sessionName,
+            onStatus: setStatus,
+            onTitle: function(title) { document.title = title; },
         });
-        term.onData(function(data) { sendCmd('0', data); });
+        attach.mount(document.getElementById('terminal'));
 
-        // Resize: xterm fit on every viewport change.
-        var resizeHandler = function() {
-            if (fit) { try { fit.fit(); } catch (e) {} }
-            sendResize();
-        };
-        window.addEventListener('resize', resizeHandler);
-
-        // ---- Merge back into dashboard via BroadcastChannel ---------
-        // Both windows live on the same origin, so we can use
-        // BroadcastChannel to nudge the parent dashboard to re-add this
-        // session as a tab. The popup then closes itself.
+        // Merge back into the dashboard via BroadcastChannel (same origin).
         var channel = null;
         try { channel = new BroadcastChannel('gastown-console'); } catch (e) {}
-
         document.getElementById('merge-btn').addEventListener('click', function() {
             if (channel) {
                 channel.postMessage({
@@ -232,17 +134,15 @@
                     ephemeral: ephemeral,
                 });
             }
-            userClosed = true;
-            if (ws) { try { ws.close(); } catch (e) {} }
+            attach.close();
             window.close();
         });
 
-        // ---- Close button: tear down + kill if ephemeral ------------
+        // Close: tear down the attach; reap the tmux session if ephemeral.
+        // sendBeacon survives the unload that follows window.close().
         function closeAndMaybeKill() {
-            userClosed = true;
-            if (ws) { try { ws.close(); } catch (e) {} }
+            attach.close();
             if (ephemeral) {
-                // sendBeacon survives the page unload that follows.
                 navigator.sendBeacon('/api/session/kill?session=' + encodeURIComponent(sessionName));
             }
         }
@@ -251,9 +151,6 @@
             window.close();
         });
         window.addEventListener('beforeunload', closeAndMaybeKill);
-
-        connect();
-        setTimeout(function() { term.focus(); }, 100);
     })();
     </script>
 </body>

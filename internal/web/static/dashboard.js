@@ -655,10 +655,7 @@
         else     outputPanel.classList.remove('minimized');
         // Refit the active terminal after the height changes so xterm
         // matches the new visible area.
-        if (attachFit) {
-            try { attachFit.fit(); } catch (e) {}
-        }
-        if (typeof sendAttachResize === 'function') sendAttachResize();
+        refitActiveAttach();
     }
     if (minBtn) {
         minBtn.addEventListener('click', function(e) {
@@ -692,10 +689,7 @@
             outputPanel.style.height = px + 'px';
             try { localStorage.setItem(STORAGE_KEY, String(px)); } catch (e) {}
             // Refit any live attach so xterm + PTY agree on cols/rows.
-            if (attachFit) {
-                try { attachFit.fit(); } catch (e) {}
-            }
-            if (typeof sendAttachResize === 'function') sendAttachResize();
+            refitActiveAttach();
         }
         var saved = NaN;
         try { saved = parseInt(localStorage.getItem(STORAGE_KEY), 10); } catch (e) {}
@@ -3549,143 +3543,39 @@
     // ============================================
     // INTERACTIVE TMUX ATTACH (xterm.js + WebSocket)
     // ============================================
-    // Wire protocol: ttyd-compatible single-byte command prefix.
-    //   Server → Client: '0'+bytes=OUTPUT, '1'+text=WINDOW_TITLE, '2'+json=PREFS
-    //   Client → Server: '0'+bytes=INPUT, '1'+json={cols,rows}=RESIZE,
-    //                    '2'=PAUSE, '3'=RESUME
-    //
-    // Single-pane attach: opening a preview for a new session implicitly
-    // detaches the previous one. Multi-terminal (parallel attaches behind
-    // tabs) is a follow-up — state is encapsulated below to make that
-    // refactor mechanical when the UI grows tabs.
-    var attachTerm = null;
-    var attachFit = null;
-    var attachWs = null;
-    var attachResizeHandler = null;
-    var attachSessionName = '';
-    var attachUserClosed = false;
-    var attachRetryAttempt = 0;
-    var attachRetryTimer = null;
-    // attachTargets controls which DOM nodes the attach machinery binds to.
-    // After the session-preview unification, every attach mounts into the
-    // single output-panel terminal host. attachTargets is kept as a
-    // structure so a future second surface (e.g. picture-in-picture) can
-    // still re-bind without reworking the attach machinery.
+    // The xterm + WebSocket + ttyd-wire plumbing lives in the shared
+    // factory (static/terminal-attach.js, also used by the pop-out
+    // console window). Here we only manage one active attach at a time,
+    // bound to the output-panel terminal host, plus the show/hide of its
+    // wrap element and the dashboard's pause-refresh behavior.
+    var currentAttach = null;
+    // attachTargets controls which DOM nodes the attach binds to. Every
+    // attach currently mounts into the output-panel terminal host; the
+    // structure is retained so a future surface can re-bind via the
+    // optional `targets` arg without reworking callers.
     var attachTargets = {
         wrapId:   'output-panel-terminal-wrap',
         termId:   'output-panel-terminal',
         statusId: 'output-panel-status',
     };
 
-    function scheduleAttachReconnect(reason) {
-        if (attachUserClosed) return;
-        if (!attachSessionName) return;
-        attachRetryAttempt++;
-        // Exponential backoff with jitter, capped at 30s. ttyd/gotty use
-        // the same family of delays so the UX matches what ops expects.
-        var base = Math.min(30000, 500 * Math.pow(2, attachRetryAttempt - 1));
-        var delay = base + Math.floor(Math.random() * 250);
-        var statusEl = document.getElementById(attachTargets.statusId);
-        if (statusEl) {
-            statusEl.textContent = 'reconnecting #' + attachRetryAttempt +
-                ' in ' + Math.round(delay / 1000) + 's — ' + reason;
-        }
-        clearTimeout(attachRetryTimer);
-        attachRetryTimer = setTimeout(function() {
-            if (attachUserClosed) return;
-            connectAttachWs(attachSessionName);
-        }, delay);
+    // refitActiveAttach re-fits the live terminal to its container and
+    // pushes the new size to the PTY. Safe to call when nothing is attached.
+    function refitActiveAttach() {
+        if (currentAttach) currentAttach.refit();
     }
-
-    function wsSendCmd(cmd, payload) {
-        if (!attachWs || attachWs.readyState !== 1) return;
-        var prefix = new Uint8Array([cmd.charCodeAt(0)]);
-        if (payload == null || payload === '') {
-            attachWs.send(prefix);
-            return;
-        }
-        if (typeof payload === 'string') {
-            // Concat as Uint8Array so server sees one frame, raw bytes.
-            var enc = new TextEncoder().encode(payload);
-            var out = new Uint8Array(1 + enc.length);
-            out[0] = prefix[0];
-            out.set(enc, 1);
-            attachWs.send(out);
-        } else {
-            var out2 = new Uint8Array(1 + payload.length);
-            out2[0] = prefix[0];
-            out2.set(payload, 1);
-            attachWs.send(out2);
-        }
-    }
-
-    function connectAttachWs(sessionName) {
-        var statusEl = document.getElementById(attachTargets.statusId);
-        var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        var url = proto + '//' + window.location.host + '/api/session/attach?session=' + encodeURIComponent(sessionName);
-        attachWs = new WebSocket(url);
-        attachWs.binaryType = 'arraybuffer';
-
-        attachWs.onopen = function() {
-            attachRetryAttempt = 0;
-            if (statusEl) statusEl.textContent = 'live';
-            sendAttachResize();
-        };
-        attachWs.onmessage = function(ev) {
-            var bytes;
-            if (typeof ev.data === 'string') {
-                bytes = new TextEncoder().encode(ev.data);
-            } else {
-                bytes = new Uint8Array(ev.data);
-            }
-            if (bytes.length === 0) return;
-            var cmd = String.fromCharCode(bytes[0]);
-            var payload = bytes.subarray(1);
-            switch (cmd) {
-                case '0': // OUTPUT
-                    if (attachTerm) attachTerm.write(payload);
-                    break;
-                case '1': // SET_WINDOW_TITLE
-                    var title = new TextDecoder().decode(payload);
-                    // Route the tmux window title to the output panel
-                    // header tooltip so the user can hover the active tab
-                    // label to see the underlying tmux window name.
-                    if (outputCmd) outputCmd.title = title;
-                    break;
-                case '2': // SET_PREFERENCES — ignored
-                    break;
-                default:
-                    // Forward-compatible: silently drop unknown opcodes.
-            }
-        };
-        attachWs.onclose = function(ev) {
-            var reason = (ev && ev.reason) ? ev.reason
-                : (ev && ev.code ? 'code ' + ev.code : 'closed');
-            if (attachUserClosed) {
-                if (statusEl) statusEl.textContent = 'disconnected';
-                return;
-            }
-            scheduleAttachReconnect(reason);
-        };
-        attachWs.onerror = function() {
-            if (statusEl && !attachUserClosed) statusEl.textContent = 'ws error';
-        };
-    }
+    // Back-compat alias for the panel resize / minimize handlers.
+    function sendAttachResize() { refitActiveAttach(); }
 
     function openSessionAttach(sessionName, targets) {
-        if (typeof Terminal === 'undefined') {
+        if (typeof Terminal === 'undefined' || !window.GTTerminalAttach) {
             alert('xterm.js failed to load; terminal unavailable');
             return;
         }
-        // Tear down any prior attach BEFORE swapping targets — otherwise
-        // closeSessionAttachInner would read the new attachTargets and hide
-        // the wrap we're about to mount into, leaving xterm in a 0×0
-        // hidden node.
+        // Tear down any prior attach BEFORE swapping targets so the close
+        // path hides the old wrap, not the one we're about to mount into.
         closeSessionAttachInner();
 
-        // Update module-scope targets so child fns (connectAttachWs,
-        // closeSessionAttachInner) bind to the right DOM nodes. Default to
-        // the unified output-panel terminal host.
         attachTargets = targets || {
             wrapId:   'output-panel-terminal-wrap',
             termId:   'output-panel-terminal',
@@ -3696,134 +3586,35 @@
         if (!termEl || !wrapEl) return;
         wrapEl.style.display = 'flex';
 
-        attachSessionName = sessionName;
-        attachUserClosed = false;
-        attachRetryAttempt = 0;
-
-        attachTerm = new Terminal({
-            fontFamily: 'monospace',
-            fontSize: 13,
-            cursorBlink: true,
-            convertEol: false,
-            allowProposedApi: true,
-            scrollback: 50000,
-            scrollOnUserInput: true
+        var statusEl = document.getElementById(attachTargets.statusId);
+        currentAttach = window.GTTerminalAttach.create({
+            sessionName: sessionName,
+            onStatus: function(text) { if (statusEl) statusEl.textContent = text; },
+            // Surface the tmux window title as the panel header tooltip.
+            onTitle: function(title) { if (outputCmd) outputCmd.title = title; },
         });
-        if (window.FitAddon && window.FitAddon.FitAddon) {
-            attachFit = new window.FitAddon.FitAddon();
-            attachTerm.loadAddon(attachFit);
-        }
-        if (window.WebLinksAddon && window.WebLinksAddon.WebLinksAddon) {
-            attachTerm.loadAddon(new window.WebLinksAddon.WebLinksAddon());
-        }
-        attachTerm.open(termEl);
-        if (attachFit) {
-            try { attachFit.fit(); } catch (e) {}
-        }
+        currentAttach.mount(termEl);
 
-        // Force-route Ctrl+C / Ctrl+Z / Ctrl+\ / Ctrl+D to the PTY instead
-        // of the browser. Without this xterm.js bubbles Ctrl+C to the
-        // browser which treats it as Copy (especially with any selection).
-        // Preserve copy only when text is actively selected.
-        attachTerm.attachCustomKeyEventHandler(function(ev) {
-            if (ev.type !== 'keydown') return true;
-            if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.altKey) return true;
-            var sendByte = null;
-            switch (ev.key) {
-                case 'c': case 'C': sendByte = '\x03'; break;
-                case 'z': case 'Z': sendByte = '\x1a'; break;
-                case '\\':          sendByte = '\x1c'; break;
-                case 'd': case 'D': sendByte = '\x04'; break;
-            }
-            if (!sendByte) return true;
-            if (sendByte === '\x03' && attachTerm.hasSelection && attachTerm.hasSelection()) {
-                return true;
-            }
-            wsSendCmd('0', sendByte);
-            ev.preventDefault();
-            ev.stopPropagation();
-            return false;
-        });
-
-        attachTerm.onData(function(data) {
-            wsSendCmd('0', data);
-        });
-
-        // Resize on window OR when the user drags the terminal's CSS resize
-        // handle. ResizeObserver covers the manual drag; window resize
-        // covers responsive layout changes.
-        attachResizeHandler = function() {
-            if (attachFit) {
-                try { attachFit.fit(); } catch (e) {}
-            }
-            sendAttachResize();
-        };
-        window.addEventListener('resize', attachResizeHandler);
-        if (typeof ResizeObserver !== 'undefined') {
-            attachTerm._gtObserver = new ResizeObserver(attachResizeHandler);
-            attachTerm._gtObserver.observe(termEl);
-        }
-
-        connectAttachWs(sessionName);
-
-        // Pause dashboard re-renders while the terminal is live; morphing
-        // the DOM would wipe the xterm canvas and drop focus, making the
-        // terminal feel broken even though the WS is connected.
-        // hx-preserve on #output-panel-terminal-wrap is a belt-and-braces
-        // second line of defense in case a refresh slips through.
+        // Pause dashboard re-renders while the terminal is live; a morph
+        // would wipe the xterm canvas and drop focus. hx-preserve on
+        // #output-panel-terminal-wrap is a second line of defense.
         window.pauseRefresh = true;
         setTimeout(function() {
-            if (attachTerm) attachTerm.focus();
-            var termEl = document.getElementById(attachTargets.termId);
-            if (termEl) {
-                termEl.scrollIntoView({block: 'nearest', behavior: 'smooth'});
-            }
+            if (currentAttach) currentAttach.focus();
+            if (termEl) termEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
         }, 50);
     }
 
-    function sendAttachResize() {
-        if (!attachWs || attachWs.readyState !== 1 || !attachTerm) return;
-        wsSendCmd('1', JSON.stringify({
-            cols: attachTerm.cols,
-            rows: attachTerm.rows
-        }));
-    }
-
     function closeSessionAttachInner() {
-        attachUserClosed = true;
-        if (attachRetryTimer) {
-            clearTimeout(attachRetryTimer);
-            attachRetryTimer = null;
-        }
-        attachRetryAttempt = 0;
-        attachSessionName = '';
-        if (attachWs) {
-            try { attachWs.close(); } catch (e) {}
-            attachWs = null;
-        }
-        if (attachTerm) {
-            if (attachTerm._gtObserver) {
-                try { attachTerm._gtObserver.disconnect(); } catch (e) {}
-                attachTerm._gtObserver = null;
-            }
-            try { attachTerm.dispose(); } catch (e) {}
-            attachTerm = null;
-        }
-        attachFit = null;
-        if (attachResizeHandler) {
-            window.removeEventListener('resize', attachResizeHandler);
-            attachResizeHandler = null;
+        if (currentAttach) {
+            currentAttach.close();
+            currentAttach = null;
         }
         // Hide whichever wrap we were bound to so its slot stops eating
         // layout space when the user reopens a non-terminal view there.
         var wrapEl = document.getElementById(attachTargets.wrapId);
         if (wrapEl) wrapEl.style.display = 'none';
     }
-
-    // (The session-preview "Back" button and its terminal-resize drag
-    // handler were removed alongside the session-preview pane. The
-    // output panel's own top-edge drag handle now resizes the unified
-    // terminal surface.)
 
 
     // ============================================

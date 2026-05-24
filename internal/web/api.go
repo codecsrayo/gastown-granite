@@ -290,88 +290,22 @@ func (h *APIHandler) runGtCommand(ctx context.Context, timeout time.Duration, ar
 	return output, nil
 }
 
-// spawnConsoleSession creates a detached tmux session that runs the gt
-// command and keeps the pane open afterwards so the user can read the exit
-// banner. Returns the tmux session name, which the dashboard hands off to
-// the existing session_attach WebSocket. The name starts with "gt-" so it
-// passes session.HasKnownPrefix in handleSessionAttach.
+// spawnConsoleSession wraps `gt <args>` so the session stays alive after
+// the command exits, then defers to spawnTmuxConsole (tmux_console.go) for
+// the actual tmux setup. Returns the new gt-console-* session name.
 func (h *APIHandler) spawnConsoleSession(args []string) (string, error) {
 	gtPath := h.gtPath
 	if gtPath == "" {
 		gtPath = "gt"
 	}
-
-	// Args were already SanitizeArgs'd to safe characters. They're
-	// space-joined into a single shell command for tmux to execute via the
-	// default shell. After the gt command finishes, exec the user's login
-	// shell so the tmux session stays alive — the user reads the output,
-	// runs follow-up commands, and closes the pane when ready (Close in
-	// the dashboard kills the session via /api/session/kill).
-	gtCmd := gtPath
-	for _, a := range args {
-		gtCmd += " " + a
-	}
-	wrapper := gtCmd + `; printf '\n[exited %d — type exit or close to end]\n' "$?"; ` +
-		`exec "${SHELL:-/bin/bash}" -l`
-
-	sessionName := fmt.Sprintf("gt-console-%d", time.Now().UnixNano())
-
-	tmuxArgs := []string{}
-	if sock := tmux.GetDefaultSocket(); sock != "" {
-		tmuxArgs = append(tmuxArgs, "-L", sock)
-	}
-	// Compound command: bump history-limit BEFORE creating the pane so it
-	// applies to the new window. Default 2000 lines is too short when the
-	// user switches tabs (xterm is disposed and only capture-pane refills
-	// the browser scrollback). 50000 lines comfortably covers long
-	// command output.
-	tmuxArgs = append(tmuxArgs,
-		"set-option", "-g", "history-limit", consoleHistoryLimit, ";",
-		"new-session", "-d", "-s", sessionName, wrapper,
-	)
-
-	cmd := exec.Command("tmux", tmuxArgs...)
-	if h.workDir != "" {
-		cmd.Dir = h.workDir
-	}
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("tmux new-session: %w (%s)", err, strings.TrimSpace(string(out)))
-	}
-	return sessionName, nil
+	return spawnTmuxConsole(h.workDir, gtConsoleExitWrapper(gtPath, args))
 }
 
-// consoleHistoryLimit caps the tmux per-pane scrollback for spawned
-// gt-console-* sessions. Kept in sync with the capture-pane `-S` bound in
-// session_attach.go and xterm.js's scrollback option on the client.
-const consoleHistoryLimit = "50000"
-
-// spawnShellSession creates a detached tmux session running the user's
-// default login shell (no gt command pre-baked). Used by the palette's
-// "console" entry so the operator gets a live terminal in the browser for
-// ad-hoc commands. Distinct from spawnConsoleSession, which wraps a gt
-// invocation; here tmux just opens its default shell.
+// spawnShellSession starts a bare login shell — no gt command pre-baked.
+// Used by the palette `console` entry so the operator gets a live terminal
+// in the browser for ad-hoc commands.
 func (h *APIHandler) spawnShellSession() (string, error) {
-	sessionName := fmt.Sprintf("gt-console-%d", time.Now().UnixNano())
-
-	tmuxArgs := []string{}
-	if sock := tmux.GetDefaultSocket(); sock != "" {
-		tmuxArgs = append(tmuxArgs, "-L", sock)
-	}
-	// Bump history-limit before creating the pane (see spawnConsoleSession),
-	// then start the user's default shell with no command wrapper.
-	tmuxArgs = append(tmuxArgs,
-		"set-option", "-g", "history-limit", consoleHistoryLimit, ";",
-		"new-session", "-d", "-s", sessionName,
-	)
-
-	cmd := exec.Command("tmux", tmuxArgs...)
-	if h.workDir != "" {
-		cmd.Dir = h.workDir
-	}
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("tmux new-session: %w (%s)", err, strings.TrimSpace(string(out)))
-	}
-	return sessionName, nil
+	return spawnTmuxConsole(h.workDir, "")
 }
 
 // handleSessionKill terminates an ephemeral console tmux session created by
@@ -384,8 +318,8 @@ func (h *APIHandler) handleSessionKill(w http.ResponseWriter, r *http.Request) {
 		h.sendError(w, "missing session", http.StatusBadRequest)
 		return
 	}
-	if !strings.HasPrefix(sessionName, "gt-console-") {
-		h.sendError(w, "kill restricted to gt-console-* sessions", http.StatusForbidden)
+	if !strings.HasPrefix(sessionName, consoleSessionPrefix) {
+		h.sendError(w, "kill restricted to "+consoleSessionPrefix+"* sessions", http.StatusForbidden)
 		return
 	}
 	for _, c := range sessionName {
