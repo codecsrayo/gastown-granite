@@ -70,6 +70,10 @@ func DefaultLifecycleConfig() *DaemonPatrolConfig {
 				Enabled:     true,
 				IntervalStr: "5m",
 			},
+			QuotaProber: &QuotaProberConfig{
+				Enabled:     true,
+				IntervalStr: "2m",
+			},
 			LoginWatch: &LoginWatchConfig{
 				Enabled:     true,
 				IntervalStr: "30s",
@@ -141,6 +145,10 @@ func EnsureLifecycleDefaults(config *DaemonPatrolConfig) bool {
 	}
 	if p.QuotaDog == nil {
 		p.QuotaDog = d.QuotaDog
+		changed = true
+	}
+	if p.QuotaProber == nil {
+		p.QuotaProber = d.QuotaProber
 		changed = true
 	}
 	if p.LoginWatch == nil {

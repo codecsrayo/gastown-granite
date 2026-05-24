@@ -695,6 +695,20 @@ func (d *Daemon) Run() (err error) {
 		d.logger.Printf("Quota dog ticker started (interval %v)", interval)
 	}
 
+	// Start quota prober ticker if configured.
+	// Actively probes limited accounts to validate reactivation, since the
+	// provider's shown reset time is imprecise. Marks probed-clean accounts
+	// available and emits quota_reactivated events.
+	var quotaProberTicker *time.Ticker
+	var quotaProberChan <-chan time.Time
+	if d.isPatrolActive("quota_prober") {
+		interval := quotaProberInterval(d.patrolConfig)
+		quotaProberTicker = time.NewTicker(interval)
+		quotaProberChan = quotaProberTicker.C
+		defer quotaProberTicker.Stop()
+		d.logger.Printf("Quota prober ticker started (interval %v)", interval)
+	}
+
 	// Start services_up ticker if configured.
 	// Periodically runs `gt up` (idempotent) so any expected service that is
 	// no longer running gets re-launched. Self-healing for missing agents.
@@ -828,6 +842,14 @@ func (d *Daemon) Run() (err error) {
 			// rotates credentials to available accounts via keychain swap.
 			if !d.isShutdownInProgress() {
 				d.runQuotaDog()
+			}
+
+		case <-quotaProberChan:
+			// Quota prober — probes limited accounts to validate reactivation
+			// (the shown reset time is imprecise), marking probed-clean accounts
+			// available and emitting quota_reactivated events.
+			if !d.isShutdownInProgress() {
+				d.runQuotaProber()
 			}
 
 		case <-servicesUpChan:

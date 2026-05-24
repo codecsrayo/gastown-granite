@@ -90,6 +90,7 @@ const (
 	TypeQuotaTokenExpired = "quota_token_expired" // Account OAuth token detected expired
 	TypeQuotaBlocked      = "quota_blocked"       // Limited sessions with no available accounts
 	TypeQuotaAssigned     = "quota_assigned"      // Rotation plan snapshot (configDir → handle)
+	TypeQuotaReactivated  = "quota_reactivated"   // Limited account probe succeeded → available
 )
 
 // EventsFile is the name of the raw events log.
@@ -439,6 +440,20 @@ func QuotaClearedPayload(account, previousResetsAt string) map[string]interface{
 		"account":            account,
 		"previous_resets_at": previousResetsAt,
 	}
+}
+
+// QuotaReactivatedPayload describes a limited account that a live probe
+// confirmed is usable again — distinct from quota_cleared, which fires off the
+// imprecise time-based reset window.
+func QuotaReactivatedPayload(account, previousResetsAt string) map[string]interface{} {
+	p := map[string]interface{}{
+		"account": account,
+		"via":     "probe",
+	}
+	if previousResetsAt != "" {
+		p["previous_resets_at"] = previousResetsAt
+	}
+	return p
 }
 
 // QuotaTokenExpiredPayload describes a token expiry detection.

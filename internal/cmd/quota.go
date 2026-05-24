@@ -818,6 +818,168 @@ func runQuotaClear(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// Probe command flags
+var (
+	probeAll   bool
+	probeModel string
+	probeLead  time.Duration
+)
+
+var quotaProbeCmd = &cobra.Command{
+	Use:   "probe [handle...]",
+	Short: "Actively test whether limited accounts are usable again",
+	Long: `Probe rate-limited accounts to validate they are usable again.
+
+The provider's shown reset time is imprecise, so rather than trust it, this
+runs a tiny headless 'claude --print' against each limited account's own config
+dir and inspects the result. A rate-limit signature means still limited; a clean
+completion means the account is back — it is marked available and a
+quota_reactivated event is emitted.
+
+By default only accounts that are "due" are probed: those whose shown reset time
+is within the lead window (or already past), plus any with no parseable reset
+time. Use --all to probe every limited account regardless of timing.
+
+Examples:
+  gt quota probe              # Probe all due limited accounts
+  gt quota probe work         # Probe a specific account (ignores gating)
+  gt quota probe --all        # Probe every limited account now
+  gt quota probe --json       # JSON output`,
+	RunE: runQuotaProbe,
+}
+
+// probeReport is the per-account outcome of a probe pass.
+type probeReport struct {
+	Handle       string `json:"handle"`
+	ConfigDir    string `json:"config_dir,omitempty"`
+	Reactivated  bool   `json:"reactivated"`
+	StillLimited bool   `json:"still_limited"`
+	Skipped      bool   `json:"skipped,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+func runQuotaProbe(cmd *cobra.Command, args []string) error {
+	townRoot, err := workspace.FindFromCwd()
+	if err != nil {
+		return fmt.Errorf("finding town root: %w", err)
+	}
+
+	acctCfg, err := config.LoadAccountsConfig(constants.MayorAccountsPath(townRoot))
+	if err != nil {
+		return fmt.Errorf("loading accounts config: %w", err)
+	}
+
+	mgr := quota.NewManager(townRoot)
+	state, err := mgr.Load()
+	if err != nil {
+		return fmt.Errorf("loading quota state: %w", err)
+	}
+
+	claudePath, err := exec.LookPath("claude")
+	if err != nil {
+		return fmt.Errorf("claude binary not found in PATH (required for probing): %w", err)
+	}
+
+	// Resolve the set of handles to probe. Explicit args bypass the due-window
+	// gate (the operator asked for it); a bare invocation probes limited accounts.
+	explicit := len(args) > 0
+	targets := args
+	if !explicit {
+		for handle, acctState := range state.Accounts {
+			if acctState.Status == config.QuotaStatusLimited {
+				targets = append(targets, handle)
+			}
+		}
+		sort.Strings(targets)
+	}
+
+	runner := quota.NewClaudeProbeRunner(claudePath, probeModel, quota.DefaultProbePrompt, quota.DefaultProbeTimeout)
+	now := time.Now()
+	reports := make([]probeReport, 0, len(targets))
+
+	for _, handle := range targets {
+		acctState := state.Accounts[handle]
+		rep := probeReport{Handle: handle}
+
+		if acctState.Status != config.QuotaStatusLimited {
+			rep.Skipped = true
+			rep.Reason = "not limited"
+			reports = append(reports, rep)
+			continue
+		}
+
+		if !explicit && !probeAll && !quota.ShouldProbe(acctState, now, probeLead) {
+			rep.Skipped = true
+			rep.Reason = "not due (before reset window)"
+			reports = append(reports, rep)
+			continue
+		}
+
+		acct := acctCfg.GetAccount(handle)
+		if acct == nil || acct.ConfigDir == "" {
+			rep.Skipped = true
+			rep.Reason = "no config dir registered"
+			reports = append(reports, rep)
+			continue
+		}
+		rep.ConfigDir = acct.ConfigDir
+
+		output, runErr := runner(cmd.Context(), acct.ConfigDir)
+		outcome := quota.ClassifyProbe(output, runErr)
+
+		if outcome.Enabled {
+			if err := mgr.MarkAvailable(handle); err != nil {
+				return fmt.Errorf("marking %s available: %w", handle, err)
+			}
+			_ = events.LogFeed(events.TypeQuotaReactivated, "quota",
+				events.QuotaReactivatedPayload(handle, acctState.ResetsAt))
+			rep.Reactivated = true
+		} else {
+			rep.StillLimited = true
+			if outcome.Err != nil && !outcome.RateLimited {
+				rep.Reason = "probe failed: " + outcome.Err.Error()
+			}
+		}
+		reports = append(reports, rep)
+	}
+
+	if quotaJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(reports)
+	}
+	return printProbeText(reports)
+}
+
+func printProbeText(reports []probeReport) error {
+	reactivated := 0
+	probed := 0
+	for _, r := range reports {
+		switch {
+		case r.Reactivated:
+			reactivated++
+			probed++
+			fmt.Printf(" %s %-20s → available\n", style.SuccessPrefix, r.Handle)
+		case r.StillLimited:
+			probed++
+			detail := ""
+			if r.Reason != "" {
+				detail = style.Dim.Render(" (" + r.Reason + ")")
+			}
+			fmt.Printf(" %s %-20s still limited%s\n", style.Warning.Render("~"), r.Handle, detail)
+		case r.Skipped:
+			fmt.Printf(" %s %-20s %s\n", style.Dim.Render("·"), r.Handle, style.Dim.Render(r.Reason))
+		}
+	}
+	if probed == 0 {
+		fmt.Printf(" %s No limited accounts due for probing\n", style.SuccessPrefix)
+	} else {
+		fmt.Println()
+		fmt.Printf(" %s probed %d, reactivated %d\n", style.Bold.Render("Summary:"), probed, reactivated)
+	}
+	return nil
+}
+
 // accountHandles returns sorted account handle names for error messages.
 func accountHandles(acctCfg *config.AccountsConfig) []string {
 	handles := make([]string, 0, len(acctCfg.Accounts))
@@ -1278,11 +1440,17 @@ func init() {
 	quotaWatchCmd.Flags().DurationVar(&watchInterval, "interval", 5*time.Minute, "Poll interval")
 	quotaWatchCmd.Flags().BoolVar(&watchDryRun, "dry-run", false, "Show detections without executing rotation")
 
+	quotaProbeCmd.Flags().BoolVar(&quotaJSON, "json", false, "Output as JSON")
+	quotaProbeCmd.Flags().BoolVar(&probeAll, "all", false, "Probe every limited account, ignoring the reset-window gate")
+	quotaProbeCmd.Flags().StringVar(&probeModel, "model", quota.DefaultProbeModel, "Model to use for the probe (empty = account default)")
+	quotaProbeCmd.Flags().DurationVar(&probeLead, "lead", quota.DefaultProbeLeadWindow, "Begin probing this long before the shown reset time")
+
 	quotaCmd.AddCommand(quotaStatusCmd)
 	quotaCmd.AddCommand(quotaScanCmd)
 	quotaCmd.AddCommand(quotaRotateCmd)
 	quotaCmd.AddCommand(quotaClearCmd)
 	quotaCmd.AddCommand(quotaWatchCmd)
+	quotaCmd.AddCommand(quotaProbeCmd)
 
 	rootCmd.AddCommand(quotaCmd)
 }

@@ -168,6 +168,7 @@ func TestEnsureLifecycleDefaults_FullyConfigured(t *testing.T) {
 			Handler:              &PatrolConfig{Enabled: false},
 			ServicesUp:           &ServicesUpConfig{Enabled: false},
 			QuotaDog:             &QuotaDogConfig{Enabled: false},
+			QuotaProber:          &QuotaProberConfig{Enabled: false},
 			LoginWatch:           &LoginWatchConfig{Enabled: false},
 		},
 	}
