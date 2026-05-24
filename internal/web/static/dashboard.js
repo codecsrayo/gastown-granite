@@ -388,10 +388,41 @@
     function showOutput(cmd, output) {
         outputCmd.textContent = 'gt ' + cmd;
         outputContent.textContent = output;
+        outputContent.style.display = '';
+        // If a live terminal was previously mounted here, tear it down so the
+        // pane reverts to its plain-text personality.
+        var termWrap = document.getElementById('output-panel-terminal-wrap');
+        if (termWrap && termWrap.style.display !== 'none') {
+            closeSessionAttachInner();
+        }
         outputPanel.classList.add('open');
     }
 
+    // showOutputTerminal hosts a live tmux attach in the same output panel
+    // headless commands use. The xterm.js wiring is the same as the
+    // session-preview pane (openSessionAttach), just bound to the output
+    // panel's terminal slot via attachTargets.
+    function showOutputTerminal(cmd, sessionName) {
+        outputCmd.textContent = 'gt ' + cmd;
+        outputContent.style.display = 'none';
+        outputContent.textContent = '';
+        var termWrap = document.getElementById('output-panel-terminal-wrap');
+        if (termWrap) termWrap.style.display = 'flex';
+        outputPanel.classList.add('open');
+        openSessionAttach(sessionName, {
+            wrapId:   'output-panel-terminal-wrap',
+            termId:   'output-panel-terminal',
+            statusId: 'output-panel-status',
+        });
+    }
+
     document.getElementById('output-close-btn').onclick = function() {
+        // Closing the panel must also tear down any live attach — otherwise
+        // the WS keeps draining tmux output into a hidden buffer forever.
+        var termWrap = document.getElementById('output-panel-terminal-wrap');
+        if (termWrap && termWrap.style.display !== 'none') {
+            closeSessionAttachInner();
+        }
         outputPanel.classList.remove('open');
     };
 
@@ -811,15 +842,15 @@
         })
         .then(function(r) { return r.json(); })
         .then(function(data) {
-            // Interactive commands (e.g. `account login`) are dispatched into
-            // a fresh tmux session server-side; the response carries the
-            // session name. Open the xterm.js attach panel so the user can
-            // drive the OAuth flow / interactive prompt directly.
+            // Interactive commands (e.g. `account login`, `console`) are
+            // dispatched into a fresh tmux session server-side; the response
+            // carries the session name. Mount the xterm.js attach in the
+            // output panel — the same surface that hosts headless command
+            // output — so the user doesn't have to look elsewhere for the
+            // live terminal.
             if (data.success && data.console_session) {
                 showToast('info', 'Console opened', 'gt ' + cmdName + ' → ' + data.console_session);
-                if (typeof openSessionPreview === 'function') {
-                    openSessionPreview(data.console_session);
-                }
+                showOutputTerminal(cmdName, data.console_session);
                 return;
             }
             if (data.success) {
@@ -3273,6 +3304,15 @@
     var attachUserClosed = false;
     var attachRetryAttempt = 0;
     var attachRetryTimer = null;
+    // attachTargets controls which DOM nodes the attach machinery binds to.
+    // Session-row clicks use the session-preview pane (default); palette
+    // Interactive commands use the output-panel terminal slot so the live
+    // console appears in the same place as headless command output.
+    var attachTargets = {
+        wrapId:   'session-preview-terminal-wrap',
+        termId:   'session-preview-terminal',
+        statusId: 'session-preview-status',
+    };
 
     function scheduleAttachReconnect(reason) {
         if (attachUserClosed) return;
@@ -3282,7 +3322,7 @@
         // the same family of delays so the UX matches what ops expects.
         var base = Math.min(30000, 500 * Math.pow(2, attachRetryAttempt - 1));
         var delay = base + Math.floor(Math.random() * 250);
-        var statusEl = document.getElementById('session-preview-status');
+        var statusEl = document.getElementById(attachTargets.statusId);
         if (statusEl) {
             statusEl.textContent = 'reconnecting #' + attachRetryAttempt +
                 ' in ' + Math.round(delay / 1000) + 's — ' + reason;
@@ -3317,7 +3357,7 @@
     }
 
     function connectAttachWs(sessionName) {
-        var statusEl = document.getElementById('session-preview-status');
+        var statusEl = document.getElementById(attachTargets.statusId);
         var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         var url = proto + '//' + window.location.host + '/api/session/attach?session=' + encodeURIComponent(sessionName);
         attachWs = new WebSocket(url);
@@ -3367,13 +3407,21 @@
         };
     }
 
-    function openSessionAttach(sessionName) {
+    function openSessionAttach(sessionName, targets) {
         if (typeof Terminal === 'undefined') {
             alert('xterm.js failed to load; terminal unavailable');
             return;
         }
-        var wrapEl = document.getElementById('session-preview-terminal-wrap');
-        var termEl = document.getElementById('session-preview-terminal');
+        // Update module-scope targets so child fns (connectAttachWs,
+        // closeSessionAttachInner) bind to the right DOM nodes. Default to
+        // the session-preview pane for back-compat with session-row clicks.
+        attachTargets = targets || {
+            wrapId:   'session-preview-terminal-wrap',
+            termId:   'session-preview-terminal',
+            statusId: 'session-preview-status',
+        };
+        var wrapEl = document.getElementById(attachTargets.wrapId);
+        var termEl = document.getElementById(attachTargets.termId);
         if (!termEl || !wrapEl) return;
         wrapEl.style.display = 'flex';
 
@@ -3497,6 +3545,10 @@
             window.removeEventListener('resize', attachResizeHandler);
             attachResizeHandler = null;
         }
+        // Hide whichever wrap we were bound to so its slot stops eating
+        // layout space when the user reopens a non-terminal view there.
+        var wrapEl = document.getElementById(attachTargets.wrapId);
+        if (wrapEl) wrapEl.style.display = 'none';
     }
 
     // Back button tears down the live terminal AND restores the sessions

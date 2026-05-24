@@ -11,7 +11,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
-    <link rel="stylesheet" href="/static/dashboard.css?v=9">
+    <link rel="stylesheet" href="/static/dashboard.css?v=10">
 </head>
 <body>
     <div class="dashboard" id="dashboard-main" hx-get="/" hx-trigger="sse:dashboard-update, every 30s [!window.pauseRefresh && !window.sseConnected]" hx-swap="morph:outerHTML" hx-ext="morph">
@@ -1104,6 +1104,7 @@
             <span class="output-panel-title">
                 <span>📋</span>
                 <span id="output-panel-cmd">Command Output</span>
+                <span id="output-panel-status" class="output-panel-status"></span>
             </span>
             <div class="output-panel-actions">
                 <button id="output-copy-btn" class="output-panel-btn">Copy</button>
@@ -1111,8 +1112,14 @@
             </div>
         </div>
         <div id="output-panel-content" class="output-panel-content"></div>
+        <!-- Live tmux terminal slot for Interactive commands. Same xterm.js
+             wiring as #session-preview-terminal; hx-preserve keeps idiomorph
+             from wiping the canvas across dashboard refreshes. -->
+        <div id="output-panel-terminal-wrap" style="display:none;" hx-preserve="true">
+            <div id="output-panel-terminal" class="output-panel-terminal"></div>
+        </div>
     </div>
 
-    <script src="/static/dashboard.js?v=15"></script>
+    <script src="/static/dashboard.js?v=16"></script>
 </body>
 </html>

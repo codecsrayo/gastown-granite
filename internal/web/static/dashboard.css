@@ -4125,3 +4125,34 @@
             border-radius: 3px;
             color: var(--text-primary);
         }
+
+        /* Live tmux terminal mounted inside the command output panel.
+         * Mirrors #session-preview-terminal so the same xterm.js wiring
+         * produces an identical look-and-feel in both surfaces. */
+        #output-panel-terminal-wrap {
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 auto;
+            min-height: 0;
+            padding: 6px 16px 8px;
+        }
+        .output-panel-terminal {
+            background: #000;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 4px;
+            flex: 1 1 auto;
+            min-height: 180px;
+            overflow: hidden;
+        }
+        .output-panel-terminal .xterm,
+        .output-panel-terminal .xterm-viewport,
+        .output-panel-terminal .xterm-screen {
+            height: 100% !important;
+        }
+        .output-panel-status {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-left: 8px;
+            font-weight: 400;
+        }
