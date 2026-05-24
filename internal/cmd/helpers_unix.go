@@ -65,6 +65,20 @@ func execAgent(cfg *config.RuntimeConfig, prompt string) error {
 	return syscall.Exec(agentPath, args, os.Environ())
 }
 
+// execClaudeLogin replaces the gt process with `claude` invoked under the
+// supplied CLAUDE_CONFIG_DIR. Hand-off via syscall.Exec is required because
+// Claude Code switches to non-interactive --print mode when its stdin isn't a
+// real TTY — wrapping it with exec.Command + Stdin=os.Stdin doesn't always
+// preserve the controlling terminal across the indirection.
+func execClaudeLogin(configDir string) error {
+	claudePath, err := exec.LookPath("claude")
+	if err != nil {
+		return fmt.Errorf("`claude` binary not found in PATH: %w", err)
+	}
+	env := append(os.Environ(), "CLAUDE_CONFIG_DIR="+configDir)
+	return syscall.Exec(claudePath, []string{"claude"}, env)
+}
+
 // execRuntime execs the runtime CLI, replacing the current process.
 // Used when we're already in the target session and just need to start the runtime.
 // If prompt is provided, it's passed according to the runtime's prompt mode.

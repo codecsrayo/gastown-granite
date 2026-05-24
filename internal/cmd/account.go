@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/steveyegge/gastown/internal/style"
 	"github.com/steveyegge/gastown/internal/util"
 	"github.com/steveyegge/gastown/internal/workspace"
+	"golang.org/x/term"
 )
 
 // Account command flags
@@ -524,27 +524,34 @@ func runAccountLogin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("config dir %s not accessible: %w", configDir, err)
 	}
 
-	claudePath, err := exec.LookPath("claude")
-	if err != nil {
-		return fmt.Errorf("`claude` binary not found in PATH — install Claude Code first: %w", err)
+	// Claude Code switches to non-interactive --print mode when stdin isn't a
+	// TTY (and then immediately bails with "Input must be provided either
+	// through stdin or as a prompt argument when using --print"). Detect the
+	// missing terminal up-front and print a copy-paste recipe instead of
+	// confusing the user with a child-process error.
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Println(style.Warning.Render("Not running in an interactive terminal."))
+		fmt.Println("Run this in your shell to complete the OAuth login:")
+		fmt.Println()
+		fmt.Printf("  CLAUDE_CONFIG_DIR=%s claude\n", configDir)
+		fmt.Println()
+		fmt.Println("Then type /login at the Claude prompt and complete the browser flow.")
+		return nil
 	}
 
 	fmt.Printf("%s %s\n", style.Bold.Render("Re-authenticating"), style.Bold.Render(handle))
 	fmt.Printf("Config dir: %s\n", configDir)
 	fmt.Println(style.Dim.Render("Inside Claude, type /login and complete the browser flow, then exit (Ctrl-D)."))
+	fmt.Println(style.Dim.Render("On exit, run `gt quota status` to confirm the refreshed token."))
 	fmt.Println()
 
-	c := exec.Command(claudePath) //nolint:gosec // G204: launching the user's own claude CLI by design
-	c.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+configDir)
-	c.Stdin = os.Stdin
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
-	if err := c.Run(); err != nil {
-		return fmt.Errorf("claude exited with error: %w", err)
+	// execClaudeLogin (helpers_unix.go / helpers_windows.go) hands the TTY
+	// over to claude — on Unix via syscall.Exec, so gt is fully replaced and
+	// claude inherits the controlling terminal cleanly. The success path
+	// never returns; the trailing line is reached only if exec fails.
+	if err := execClaudeLogin(configDir); err != nil {
+		return fmt.Errorf("launching claude: %w", err)
 	}
-
-	fmt.Println()
-	fmt.Println(style.Success.Render("Done."), "Run", style.Bold.Render("gt quota status"), "to confirm the refreshed token.")
 	return nil
 }
 
