@@ -469,9 +469,7 @@ func NewDashboardMux(fetcher ConvoyFetcher, webCfg *config.WebTimeoutsConfig) (h
 		return nil, err
 	}
 
-	defaultRunTimeout := config.ParseDurationOrDefault(webCfg.DefaultRunTimeout, 30*time.Second)
-	maxRunTimeout := config.ParseDurationOrDefault(webCfg.MaxRunTimeout, 60*time.Second)
-	apiHandler := NewAPIHandler(defaultRunTimeout, maxRunTimeout, csrfToken)
+	apiHandler := NewAPIHandler(csrfToken)
 
 	// Create static file server from embedded files
 	staticFS, err := fs.Sub(staticFiles, "static")

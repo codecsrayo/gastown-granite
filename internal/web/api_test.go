@@ -249,7 +249,7 @@ func TestParseCommandArgs(t *testing.T) {
 }
 
 func TestAPIHandler_Commands(t *testing.T) {
-	handler := NewAPIHandler(30*time.Second, 60*time.Second, "test-token")
+	handler := NewAPIHandler("test-token")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/commands", nil)
 	w := httptest.NewRecorder()
@@ -295,7 +295,7 @@ func TestAPIHandler_Commands(t *testing.T) {
 }
 
 func TestAPIHandler_Run_BlockedCommand(t *testing.T) {
-	handler := NewAPIHandler(30*time.Second, 60*time.Second, "test-token")
+	handler := NewAPIHandler("test-token")
 
 	body := `{"command": "delete everything"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/run", bytes.NewBufferString(body))
@@ -323,7 +323,7 @@ func TestAPIHandler_Run_BlockedCommand(t *testing.T) {
 }
 
 func TestAPIHandler_Run_InvalidJSON(t *testing.T) {
-	handler := NewAPIHandler(30*time.Second, 60*time.Second, "test-token")
+	handler := NewAPIHandler("test-token")
 
 	body := `{invalid json}`
 	req := httptest.NewRequest(http.MethodPost, "/api/run", bytes.NewBufferString(body))
@@ -339,7 +339,7 @@ func TestAPIHandler_Run_InvalidJSON(t *testing.T) {
 }
 
 func TestAPIHandler_Run_EmptyCommand(t *testing.T) {
-	handler := NewAPIHandler(30*time.Second, 60*time.Second, "test-token")
+	handler := NewAPIHandler("test-token")
 
 	body := `{"command": ""}`
 	req := httptest.NewRequest(http.MethodPost, "/api/run", bytes.NewBufferString(body))
@@ -355,7 +355,7 @@ func TestAPIHandler_Run_EmptyCommand(t *testing.T) {
 }
 
 func TestAPIHandler_Run_MissingCSRFToken(t *testing.T) {
-	handler := NewAPIHandler(30*time.Second, 60*time.Second, "test-token")
+	handler := NewAPIHandler("test-token")
 
 	body := `{"command": "status"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/run", bytes.NewBufferString(body))
@@ -382,7 +382,7 @@ func TestAPIHandler_Run_MissingCSRFToken(t *testing.T) {
 }
 
 func TestAPIHandler_Run_WrongCSRFToken(t *testing.T) {
-	handler := NewAPIHandler(30*time.Second, 60*time.Second, "test-token")
+	handler := NewAPIHandler("test-token")
 
 	body := `{"command": "status"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/run", bytes.NewBufferString(body))
@@ -398,7 +398,7 @@ func TestAPIHandler_Run_WrongCSRFToken(t *testing.T) {
 }
 
 func TestAPIHandler_Run_ConfirmRequired(t *testing.T) {
-	handler := NewAPIHandler(30*time.Second, 60*time.Second, "test-token")
+	handler := NewAPIHandler("test-token")
 
 	// "mail send" requires Confirm: true in AllowedCommands
 	body := `{"command": "mail send alice -s test -m hello"}`
@@ -423,7 +423,7 @@ func TestAPIHandler_Run_ConfirmRequired(t *testing.T) {
 }
 
 func TestAPIHandler_NotFound(t *testing.T) {
-	handler := NewAPIHandler(30*time.Second, 60*time.Second, "test-token")
+	handler := NewAPIHandler("test-token")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/unknown", nil)
 	w := httptest.NewRecorder()
@@ -460,8 +460,6 @@ func TestAPIHandler_Crew(t *testing.T) {
 	handler := &APIHandler{
 		gtPath:            "false", // fast-failing stub — crew handler gracefully returns empty on error
 		workDir:           t.TempDir(),
-		defaultRunTimeout: 5 * time.Second,
-		maxRunTimeout:     10 * time.Second,
 		cmdSem:            make(chan struct{}, maxConcurrentCommands),
 		csrfToken:         "test-token",
 	}
@@ -493,8 +491,6 @@ func TestAPIHandler_Ready(t *testing.T) {
 	handler := &APIHandler{
 		gtPath:            "false", // fast-failing stub — ready handler gracefully returns empty on error
 		workDir:           t.TempDir(),
-		defaultRunTimeout: 5 * time.Second,
-		maxRunTimeout:     10 * time.Second,
 		cmdSem:            make(chan struct{}, maxConcurrentCommands),
 		csrfToken:         "test-token",
 	}
@@ -523,7 +519,7 @@ func TestAPIHandler_Ready(t *testing.T) {
 }
 
 func TestAPIHandler_IssueCreate_MissingTitle(t *testing.T) {
-	handler := NewAPIHandler(30*time.Second, 60*time.Second, "test-token")
+	handler := NewAPIHandler("test-token")
 
 	body := `{"title": ""}`
 	req := httptest.NewRequest(http.MethodPost, "/api/issues/create", bytes.NewBufferString(body))
@@ -539,7 +535,7 @@ func TestAPIHandler_IssueCreate_MissingTitle(t *testing.T) {
 }
 
 func TestAPIHandler_IssueCreate_InvalidTitle(t *testing.T) {
-	handler := NewAPIHandler(30*time.Second, 60*time.Second, "test-token")
+	handler := NewAPIHandler("test-token")
 
 	tests := []struct {
 		name  string
@@ -571,7 +567,7 @@ func TestAPIHandler_IssueCreate_InvalidTitle(t *testing.T) {
 }
 
 func TestAPIHandler_IssueCreate_InvalidDescription(t *testing.T) {
-	handler := NewAPIHandler(30*time.Second, 60*time.Second, "test-token")
+	handler := NewAPIHandler("test-token")
 
 	payload := map[string]interface{}{
 		"title":       "Valid title",
@@ -591,7 +587,7 @@ func TestAPIHandler_IssueCreate_InvalidDescription(t *testing.T) {
 }
 
 func TestAPIHandler_IssueCreate_InvalidJSON(t *testing.T) {
-	handler := NewAPIHandler(30*time.Second, 60*time.Second, "test-token")
+	handler := NewAPIHandler("test-token")
 
 	body := `{not valid json}`
 	req := httptest.NewRequest(http.MethodPost, "/api/issues/create", bytes.NewBufferString(body))
@@ -858,7 +854,7 @@ func TestParseIssueShowJSON_InvalidInputs(t *testing.T) {
 }
 
 func TestAPIHandler_SSE_ContentType(t *testing.T) {
-	handler := NewAPIHandler(30*time.Second, 60*time.Second, "test-token")
+	handler := NewAPIHandler("test-token")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
 	// Cancel context quickly so the SSE handler returns instead of blocking
@@ -932,8 +928,6 @@ func TestOptionsCacheConcurrentAccess(t *testing.T) {
 	h := &APIHandler{
 		gtPath:            "echo", // won't actually be called for cache hits
 		workDir:           t.TempDir(),
-		defaultRunTimeout: 5 * time.Second,
-		maxRunTimeout:     10 * time.Second,
 		cmdSem:            make(chan struct{}, maxConcurrentCommands),
 	}
 
@@ -1084,8 +1078,6 @@ esac
 	h := &APIHandler{
 		gtPath:            gtPath,
 		workDir:           t.TempDir(),
-		defaultRunTimeout: 5 * time.Second,
-		maxRunTimeout:     10 * time.Second,
 		cmdSem:            make(chan struct{}, maxConcurrentCommands),
 	}
 
@@ -1136,8 +1128,6 @@ esac
 	h := &APIHandler{
 		gtPath:            gtPath,
 		workDir:           t.TempDir(),
-		defaultRunTimeout: 5 * time.Second,
-		maxRunTimeout:     10 * time.Second,
 		cmdSem:            make(chan struct{}, maxConcurrentCommands),
 	}
 
@@ -1180,8 +1170,6 @@ func TestHandleOptionsTypeRigsUsesConfigWithoutCommands(t *testing.T) {
 	h := &APIHandler{
 		gtPath:            gtPath,
 		workDir:           workDir,
-		defaultRunTimeout: 5 * time.Second,
-		maxRunTimeout:     10 * time.Second,
 		cmdSem:            make(chan struct{}, maxConcurrentCommands),
 	}
 
@@ -1231,8 +1219,6 @@ func TestHandleOptionsTypeRigsFindsConfigFromSubdir(t *testing.T) {
 	h := &APIHandler{
 		gtPath:            gtPath,
 		workDir:           subdir,
-		defaultRunTimeout: 5 * time.Second,
-		maxRunTimeout:     10 * time.Second,
 		cmdSem:            make(chan struct{}, maxConcurrentCommands),
 	}
 
@@ -1318,8 +1304,6 @@ func TestRunGtCommandSemaphore(t *testing.T) {
 	h := &APIHandler{
 		gtPath:            "sleep",
 		workDir:           t.TempDir(),
-		defaultRunTimeout: 5 * time.Second,
-		maxRunTimeout:     10 * time.Second,
 		cmdSem:            make(chan struct{}, 1),
 	}
 
@@ -1352,8 +1336,6 @@ func TestRunGtCommandSemaphoreContextCancel(t *testing.T) {
 	h := &APIHandler{
 		gtPath:            "sleep",
 		workDir:           t.TempDir(),
-		defaultRunTimeout: 5 * time.Second,
-		maxRunTimeout:     10 * time.Second,
 		cmdSem:            make(chan struct{}, 1), // 1 slot
 	}
 
@@ -1385,8 +1367,6 @@ func TestRunGtCommandSemaphoreTimeoutBudget(t *testing.T) {
 	h := &APIHandler{
 		gtPath:            "sleep",
 		workDir:           t.TempDir(),
-		defaultRunTimeout: 5 * time.Second,
-		maxRunTimeout:     10 * time.Second,
 		cmdSem:            make(chan struct{}, 1), // 1 slot
 	}
 
@@ -1428,8 +1408,6 @@ func TestHandleSessionPreviewPrefixValidation(t *testing.T) {
 	h := &APIHandler{
 		gtPath:            "true",
 		workDir:           t.TempDir(),
-		defaultRunTimeout: 1 * time.Second,
-		maxRunTimeout:     2 * time.Second,
 		cmdSem:            make(chan struct{}, 5),
 	}
 

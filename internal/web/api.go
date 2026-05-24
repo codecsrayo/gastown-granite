@@ -31,8 +31,6 @@ type CommandRequest struct {
 	// Command is the gt command to run (without the "gt" prefix).
 	// Example: "status --json" or "mail inbox"
 	Command string `json:"command"`
-	// Timeout in seconds (optional; see WebTimeoutsConfig for defaults)
-	Timeout int `json:"timeout,omitempty"`
 	// Confirmed must be true for commands that require confirmation.
 	Confirmed bool `json:"confirmed,omitempty"`
 }
@@ -62,9 +60,6 @@ type APIHandler struct {
 	gtPath string
 	// workDir is the working directory for command execution.
 	workDir string
-	// Configurable timeouts (from TownSettings.WebTimeouts)
-	defaultRunTimeout time.Duration
-	maxRunTimeout     time.Duration
 	// Options cache
 	optionsCache     *OptionsResponse
 	optionsCacheTime time.Time
@@ -95,8 +90,8 @@ const optionsCacheTTL = 30 * time.Second
 // handleOptions alone spawns 7; allow headroom for other concurrent handlers.
 const maxConcurrentCommands = 12
 
-// NewAPIHandler creates a new API handler with the given run timeouts and CSRF token.
-func NewAPIHandler(defaultRunTimeout, maxRunTimeout time.Duration, csrfToken string) *APIHandler {
+// NewAPIHandler creates a new API handler with the given CSRF token.
+func NewAPIHandler(csrfToken string) *APIHandler {
 	if csrfToken == "" {
 		log.Printf("WARNING: APIHandler created with empty CSRF token — POST requests will not be protected")
 	}
@@ -104,12 +99,10 @@ func NewAPIHandler(defaultRunTimeout, maxRunTimeout time.Duration, csrfToken str
 	// tests it returns the test binary, causing fork bombs when executed.
 	workDir, _ := os.Getwd()
 	return &APIHandler{
-		gtPath:            "gt",
-		workDir:           workDir,
-		defaultRunTimeout: defaultRunTimeout,
-		maxRunTimeout:     maxRunTimeout,
-		cmdSem:            make(chan struct{}, maxConcurrentCommands),
-		csrfToken:         csrfToken,
+		gtPath:    "gt",
+		workDir:   workDir,
+		cmdSem:    make(chan struct{}, maxConcurrentCommands),
+		csrfToken: csrfToken,
 	}
 }
 
@@ -199,26 +192,6 @@ func (h *APIHandler) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine timeout. Most commands cap at h.maxRunTimeout, but a command
-	// may declare a higher MaxTimeoutSec for known long-running bring-up work.
-	timeoutCap := h.maxRunTimeout
-	if meta.MaxTimeoutSec > 0 {
-		if override := time.Duration(meta.MaxTimeoutSec) * time.Second; override > timeoutCap {
-			timeoutCap = override
-		}
-	}
-	timeout := h.defaultRunTimeout
-	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
-	} else if meta.MaxTimeoutSec > 0 {
-		// No client-supplied timeout: use the command's own cap so long
-		// bring-ups don't die at the default 30s.
-		timeout = timeoutCap
-	}
-	if timeout > timeoutCap {
-		timeout = timeoutCap
-	}
-
 	// Parse command into args
 	args := parseCommandArgs(req.Command)
 	if len(args) == 0 {
@@ -229,63 +202,34 @@ func (h *APIHandler) handleRun(w http.ResponseWriter, r *http.Request) {
 	// Sanitize args
 	args = SanitizeArgs(args)
 
-	// Interactive commands need a real TTY (Claude OAuth REPL, etc.). Spawn
-	// a fresh tmux session and let the dashboard attach to it via the
-	// existing session_attach WebSocket — the command never touches the
-	// HTTP request's headless stdout.
-	if meta.Interactive {
-		start := time.Now()
-		var sessionName string
-		var spawnErr error
-		// "console" is the bare-shell variant — it doesn't run any gt
-		// subcommand; it just hands the user a live tmux pane.
-		if len(args) > 0 && args[0] == "console" {
-			sessionName, spawnErr = h.spawnShellSession()
-		} else {
-			sessionName, spawnErr = h.spawnConsoleSession(args)
-		}
-		resp := CommandResponse{
-			Command:    req.Command,
-			DurationMs: time.Since(start).Milliseconds(),
-		}
-		if spawnErr != nil {
-			resp.Success = false
-			resp.Error = spawnErr.Error()
-		} else {
-			resp.Success = true
-			resp.ConsoleSession = sessionName
-			resp.Output = "Opened console: " + sessionName
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	// Execute command
+	// Every palette command runs in a fresh tmux console session — the
+	// dashboard attaches via session_attach so output, prompts, and
+	// scrollback are all live in the user's terminal pane. The old
+	// headless-capture path was removed: it forced a second UI surface
+	// for command output and silently broke any command that needed a
+	// TTY (Claude OAuth REPL, editors, watchers, …).
 	start := time.Now()
-	output, err := h.runGtCommand(r.Context(), timeout, args)
-	duration := time.Since(start)
-
+	var sessionName string
+	var spawnErr error
+	// "console" is the bare-shell variant — no gt subcommand, just a tmux
+	// pane with the user's default shell.
+	if len(args) > 0 && args[0] == "console" {
+		sessionName, spawnErr = h.spawnShellSession()
+	} else {
+		sessionName, spawnErr = h.spawnConsoleSession(args)
+	}
 	resp := CommandResponse{
 		Command:    req.Command,
-		DurationMs: duration.Milliseconds(),
+		DurationMs: time.Since(start).Milliseconds(),
 	}
-
-	if err != nil {
+	if spawnErr != nil {
 		resp.Success = false
-		resp.Error = err.Error()
-		resp.Output = output // Include partial output on error
+		resp.Error = spawnErr.Error()
 	} else {
 		resp.Success = true
-		resp.Output = output
+		resp.ConsoleSession = sessionName
+		resp.Output = "Opened console: " + sessionName
 	}
-
-	// Log command execution (but not for safe read-only commands to reduce noise)
-	if !meta.Safe || !resp.Success {
-		// Could add structured logging here
-		_ = meta // silence unused warning for now
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }

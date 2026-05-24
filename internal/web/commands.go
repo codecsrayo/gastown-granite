@@ -20,15 +20,6 @@ type CommandMeta struct {
 	Args string
 	// ArgType specifies what kind of options to show (rigs, polecats, convoys, agents, hooks)
 	ArgType string
-	// MaxTimeoutSec, if > 0, overrides the default maxRunTimeout cap for this
-	// command. Used for long-running bring-up commands like `up --restore`.
-	MaxTimeoutSec int
-	// Interactive commands need a real TTY (e.g., `account login` execs
-	// `claude` for its OAuth REPL). When true, /api/run skips the headless
-	// capture path and instead spawns a tmux session running the command;
-	// the dashboard opens the session in its xterm.js panel so the user can
-	// drive it like a real terminal.
-	Interactive bool
 }
 
 // AllowedCommands defines which gt commands can be executed from the dashboard.
@@ -57,13 +48,13 @@ var AllowedCommands = map[string]CommandMeta{
 	// Claude OAuth flow and needs a TTY; running it through /api/run will
 	// fail non-interactively, but discoverability matters more than the
 	// gotcha (the user can copy the command and run it in their shell).
-	"account login":  {Confirm: true, Interactive: true, Desc: "Re-authenticate an account (refresh expired token)", Category: "Accounts", Args: "<handle>"},
+	"account login":  {Confirm: true, Desc: "Re-authenticate an account (refresh expired token)", Category: "Accounts", Args: "<handle>"},
 	"account switch": {Confirm: true, Desc: "Switch the active account", Category: "Accounts", Args: "<handle>"},
 
 	// Bare console — opens a tmux session running the user's shell so the
 	// operator gets a live terminal in the browser without any gt command
 	// pre-baked. Handy for ad-hoc commands, debugging, or following logs.
-	"console":        {Interactive: true, Desc: "Open a terminal console (live tmux session)", Category: "Diagnostics"},
+	"console":        {Desc: "Open a terminal console (live tmux session)", Category: "Diagnostics"},
 	"hooks list":  {Safe: true, Desc: "List hooks", Category: "Hooks"},
 	"activity":    {Safe: true, Desc: "Show recent activity", Category: "Status"},
 	"info":        {Safe: true, Desc: "Show workspace info", Category: "Status"},
@@ -102,8 +93,8 @@ var AllowedCommands = map[string]CommandMeta{
 	"rig start": {Confirm: true, Desc: "Start rig", Category: "Rigs", Args: "<rig-name>", ArgType: "rigs"},
 
 	// Agent lifecycle (careful)
-	"up":             {Confirm: true, Desc: "Bring up all services", Category: "Agents", MaxTimeoutSec: 300},
-	"up --restore":   {Confirm: true, Desc: "Bring up all services + crew + polecats", Category: "Agents", MaxTimeoutSec: 600},
+	"up":             {Confirm: true, Desc: "Bring up all services", Category: "Agents"},
+	"up --restore":   {Confirm: true, Desc: "Bring up all services + crew + polecats", Category: "Agents"},
 	"witness start":  {Confirm: true, Desc: "Start witness", Category: "Agents", Args: "<rig-name>", ArgType: "rigs"},
 	"refinery start": {Confirm: true, Desc: "Start refinery", Category: "Agents", Args: "<rig-name>", ArgType: "rigs"},
 	"mayor attach":   {Confirm: true, Desc: "Attach mayor", Category: "Agents"},
@@ -220,14 +211,13 @@ func GetCommandList() []CommandInfo {
 	commands := make([]CommandInfo, 0, len(AllowedCommands))
 	for name, meta := range AllowedCommands {
 		commands = append(commands, CommandInfo{
-			Name:        name,
-			Desc:        meta.Desc,
-			Category:    meta.Category,
-			Safe:        meta.Safe,
-			Confirm:     meta.Confirm,
-			Args:        meta.Args,
-			ArgType:     meta.ArgType,
-			Interactive: meta.Interactive,
+			Name:     name,
+			Desc:     meta.Desc,
+			Category: meta.Category,
+			Safe:     meta.Safe,
+			Confirm:  meta.Confirm,
+			Args:     meta.Args,
+			ArgType:  meta.ArgType,
 		})
 	}
 	return commands
@@ -235,12 +225,11 @@ func GetCommandList() []CommandInfo {
 
 // CommandInfo is the JSON-serializable form of a command for the UI.
 type CommandInfo struct {
-	Name        string `json:"name"`
-	Desc        string `json:"desc"`
-	Category    string `json:"category"`
-	Safe        bool   `json:"safe"`
-	Confirm     bool   `json:"confirm"`
-	Args        string `json:"args,omitempty"`
-	ArgType     string `json:"argType,omitempty"`
-	Interactive bool   `json:"interactive,omitempty"`
+	Name     string `json:"name"`
+	Desc     string `json:"desc"`
+	Category string `json:"category"`
+	Safe     bool   `json:"safe"`
+	Confirm  bool   `json:"confirm"`
+	Args     string `json:"args,omitempty"`
+	ArgType  string `json:"argType,omitempty"`
 }

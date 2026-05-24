@@ -462,21 +462,6 @@ func TestNewConvoyHandler_ZeroTimeout(t *testing.T) {
 	}
 }
 
-// --- NewAPIHandler timeout ---
-
-func TestNewAPIHandler_StoresTimeouts(t *testing.T) {
-	defTimeout := 45 * time.Second
-	maxTimeout := 90 * time.Second
-
-	handler := NewAPIHandler(defTimeout, maxTimeout, "test-token")
-	if handler.defaultRunTimeout != defTimeout {
-		t.Errorf("defaultRunTimeout = %v, want %v", handler.defaultRunTimeout, defTimeout)
-	}
-	if handler.maxRunTimeout != maxTimeout {
-		t.Errorf("maxRunTimeout = %v, want %v", handler.maxRunTimeout, maxTimeout)
-	}
-}
-
 // --- NewDashboardMux nil config ---
 
 func TestNewDashboardMux_NilConfig(t *testing.T) {
