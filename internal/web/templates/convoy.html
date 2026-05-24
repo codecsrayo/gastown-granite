@@ -11,7 +11,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
-    <link rel="stylesheet" href="/static/dashboard.css?v=8">
+    <link rel="stylesheet" href="/static/dashboard.css?v=9">
 </head>
 <body>
     <div class="dashboard" id="dashboard-main" hx-get="/" hx-trigger="sse:dashboard-update, every 30s [!window.pauseRefresh && !window.sseConnected]" hx-swap="morph:outerHTML" hx-ext="morph">
@@ -139,6 +139,7 @@
             </header>
             <div class="quota-drawer-body">
                 <div class="quota-mosaic" id="quota-mosaic"></div>
+                <div class="quota-usage-note" id="quota-usage-note" hidden></div>
                 <div class="quota-waiting" id="quota-waiting" hidden></div>
                 <div class="quota-plan" id="quota-plan" hidden></div>
             </div>
@@ -1112,6 +1113,6 @@
         <div id="output-panel-content" class="output-panel-content"></div>
     </div>
 
-    <script src="/static/dashboard.js?v=13"></script>
+    <script src="/static/dashboard.js?v=14"></script>
 </body>
 </html>

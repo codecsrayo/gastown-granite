@@ -4105,3 +4105,23 @@
             color: var(--text-primary);
             user-select: all;
         }
+
+        .quota-usage-note {
+            margin-top: 10px;
+            padding: 8px 10px;
+            border-left: 3px solid var(--yellow);
+            background: rgba(255, 180, 84, 0.08);
+            border-radius: 4px;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+        .quota-usage-note[hidden] { display: none; }
+        .quota-usage-note .bad { color: var(--red); font-weight: 600; }
+        .quota-usage-note code {
+            font-family: inherit;
+            background: rgba(0, 0, 0, 0.25);
+            padding: 1px 4px;
+            border-radius: 3px;
+            color: var(--text-primary);
+        }

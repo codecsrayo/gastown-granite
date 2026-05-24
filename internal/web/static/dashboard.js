@@ -3862,23 +3862,41 @@
             html += '</div>';
         }
 
+        // Always render the usage bar slot — even at 0 — so the operator sees
+        // the surface and can tell "we have no transcript yet" apart from "the
+        // card itself is broken". Counts come from the assistant `usage`
+        // blocks in the active Claude transcript for each session's workdir.
+        var total = 0;
+        var sessCount = 0;
         if (a.usage && a.usage.counts) {
-            var total = (a.usage.counts.input_tokens || 0) +
-                        (a.usage.counts.output_tokens || 0) +
-                        (a.usage.counts.cache_read_tokens || 0) +
-                        (a.usage.counts.cache_creation_tokens || 0);
-            var pct = Math.min(100, Math.round((total / QUOTA_USAGE_SOFT_CEILING) * 100));
-            var fillCls = 'quota-card-usage-fill';
-            if (pct >= 90) fillCls += ' over';
-            else if (pct >= 70) fillCls += ' near';
-            html += '<div class="quota-card-usage">';
-            html += '<div class="quota-card-usage-bar"><div class="' + fillCls + '" style="width:' + pct + '%"></div></div>';
-            html += '<div class="quota-card-usage-label">';
-            html += '<span>' + fmtTokens(total) + ' tok</span>';
-            html += '<span>' + pct + '%</span>';
-            html += '</div>';
-            html += '</div>';
+            total = (a.usage.counts.input_tokens || 0) +
+                    (a.usage.counts.output_tokens || 0) +
+                    (a.usage.counts.cache_read_tokens || 0) +
+                    (a.usage.counts.cache_creation_tokens || 0);
+            sessCount = (a.usage.sessions || []).length;
         }
+        var pct = Math.min(100, Math.round((total / QUOTA_USAGE_SOFT_CEILING) * 100));
+        var fillCls = 'quota-card-usage-fill';
+        if (pct >= 90) fillCls += ' over';
+        else if (pct >= 70) fillCls += ' near';
+        var rightLabel;
+        if (total > 0) {
+            rightLabel = pct + '%';
+        } else if (a.usage) {
+            rightLabel = 'no usage in window';
+        } else {
+            rightLabel = '—';
+        }
+        var leftLabel = total > 0
+            ? fmtTokens(total) + ' tok' + (sessCount > 1 ? ' · ' + sessCount + ' sess' : '')
+            : '0 tok';
+        html += '<div class="quota-card-usage">';
+        html += '<div class="quota-card-usage-bar"><div class="' + fillCls + '" style="width:' + pct + '%"></div></div>';
+        html += '<div class="quota-card-usage-label">';
+        html += '<span>' + escapeHTML(leftLabel) + '</span>';
+        html += '<span>' + escapeHTML(rightLabel) + '</span>';
+        html += '</div>';
+        html += '</div>';
 
         html += '</article>';
         return html;
@@ -3906,6 +3924,36 @@
 
         renderQuotaWaiting(resp.limited_sessions);
         renderQuotaPlan(resp.last_plan);
+        renderQuotaUsageNote(resp);
+    }
+
+    // Explain a column of empty bars: surfaces the server-side aggregation
+    // error (claude config dir missing, tmux down, etc.) or the orphan-session
+    // total when sessions exist but none resolve to a registered account.
+    function renderQuotaUsageNote(resp) {
+        var el = document.getElementById('quota-usage-note');
+        if (!el) return;
+        var msgs = [];
+        if (resp.usage_error) {
+            msgs.push('<span class="bad">usage aggregation failed:</span> ' + escapeHTML(resp.usage_error));
+        }
+        if (resp.orphan_sessions && resp.orphan_sessions.length > 0) {
+            var orphanTokens = 0;
+            for (var i = 0; i < resp.orphan_sessions.length; i++) {
+                var c = resp.orphan_sessions[i].counts || {};
+                orphanTokens += (c.input_tokens || 0) + (c.output_tokens || 0) +
+                                (c.cache_read_tokens || 0) + (c.cache_creation_tokens || 0);
+            }
+            msgs.push(resp.orphan_sessions.length + ' orphan session(s) (' +
+                      fmtTokens(orphanTokens) + ' tok) — set <code>GT_QUOTA_ACCOUNT</code> or align <code>CLAUDE_CONFIG_DIR</code> to attribute these.');
+        }
+        if (msgs.length === 0) {
+            el.setAttribute('hidden', '');
+            el.innerHTML = '';
+            return;
+        }
+        el.innerHTML = msgs.join('<br>');
+        el.removeAttribute('hidden');
     }
 
     function renderQuotaWaiting(limitedSessions) {

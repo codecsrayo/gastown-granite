@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"sort"
 	"time"
@@ -55,6 +56,10 @@ type QuotaSummaryResponse struct {
 	LastPlan           *config.RotationPlanSnapshot          `json:"last_plan,omitempty"`
 	LastBlockedAlertAt string                                 `json:"last_blocked_alert_at,omitempty"`
 	OrphanSessions     []quota.SessionUsage                   `json:"orphan_sessions,omitempty"`
+	// UsageError carries the failure reason when usage aggregation
+	// couldn't walk transcripts (tmux down, claude config root missing,
+	// etc.). The dashboard surfaces this so an empty bar is explained.
+	UsageError         string                                 `json:"usage_error,omitempty"`
 }
 
 // handleQuotaSummary returns a single JSON snapshot covering every dimension
@@ -83,14 +88,21 @@ func (h *APIHandler) handleQuotaSummary(w http.ResponseWriter, r *http.Request) 
 
 	// Best-effort usage aggregation; failures degrade to "no usage data"
 	// rather than failing the whole response — the dashboard should still
-	// render status/expiry even if transcript walking trips.
+	// render status/expiry even if transcript walking trips. The error is
+	// surfaced to the client (as resp.UsageError) and logged so an operator
+	// looking at an empty bar can see why.
 	var usageReport *quota.UsageReport
+	var usageErr string
 	t := tmux.NewTmux()
 	if report, uerr := quota.AggregateUsage(t, state, acctCfg, "", time.Now()); uerr == nil {
 		usageReport = report
+	} else {
+		usageErr = uerr.Error()
+		log.Printf("quota summary: usage aggregation failed: %v", uerr)
 	}
 
 	resp := BuildQuotaSummary(state, acctCfg, usageReport, time.Now())
+	resp.UsageError = usageErr
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		// Header is already sent; just log.
