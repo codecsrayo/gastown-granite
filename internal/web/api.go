@@ -150,6 +150,8 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleIssueUpdate(w, r)
 	case path == "/pr/show" && r.Method == http.MethodGet:
 		h.handlePRShow(w, r)
+	case path == "/convoy/status" && r.Method == http.MethodGet:
+		h.handleConvoyStatus(w, r)
 	case path == "/rig/add" && r.Method == http.MethodPost:
 		h.handleRigAdd(w, r)
 	case path == "/crew" && r.Method == http.MethodGet:
@@ -1743,6 +1745,32 @@ func (h *APIHandler) handlePRShow(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleConvoyStatus returns the JSON status for a single convoy.
+// Replaces the old /api/run path for the dashboard drill-down: /api/run now
+// spawns a tmux console and returns "Opened console: …" instead of command
+// stdout, so JSON.parse fails. This endpoint runs `gt convoy status <id>
+// --json` headlessly and streams the JSON body straight back.
+func (h *APIHandler) handleConvoyStatus(w http.ResponseWriter, r *http.Request) {
+	convoyID := r.URL.Query().Get("id")
+	if convoyID == "" {
+		h.sendError(w, "Missing convoy ID", http.StatusBadRequest)
+		return
+	}
+	if !isValidID(convoyID) {
+		h.sendError(w, "Invalid convoy ID format", http.StatusBadRequest)
+		return
+	}
+
+	output, err := h.runGtCommand(r.Context(), 10*time.Second, []string{"convoy", "status", convoyID, "--json"})
+	if err != nil {
+		h.sendError(w, "Failed to fetch convoy status: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(output))
 }
 
 // runGhCommand executes a gh command with the given args.

@@ -3669,28 +3669,21 @@
             return;
         }
 
-        // Fetch via /api/run
-        fetch('/api/run', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ command: 'convoy status ' + convoyId + ' --json' })
+        // Fetch via dedicated headless endpoint (/api/run now spawns a tmux
+        // console and no longer returns JSON output, see api.go handleRun).
+        fetch('/api/convoy/status?id=' + encodeURIComponent(convoyId))
+        .then(function(r) {
+            if (!r.ok) {
+                return r.json().then(function(e) { throw new Error(e.error || ('HTTP ' + r.status)); });
+            }
+            return r.json();
         })
-        .then(function(r) { return r.json(); })
         .then(function(data) {
-            if (!data.success) {
-                detailCell.innerHTML = '<div class="tracked-issues"><div class="tracked-issues-error">Failed to load: ' + escapeHtml(data.error || 'Unknown error') + '</div></div>';
-                return;
-            }
-            try {
-                var parsed = JSON.parse(data.output);
-                convoyCache[convoyId] = parsed;
-                renderConvoyIssues(detailCell, parsed);
-            } catch (err) {
-                detailCell.innerHTML = '<div class="tracked-issues"><div class="tracked-issues-error">Failed to parse response</div></div>';
-            }
+            convoyCache[convoyId] = data;
+            renderConvoyIssues(detailCell, data);
         })
         .catch(function(err) {
-            detailCell.innerHTML = '<div class="tracked-issues"><div class="tracked-issues-error">Request failed: ' + escapeHtml(err.message) + '</div></div>';
+            detailCell.innerHTML = '<div class="tracked-issues"><div class="tracked-issues-error">Failed to load: ' + escapeHtml(err.message) + '</div></div>';
         });
     });
 
