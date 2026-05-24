@@ -31,13 +31,6 @@ import (
 // would emit a new escalation every interval.
 const quotaBlockedAlertCooldown = 30 * time.Minute
 
-// quotaLogger adapts style.PrintWarning to the quota.Logger interface.
-type quotaLogger struct{}
-
-func (quotaLogger) Warn(format string, args ...interface{}) {
-	style.PrintWarning(format, args...)
-}
-
 // Quota command flags
 var (
 	quotaJSON bool
@@ -346,6 +339,23 @@ func resetsBySession(limited []quota.ScanResult) map[string]string {
 	for _, r := range limited {
 		if r.ResetsAt != "" {
 			m[r.Session] = r.ResetsAt
+		}
+	}
+	return m
+}
+
+// oldAccountBySession maps each rate-limited session to the account handle the
+// scanner resolved as *active* (GT_QUOTA_ACCOUNT-aware). The execute path must
+// mark this account limited — not the one inferred from CLAUDE_CONFIG_DIR. After
+// a keychain swap the config dir still maps to the original account while the
+// active token belongs to a different one, so resolving by config dir alone
+// marks the wrong account and leaves the truly-limited account "available"
+// (hence eligible for the next rotation).
+func oldAccountBySession(limited []quota.ScanResult) map[string]string {
+	m := make(map[string]string, len(limited))
+	for _, r := range limited {
+		if r.AccountHandle != "" {
+			m[r.Session] = r.AccountHandle
 		}
 	}
 	return m
@@ -722,10 +732,11 @@ func runQuotaRotate(cmd *cobra.Command, args []string) error {
 	}
 	swappedConfigDirs := make(map[string]*quota.KeychainCredential)
 	resetsBySession := resetsBySession(plan.LimitedSessions)
+	oldAccountBySession := oldAccountBySession(plan.LimitedSessions)
 	var results []quota.RotateResult
 	for _, session := range sortedSessions {
 		newAccount := plan.Assignments[session]
-		result := executeKeychainRotation(t, mgr, acctCfg, session, newAccount, resetsBySession[session], swappedConfigDirs)
+		result := executeKeychainRotation(t, mgr, acctCfg, session, newAccount, oldAccountBySession[session], resetsBySession[session], swappedConfigDirs)
 		results = append(results, result)
 		emitRotationOutcome(result)
 
@@ -828,7 +839,7 @@ func executeKeychainRotation(
 	t *ttmux.Tmux,
 	mgr *quota.Manager,
 	acctCfg *config.AccountsConfig,
-	session, newAccount, oldResetsAt string,
+	session, newAccount, oldAccount, oldResetsAt string,
 	swappedConfigDirs map[string]*quota.KeychainCredential,
 ) quota.RotateResult {
 	result := quota.RotateResult{
@@ -847,11 +858,18 @@ func executeKeychainRotation(
 		currentConfigDir = home + "/.claude"
 	}
 
-	// Resolve old account handle
-	for handle, acct := range acctCfg.Accounts {
-		if acct.ConfigDir == currentConfigDir || util.ExpandHome(acct.ConfigDir) == currentConfigDir {
-			result.OldAccount = handle
-			break
+	// Resolve old account handle. Prefer the scanner-resolved active account
+	// (threaded in via oldAccount) — it is GT_QUOTA_ACCOUNT-aware, so it names
+	// the account whose token is actually live after any prior keychain swap.
+	// Fall back to matching CLAUDE_CONFIG_DIR only when the scanner could not
+	// resolve a handle (e.g. an unregistered config dir).
+	result.OldAccount = oldAccount
+	if result.OldAccount == "" {
+		for handle, acct := range acctCfg.Accounts {
+			if acct.ConfigDir == currentConfigDir || util.ExpandHome(acct.ConfigDir) == currentConfigDir {
+				result.OldAccount = handle
+				break
+			}
 		}
 	}
 
@@ -1148,9 +1166,10 @@ func runWatchCycle(townRoot string, acctCfg *config.AccountsConfig) {
 	// Execute rotation
 	swappedConfigDirs := make(map[string]*quota.KeychainCredential)
 	resetsBySession := resetsBySession(plan.LimitedSessions)
+	oldAccountBySession := oldAccountBySession(plan.LimitedSessions)
 	for _, session := range slices.Sorted(maps.Keys(plan.Assignments)) {
 		newAccount := plan.Assignments[session]
-		result := executeKeychainRotation(t, mgr, acctCfg, session, newAccount, resetsBySession[session], swappedConfigDirs)
+		result := executeKeychainRotation(t, mgr, acctCfg, session, newAccount, oldAccountBySession[session], resetsBySession[session], swappedConfigDirs)
 		emitRotationOutcome(result)
 		if result.Rotated {
 			fmt.Printf(" [%s] %s %s → %s\n",
