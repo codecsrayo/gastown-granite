@@ -243,14 +243,17 @@
         var prDetail = document.getElementById('pr-detail');
         var convoyDetailView = document.getElementById('convoy-detail');
         var convoyCreateView = document.getElementById('convoy-create-form');
-        var sessionPreview = document.getElementById('session-preview');
+        // A live terminal in the unified output panel counts as a detail
+        // view — we don't want the 30s polling refresh to morph through
+        // the active xterm canvas.
+        var outputPanelOpen = outputPanel && outputPanel.classList.contains('open');
         var inDetailView = (mailDetail && mailDetail.style.display !== 'none') ||
                           (mailCompose && mailCompose.style.display !== 'none') ||
                           (issueDetail && issueDetail.style.display !== 'none') ||
                           (prDetail && prDetail.style.display !== 'none') ||
                           (convoyDetailView && convoyDetailView.style.display !== 'none') ||
                           (convoyCreateView && convoyCreateView.style.display !== 'none') ||
-                          (sessionPreview && sessionPreview.style.display !== 'none');
+                          outputPanelOpen;
         if (!inDetailView && !hasExpanded) {
             window.pauseRefresh = false;
         }
@@ -451,9 +454,17 @@
         });
     }
 
-    function addConsoleTab(cmdName, sessionName) {
+    // opts.ephemeral (default true) controls whether the close (✕ on the
+    // tab, or the panel Close button) calls /api/session/kill server-side.
+    // gt-console-* sessions are ephemeral and should be reaped on close;
+    // rig/crew/polecat sessions opened via session-row click are
+    // persistent — we only detach the browser-side attach, the tmux
+    // session keeps running owned by gt.
+    function addConsoleTab(cmdName, sessionName, opts) {
+        opts = opts || {};
+        var ephemeral = opts.ephemeral !== false;
         if (findTab(sessionName) === -1) {
-            consoleTabs.push({ sessionName: sessionName, cmdName: cmdName });
+            consoleTabs.push({ sessionName: sessionName, cmdName: cmdName, ephemeral: ephemeral });
         }
         mountConsoleSession(sessionName, cmdName);
     }
@@ -475,8 +486,9 @@
     function closeConsoleTab(sessionName) {
         var idx = findTab(sessionName);
         if (idx === -1) return;
+        var ephemeral = consoleTabs[idx].ephemeral;
         consoleTabs.splice(idx, 1);
-        killConsoleSession(sessionName);
+        if (ephemeral) killConsoleSession(sessionName);
         if (activeConsoleSession === sessionName) {
             closeSessionAttachInner();
             if (consoleTabs.length > 0) {
@@ -513,17 +525,20 @@
     }
 
     document.getElementById('output-close-btn').onclick = function() {
-        // Close button kills EVERY console session in the tab list — the
-        // user is closing the panel because they're done. Real rig/crew/
-        // polecat sessions wouldn't be in this list (they enter via the
-        // session-preview pane, not the output panel) so we don't touch
-        // their lifecycle.
+        // Close button reaps every EPHEMERAL session in the tab list (the
+        // gt-console-* ones spawned by palette commands) and detaches
+        // from persistent ones (rig/crew/polecat opened via session-row
+        // click) without killing them — those have their own lifecycle
+        // owned by gt.
         var termWrap = document.getElementById('output-panel-terminal-wrap');
         if (termWrap && termWrap.style.display !== 'none') {
             closeSessionAttachInner();
         }
+        // Only reap ephemeral (gt-console-*) sessions. Persistent rig /
+        // crew / polecat sessions stay alive in tmux — they have their
+        // own lifecycle owned by gt.
         for (var i = 0; i < consoleTabs.length; i++) {
-            killConsoleSession(consoleTabs[i].sessionName);
+            if (consoleTabs[i].ephemeral) killConsoleSession(consoleTabs[i].sessionName);
         }
         consoleTabs = [];
         activeConsoleSession = null;
@@ -3391,49 +3406,20 @@
     // Click a session row → open live xterm.js terminal over WebSocket.
     // Backend dumps tmux scrollback (last 10k lines) before live attach
     // so users can wheel-scroll up to see historical output.
-    var sessionsTable = null; // table to re-show when preview closes
-
+    // Session-row click now opens the session as a persistent tab in the
+    // unified output panel — same terminal surface as palette console
+    // commands. The old #session-preview pane (a second xterm host inside
+    // the Sessions panel) was removed; one terminal host is enough.
     document.addEventListener('click', function(e) {
         var sessionRow = e.target.closest('.session-row');
         if (sessionRow) {
             e.preventDefault();
             var sessionName = sessionRow.getAttribute('data-session-name');
             if (sessionName) {
-                openSessionPreview(sessionName);
+                addConsoleTab(sessionName, sessionName, { ephemeral: false });
             }
         }
     });
-
-    function openSessionPreview(sessionName) {
-        var preview = document.getElementById('session-preview');
-        var nameEl = document.getElementById('session-preview-name');
-        if (!preview) return;
-
-        // Hide the sessions table while preview is up.
-        sessionsTable = preview.parentNode.querySelector('table');
-        if (sessionsTable) sessionsTable.style.display = 'none';
-        var emptyState = preview.parentNode.querySelector('.empty-state');
-        if (emptyState) emptyState.style.display = 'none';
-
-        if (nameEl) nameEl.textContent = sessionName;
-        preview.style.display = 'block';
-
-        openSessionAttach(sessionName);
-    }
-
-    function closeSessionPreview() {
-        closeSessionAttachInner();
-        var preview = document.getElementById('session-preview');
-        if (preview) preview.style.display = 'none';
-        if (sessionsTable) sessionsTable.style.display = '';
-        window.pauseRefresh = false;
-    }
-
-    // Back button from session preview
-    var sessionPreviewBack = document.getElementById('session-preview-back');
-    if (sessionPreviewBack) {
-        sessionPreviewBack.addEventListener('click', closeSessionPreview);
-    }
 
     // ============================================
     // INTERACTIVE TMUX ATTACH (xterm.js + WebSocket)
@@ -3456,13 +3442,14 @@
     var attachRetryAttempt = 0;
     var attachRetryTimer = null;
     // attachTargets controls which DOM nodes the attach machinery binds to.
-    // Session-row clicks use the session-preview pane (default); palette
-    // Interactive commands use the output-panel terminal slot so the live
-    // console appears in the same place as headless command output.
+    // After the session-preview unification, every attach mounts into the
+    // single output-panel terminal host. attachTargets is kept as a
+    // structure so a future second surface (e.g. picture-in-picture) can
+    // still re-bind without reworking the attach machinery.
     var attachTargets = {
-        wrapId:   'session-preview-terminal-wrap',
-        termId:   'session-preview-terminal',
-        statusId: 'session-preview-status',
+        wrapId:   'output-panel-terminal-wrap',
+        termId:   'output-panel-terminal',
+        statusId: 'output-panel-status',
     };
 
     function scheduleAttachReconnect(reason) {
@@ -3535,8 +3522,10 @@
                     break;
                 case '1': // SET_WINDOW_TITLE
                     var title = new TextDecoder().decode(payload);
-                    var nameEl = document.getElementById('session-preview-name');
-                    if (nameEl) nameEl.title = title;
+                    // Route the tmux window title to the output panel
+                    // header tooltip so the user can hover the active tab
+                    // label to see the underlying tmux window name.
+                    if (outputCmd) outputCmd.title = title;
                     break;
                 case '2': // SET_PREFERENCES — ignored
                     break;
@@ -3571,11 +3560,11 @@
 
         // Update module-scope targets so child fns (connectAttachWs,
         // closeSessionAttachInner) bind to the right DOM nodes. Default to
-        // the session-preview pane for back-compat with session-row clicks.
+        // the unified output-panel terminal host.
         attachTargets = targets || {
-            wrapId:   'session-preview-terminal-wrap',
-            termId:   'session-preview-terminal',
-            statusId: 'session-preview-status',
+            wrapId:   'output-panel-terminal-wrap',
+            termId:   'output-panel-terminal',
+            statusId: 'output-panel-status',
         };
         var wrapEl = document.getElementById(attachTargets.wrapId);
         var termEl = document.getElementById(attachTargets.termId);
@@ -3655,12 +3644,12 @@
         // Pause dashboard re-renders while the terminal is live; morphing
         // the DOM would wipe the xterm canvas and drop focus, making the
         // terminal feel broken even though the WS is connected.
-        // hx-preserve on #session-preview is a belt-and-braces second line
-        // of defense in case a refresh slips through.
+        // hx-preserve on #output-panel-terminal-wrap is a belt-and-braces
+        // second line of defense in case a refresh slips through.
         window.pauseRefresh = true;
         setTimeout(function() {
             if (attachTerm) attachTerm.focus();
-            var termEl = document.getElementById('session-preview-terminal');
+            var termEl = document.getElementById(attachTargets.termId);
             if (termEl) {
                 termEl.scrollIntoView({block: 'nearest', behavior: 'smooth'});
             }
@@ -3706,68 +3695,10 @@
         if (wrapEl) wrapEl.style.display = 'none';
     }
 
-    // Back button tears down the live terminal AND restores the sessions
-    // table. closeSessionPreview encapsulates both.
-    var backBtn = document.getElementById('session-preview-back');
-    if (backBtn) {
-        backBtn.addEventListener('click', closeSessionPreview);
-    }
-
-    // Drag-to-resize for the interactive terminal. Also notifies xterm
-    // fit + tmux WS so the live PTY resizes alongside the visual change.
-    (function() {
-        var handle = document.getElementById('session-preview-terminal-resize');
-        var termEl = document.getElementById('session-preview-terminal');
-        if (!handle || !termEl) return;
-
-        var dragging = false;
-        var startY = 0;
-        var startHeight = 0;
-
-        function onMouseDown(ev) {
-            dragging = true;
-            startY = ev.clientY;
-            startHeight = termEl.getBoundingClientRect().height;
-            handle.classList.add('dragging');
-            document.body.style.cursor = 'ns-resize';
-            // Prevent text selection while dragging.
-            document.body.style.userSelect = 'none';
-            ev.preventDefault();
-        }
-
-        function onMouseMove(ev) {
-            if (!dragging) return;
-            var delta = ev.clientY - startY;
-            var newHeight = Math.max(120, Math.min(window.innerHeight * 0.85, startHeight + delta));
-            termEl.style.height = newHeight + 'px';
-            // Notify xterm fit addon + WS so tmux sees the new size live.
-            if (typeof attachFit !== 'undefined' && attachFit) {
-                try { attachFit.fit(); } catch (e) {}
-            }
-            if (typeof sendAttachResize === 'function') sendAttachResize();
-        }
-
-        function onMouseUp() {
-            if (!dragging) return;
-            dragging = false;
-            handle.classList.remove('dragging');
-            document.body.style.cursor = '';
-            document.body.style.userSelect = '';
-        }
-
-        handle.addEventListener('mousedown', onMouseDown);
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp);
-
-        // Touch support for tablets.
-        handle.addEventListener('touchstart', function(ev) {
-            if (ev.touches.length === 1) onMouseDown({clientY: ev.touches[0].clientY, preventDefault: function(){ ev.preventDefault(); }});
-        }, {passive: false});
-        document.addEventListener('touchmove', function(ev) {
-            if (dragging && ev.touches.length === 1) onMouseMove({clientY: ev.touches[0].clientY});
-        }, {passive: true});
-        document.addEventListener('touchend', onMouseUp);
-    })();
+    // (The session-preview "Back" button and its terminal-resize drag
+    // handler were removed alongside the session-preview pane. The
+    // output panel's own top-edge drag handle now resizes the unified
+    // terminal surface.)
 
 
     // ============================================

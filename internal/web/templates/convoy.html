@@ -11,7 +11,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
-    <link rel="stylesheet" href="/static/dashboard.css?v=12">
+    <link rel="stylesheet" href="/static/dashboard.css?v=13">
 </head>
 <body>
     <div class="dashboard" id="dashboard-main" hx-get="/" hx-trigger="sse:dashboard-update, every 30s [!window.pauseRefresh && !window.sseConnected]" hx-swap="morph:outerHTML" hx-ext="morph">
@@ -424,23 +424,10 @@
                         <p>No active sessions</p>
                     </div>
                     {{end}}
-                    <!-- Live session terminal. hx-preserve keeps idiomorph
-                         from touching the xterm canvas across dashboard
-                         refreshes — losing the canvas would force a full
-                         reattach and drop the user's scrollback. -->
-                    <div id="session-preview" style="display:none;" hx-preserve="true">
-                        <div class="session-preview-header">
-                            <button id="session-preview-back" class="mail-back-btn">← Back</button>
-                            <span id="session-preview-name" class="session-preview-title"></span>
-                            <span id="session-preview-status" class="session-preview-refresh-status"></span>
-                        </div>
-                        <div id="session-preview-terminal-wrap" style="display:none;">
-                            <div id="session-preview-terminal" class="session-preview-terminal"></div>
-                            <div id="session-preview-terminal-resize" class="terminal-resize-handle" title="Drag to resize">
-                                <span class="terminal-resize-grip">⋮⋮⋮</span>
-                            </div>
-                        </div>
-                    </div>
+                    <!-- The inline #session-preview terminal pane was
+                         removed; clicking a session row now opens the
+                         session as a persistent tab in the unified output
+                         panel (see #output-panel-terminal-wrap below). -->
                 </div>
             </div>
 
@@ -1130,6 +1117,6 @@
         </div>
     </div>
 
-    <script src="/static/dashboard.js?v=21"></script>
+    <script src="/static/dashboard.js?v=22"></script>
 </body>
 </html>

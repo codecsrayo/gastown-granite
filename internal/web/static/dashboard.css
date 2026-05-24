@@ -3727,99 +3727,13 @@
             background: rgba(138, 180, 248, 0.12);
         }
 
-        /* Session terminal preview */
-        .session-preview-header {
-            display: flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px 12px;
-            padding: 8px 12px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .session-preview-title {
-            font-weight: 600;
-            color: var(--cyan);
-            font-size: 0.9rem;
-            min-width: 0;
-            flex: 0 1 auto;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .session-preview-refresh-status {
-            margin-left: auto;
-            font-size: 0.7rem;
-            color: var(--text-muted);
-            flex-shrink: 0;
-        }
-
         @keyframes slideIn {
             from { transform: translateX(100%); opacity: 0; }
             to { transform: translateX(0); opacity: 1; }
         }
-
-        /* Interactive tmux attach terminal */
-        #session-preview-terminal-wrap {
-            margin-top: 6px;
-            display: flex;
-            flex-direction: column;
-        }
-        #session-preview-terminal {
-            background: #000;
-            border: 1px solid var(--border);
-            border-top-left-radius: 4px;
-            border-top-right-radius: 4px;
-            padding: 4px;
-            height: 320px;
-            min-height: 120px;
-            overflow: hidden;
-        }
-        .terminal-resize-handle {
-            height: 14px;
-            background: var(--bg-secondary, #1a1a1a);
-            border: 1px solid var(--border);
-            border-top: none;
-            border-bottom-left-radius: 4px;
-            border-bottom-right-radius: 4px;
-            cursor: ns-resize;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            user-select: none;
-            color: var(--text-muted, #888);
-            font-size: 0.85rem;
-            line-height: 1;
-            transition: background 0.15s;
-        }
-        .terminal-resize-handle:hover,
-        .terminal-resize-handle.dragging {
-            background: var(--accent, #2563eb);
-            color: #fff;
-        }
-        .terminal-resize-grip {
-            letter-spacing: 2px;
-            transform: rotate(90deg);
-            display: inline-block;
-        }
-        #session-preview-terminal .xterm,
-        #session-preview-terminal .xterm-viewport,
-        #session-preview-terminal .xterm-screen {
-            height: 100% !important;
-        }
-        /* Expanded panel: stretch terminal to fill viewport. */
-        .panel.expanded #session-preview {
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-            margin: 0;
-        }
-        .panel.expanded #session-preview-terminal {
-            flex: 1 1 auto;
-            height: 50vh;
-            max-height: none;
-        }
+        /* (session-preview-* styles and the #session-preview-terminal
+         * resize handle were removed when the per-panel session pane
+         * was folded into the unified output-panel terminal host.) */
 
         /* Sling button */
         .sling-btn {
