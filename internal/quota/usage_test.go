@@ -134,9 +134,12 @@ func TestAggregateUsage_OrphanWhenAccountUnknown(t *testing.T) {
 	mt := time.Now().Add(time.Hour)
 	_ = os.Chtimes(filepath.Join(root, "projects", strings.ReplaceAll(wd, "/", "-"), "x.jsonl"), mt, mt)
 
+	// CLAUDE_CONFIG_DIR points at the transcript root (where the session
+	// actually stores transcripts) but matches no registered account, so the
+	// session resolves as an orphan.
 	provider := &fakeUsageProvider{
 		sessions: []string{"gt-rig-claude"},
-		env:      map[string]map[string]string{"gt-rig-claude": {"CLAUDE_CONFIG_DIR": "/who/knows"}},
+		env:      map[string]map[string]string{"gt-rig-claude": {"CLAUDE_CONFIG_DIR": root}},
 		workDirs: map[string]string{"gt-rig-claude": wd},
 	}
 	state := &config.QuotaState{Accounts: map[string]config.AccountQuotaState{}}
@@ -148,6 +151,46 @@ func TestAggregateUsage_OrphanWhenAccountUnknown(t *testing.T) {
 	}
 	if len(report.OrphanSessions) != 1 {
 		t.Fatalf("expected 1 orphan, got %d (accounts=%v)", len(report.OrphanSessions), report.Accounts)
+	}
+}
+
+// TestAggregateUsage_PerSessionConfigDirRoot proves transcripts are located
+// under each session's own CLAUDE_CONFIG_DIR, not a single global root. Under
+// quota rotation, sessions live in different config dirs; a transcript stored
+// there must still be counted even though the global root has no copy.
+func TestAggregateUsage_PerSessionConfigDirRoot(t *testing.T) {
+	registerGTPrefix(t)
+	globalRoot := t.TempDir() // dashboard's root — intentionally empty
+	sessRoot := t.TempDir()   // the session's actual CLAUDE_CONFIG_DIR
+	wd := "/work/rig"
+
+	writeTranscript(t, sessRoot, wd, "a.jsonl", []string{
+		`{"type":"assistant","message":{"usage":{"input_tokens":80,"output_tokens":20}}}`,
+	})
+	mt := time.Now().Add(time.Hour)
+	_ = os.Chtimes(filepath.Join(sessRoot, "projects", strings.ReplaceAll(wd, "/", "-"), "a.jsonl"), mt, mt)
+
+	provider := &fakeUsageProvider{
+		sessions: []string{"gt-rig-claude"},
+		env: map[string]map[string]string{
+			"gt-rig-claude": {"GT_QUOTA_ACCOUNT": "work", "CLAUDE_CONFIG_DIR": sessRoot},
+		},
+		workDirs: map[string]string{"gt-rig-claude": wd},
+	}
+	accounts := &config.AccountsConfig{Accounts: map[string]config.Account{
+		"work": {ConfigDir: "/tmp/work"},
+	}}
+	state := &config.QuotaState{Accounts: map[string]config.AccountQuotaState{
+		"work": {Status: config.QuotaStatusAvailable},
+	}}
+
+	report, err := AggregateUsage(provider, state, accounts, globalRoot, time.Now())
+	if err != nil {
+		t.Fatalf("AggregateUsage: %v", err)
+	}
+	work := report.Accounts["work"]
+	if work.Counts.InputTokens != 80 || work.Counts.OutputTokens != 20 {
+		t.Errorf("work counts = %+v (transcript under session config dir not found)", work.Counts)
 	}
 }
 

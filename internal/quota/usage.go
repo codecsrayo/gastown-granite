@@ -116,7 +116,18 @@ func AggregateUsage(
 			continue
 		}
 
-		transcriptPath, modTime, transcriptErr := newestTranscript(claudeConfigRoot, workDir, windowStart)
+		// Claude Code writes transcripts under the session's own
+		// CLAUDE_CONFIG_DIR/projects, not a single shared root. Under quota
+		// rotation those dirs differ per session (keychain swaps keep the
+		// session's original config dir), so resolve the root per session and
+		// only fall back to the global root when the session didn't expose a
+		// config dir.
+		transcriptRoot := claudeConfigRoot
+		if configDir != "" {
+			transcriptRoot = util.ExpandHome(configDir)
+		}
+
+		transcriptPath, modTime, transcriptErr := newestTranscript(transcriptRoot, workDir, windowStart)
 		if transcriptErr != nil || transcriptPath == "" {
 			continue
 		}
