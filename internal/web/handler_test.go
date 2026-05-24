@@ -940,8 +940,9 @@ func TestE2E_Server_HTMLStructure(t *testing.T) {
 		}
 	}
 
-	// Validate CSS file is linked (CSS variables are now in external file)
-	if !strings.Contains(body, `href="/static/dashboard.css"`) {
+	// Validate CSS file is linked (CSS variables are now in external file).
+	// The href carries a cache-busting query (e.g. ?v=6) that we don't pin to.
+	if !strings.Contains(body, `href="/static/dashboard.css`) {
 		t.Error("Should link to external CSS file dashboard.css")
 	}
 }

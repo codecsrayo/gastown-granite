@@ -164,6 +164,8 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleSessionAttach(w, r)
 	case path == "/session/preview" && r.Method == http.MethodGet:
 		h.handleSessionPreview(w, r)
+	case path == "/quota/summary" && r.Method == http.MethodGet:
+		h.handleQuotaSummary(w, r)
 	default:
 		http.Error(w, "Not found", http.StatusNotFound)
 	}
