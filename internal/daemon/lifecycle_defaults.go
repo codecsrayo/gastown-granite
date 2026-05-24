@@ -61,6 +61,19 @@ func DefaultLifecycleConfig() *DaemonPatrolConfig {
 			Handler: &PatrolConfig{
 				Enabled: true,
 			},
+			ServicesUp: &ServicesUpConfig{
+				Enabled:     true,
+				IntervalStr: "10m",
+				Restore:     true,
+			},
+			QuotaDog: &QuotaDogConfig{
+				Enabled:     true,
+				IntervalStr: "5m",
+			},
+			LoginWatch: &LoginWatchConfig{
+				Enabled:     true,
+				IntervalStr: "30s",
+			},
 		},
 	}
 }
@@ -120,6 +133,18 @@ func EnsureLifecycleDefaults(config *DaemonPatrolConfig) bool {
 	}
 	if p.Handler == nil {
 		p.Handler = d.Handler
+		changed = true
+	}
+	if p.ServicesUp == nil {
+		p.ServicesUp = d.ServicesUp
+		changed = true
+	}
+	if p.QuotaDog == nil {
+		p.QuotaDog = d.QuotaDog
+		changed = true
+	}
+	if p.LoginWatch == nil {
+		p.LoginWatch = d.LoginWatch
 		changed = true
 	}
 

@@ -130,6 +130,8 @@ type PatrolsConfig struct {
 	ScheduledMaintenance   *ScheduledMaintenanceConfig    `json:"scheduled_maintenance,omitempty"`
 	MainBranchTest         *MainBranchTestConfig          `json:"main_branch_test,omitempty"`
 	QuotaDog               *QuotaDogConfig                `json:"quota_dog,omitempty"`
+	ServicesUp             *ServicesUpConfig              `json:"services_up,omitempty"`
+	LoginWatch             *LoginWatchConfig              `json:"login_watch,omitempty"`
 	RestartTracker         *RestartTrackerConfig          `json:"restart_tracker,omitempty"`
 }
 
@@ -307,6 +309,18 @@ func IsPatrolEnabled(config *DaemonPatrolConfig, patrol string) bool {
 			return false
 		}
 		return config.Patrols.QuotaDog.Enabled
+	}
+	if patrol == "services_up" {
+		if config == nil || config.Patrols == nil || config.Patrols.ServicesUp == nil {
+			return false
+		}
+		return config.Patrols.ServicesUp.Enabled
+	}
+	if patrol == "login_watch" {
+		if config == nil || config.Patrols == nil || config.Patrols.LoginWatch == nil {
+			return false
+		}
+		return config.Patrols.LoginWatch.Enabled
 	}
 
 	if config == nil || config.Patrols == nil {

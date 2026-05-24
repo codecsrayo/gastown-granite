@@ -166,6 +166,9 @@ func TestEnsureLifecycleDefaults_FullyConfigured(t *testing.T) {
 			ScheduledMaintenance: &ScheduledMaintenanceConfig{Enabled: false, Threshold: &threshold},
 			MainBranchTest:       &MainBranchTestConfig{Enabled: false},
 			Handler:              &PatrolConfig{Enabled: false},
+			ServicesUp:           &ServicesUpConfig{Enabled: false},
+			QuotaDog:             &QuotaDogConfig{Enabled: false},
+			LoginWatch:           &LoginWatchConfig{Enabled: false},
 		},
 	}
 

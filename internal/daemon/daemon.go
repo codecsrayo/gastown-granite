@@ -93,6 +93,10 @@ type Daemon struct {
 	// Restart tracking with exponential backoff to prevent crash loops
 	restartTracker *RestartTracker
 
+	// loginSeen de-dupes login_required event emissions across login_watch
+	// ticks. Lives for the daemon's lifetime; entries expire on TTL.
+	loginSeen *loginSeenCache
+
 	// telemetry exports metrics and logs to VictoriaMetrics / VictoriaLogs.
 	// Nil when telemetry is disabled (GT_OTEL_METRICS_URL / GT_OTEL_LOGS_URL not set).
 	otelProvider *telemetry.Provider
@@ -691,6 +695,32 @@ func (d *Daemon) Run() (err error) {
 		d.logger.Printf("Quota dog ticker started (interval %v)", interval)
 	}
 
+	// Start services_up ticker if configured.
+	// Periodically runs `gt up` (idempotent) so any expected service that is
+	// no longer running gets re-launched. Self-healing for missing agents.
+	var servicesUpTicker *time.Ticker
+	var servicesUpChan <-chan time.Time
+	if d.isPatrolActive("services_up") {
+		interval := servicesUpInterval(d.patrolConfig)
+		servicesUpTicker = time.NewTicker(interval)
+		servicesUpChan = servicesUpTicker.C
+		defer servicesUpTicker.Stop()
+		d.logger.Printf("Services up ticker started (interval %v)", interval)
+	}
+
+	// Start login_watch ticker if configured.
+	// Scans tmux panes for OAuth URLs and emits login_required events that
+	// surface as copy-able toasts in the dashboard.
+	var loginWatchTicker *time.Ticker
+	var loginWatchChan <-chan time.Time
+	if d.isPatrolActive("login_watch") {
+		interval := loginWatchInterval(d.patrolConfig)
+		loginWatchTicker = time.NewTicker(interval)
+		loginWatchChan = loginWatchTicker.C
+		defer loginWatchTicker.Stop()
+		d.logger.Printf("Login watch ticker started (interval %v)", interval)
+	}
+
 	// Note: PATCH-010 uses per-session hooks in deacon/manager.go (SetAutoRespawnHook).
 	// Global pane-died hooks don't fire reliably in tmux 3.2a, so we rely on the
 	// per-session approach which has been tested to work for continuous recovery.
@@ -798,6 +828,19 @@ func (d *Daemon) Run() (err error) {
 			// rotates credentials to available accounts via keychain swap.
 			if !d.isShutdownInProgress() {
 				d.runQuotaDog()
+			}
+
+		case <-servicesUpChan:
+			// Services up — periodically runs `gt up` so any missing service
+			// (mayor/deacon/witness/refinery/crew/pinned polecats) is relaunched.
+			if !d.isShutdownInProgress() {
+				d.runServicesUp()
+			}
+
+		case <-loginWatchChan:
+			// Login watch — scans tmux panes for OAuth URLs needing user copy.
+			if !d.isShutdownInProgress() {
+				d.runLoginWatch()
 			}
 
 		case <-timer.C:
