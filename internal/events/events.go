@@ -79,6 +79,17 @@ const (
 	TypeSchedulerDispatch       = "scheduler_dispatch"        // Bead dispatched from scheduler
 	TypeSchedulerDispatchFailed = "scheduler_dispatch_failed" // Bead dispatch failed (requeued)
 	TypeSchedulerCloseRetry     = "scheduler_close_retry"     // Context close needed last-resort attempt
+
+	// Quota / account rotation events
+	TypeQuotaScanned      = "quota_scanned"       // Periodic scan summary
+	TypeQuotaNearLimit    = "quota_near_limit"    // Session detected approaching rate limit
+	TypeQuotaLimited      = "quota_limited"       // Session detected hard-limited
+	TypeQuotaRotated      = "quota_rotated"       // Session rotated to a new account
+	TypeQuotaSwapFailed   = "quota_swap_failed"   // Rotation attempt failed
+	TypeQuotaCleared      = "quota_cleared"       // Account reset window elapsed → available
+	TypeQuotaTokenExpired = "quota_token_expired" // Account OAuth token detected expired
+	TypeQuotaBlocked      = "quota_blocked"       // Limited sessions with no available accounts
+	TypeQuotaAssigned     = "quota_assigned"      // Rotation plan snapshot (configDir → handle)
 )
 
 // EventsFile is the name of the raw events log.
@@ -371,5 +382,92 @@ func SchedulerDispatchFailedPayload(beadID, rig, errMsg string) map[string]inter
 		"bead":  beadID,
 		"rig":   rig,
 		"error": errMsg,
+	}
+}
+
+// QuotaScannedPayload summarizes a single quota scan cycle.
+func QuotaScannedPayload(totalSessions, limited, nearLimit, available int) map[string]interface{} {
+	return map[string]interface{}{
+		"total_sessions": totalSessions,
+		"limited":        limited,
+		"near_limit":     nearLimit,
+		"available":      available,
+	}
+}
+
+// QuotaRotatedPayload describes a successful rotation of a single session.
+func QuotaRotatedPayload(session, fromAccount, toAccount string, resumed, keychainSwap bool) map[string]interface{} {
+	return map[string]interface{}{
+		"session":       session,
+		"from_account":  fromAccount,
+		"to_account":    toAccount,
+		"resumed":       resumed,
+		"keychain_swap": keychainSwap,
+	}
+}
+
+// QuotaSwapFailedPayload describes a failed rotation attempt.
+func QuotaSwapFailedPayload(session, toAccount, reason string) map[string]interface{} {
+	return map[string]interface{}{
+		"session":    session,
+		"to_account": toAccount,
+		"reason":     reason,
+	}
+}
+
+// QuotaNearLimitPayload describes a near-limit detection.
+func QuotaNearLimitPayload(session, account, matchedLine string) map[string]interface{} {
+	return map[string]interface{}{
+		"session": session,
+		"account": account,
+		"matched": matchedLine,
+	}
+}
+
+// QuotaLimitedPayload describes a hard-limit detection.
+func QuotaLimitedPayload(session, account, resetsAt string) map[string]interface{} {
+	return map[string]interface{}{
+		"session":   session,
+		"account":   account,
+		"resets_at": resetsAt,
+	}
+}
+
+// QuotaClearedPayload describes an account that aged out of cooldown.
+func QuotaClearedPayload(account, previousResetsAt string) map[string]interface{} {
+	return map[string]interface{}{
+		"account":            account,
+		"previous_resets_at": previousResetsAt,
+	}
+}
+
+// QuotaTokenExpiredPayload describes a token expiry detection.
+func QuotaTokenExpiredPayload(account, expiresAt, reason string) map[string]interface{} {
+	p := map[string]interface{}{
+		"account": account,
+	}
+	if expiresAt != "" {
+		p["expires_at"] = expiresAt
+	}
+	if reason != "" {
+		p["reason"] = reason
+	}
+	return p
+}
+
+// QuotaBlockedPayload describes a rotation-blocked condition.
+func QuotaBlockedPayload(limitedSessions []string, skippedAccounts map[string]string) map[string]interface{} {
+	return map[string]interface{}{
+		"limited_sessions": limitedSessions,
+		"skipped_accounts": skippedAccounts,
+	}
+}
+
+// QuotaAssignedPayload describes the plan emitted ahead of execution.
+// assignments maps session → new account handle.
+func QuotaAssignedPayload(assignments map[string]string, availableAccounts []string) map[string]interface{} {
+	return map[string]interface{}{
+		"assignments":        assignments,
+		"available_accounts": availableAccounts,
 	}
 }

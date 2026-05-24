@@ -1547,6 +1547,38 @@ type QuotaState struct {
 	// escalation emission. Used by `gt quota watch` to throttle alerts so a
 	// stuck-rotation incident emits at most one escalation per cooldown window.
 	LastBlockedAlertAt string `json:"last_blocked_alert_at,omitempty"`
+
+	// LimitedSessions snapshots sessions detected as rate-limited or near-limit
+	// in the most recent scan. The dashboard reads this to render the "waiting
+	// for unlock" panel without re-scanning tmux. The scanner overwrites this
+	// every cycle so it always reflects the current live state.
+	LimitedSessions map[string]LimitedSessionState `json:"limited_sessions,omitempty"`
+
+	// LastPlan is the most recent rotation plan snapshot. Captures who got what
+	// so operators can audit account distribution without tailing logs.
+	LastPlan *RotationPlanSnapshot `json:"last_plan,omitempty"`
+}
+
+// LimitedSessionState records what was detected for a single session.
+type LimitedSessionState struct {
+	Account     string `json:"account,omitempty"`      // resolved account handle
+	ConfigDir   string `json:"config_dir,omitempty"`   // raw CLAUDE_CONFIG_DIR if account is unknown
+	RateLimited bool   `json:"rate_limited"`           // hard limit detected
+	NearLimit   bool   `json:"near_limit"`             // near-limit warning detected
+	ResetsAt    string `json:"resets_at,omitempty"`    // parsed reset time, if available
+	MatchedLine string `json:"matched_line,omitempty"` // pane line that triggered detection
+	DetectedAt  string `json:"detected_at,omitempty"`  // RFC3339 when the scan recorded this
+}
+
+// RotationPlanSnapshot is a frozen view of a rotation plan after execution.
+type RotationPlanSnapshot struct {
+	Timestamp        string            `json:"timestamp"`                   // RFC3339 when the plan was produced
+	Assignments      map[string]string `json:"assignments,omitempty"`       // session -> new account handle
+	ConfigDirSwaps   map[string]string `json:"config_dir_swaps,omitempty"`  // configDir -> new account handle
+	AvailablePool    []string          `json:"available_pool,omitempty"`    // accounts eligible at plan time
+	SkippedAccounts  map[string]string `json:"skipped_accounts,omitempty"`  // handle -> skip reason
+	LimitedSessions  []string          `json:"limited_sessions,omitempty"`  // sessions the plan targeted
+	UnassignableCount int              `json:"unassignable_count,omitempty"` // limited sessions without a candidate
 }
 
 // AccountQuotaStatus is the rate-limit status of an account.
@@ -1569,6 +1601,25 @@ type AccountQuotaState struct {
 	LimitedAt string             `json:"limited_at,omitempty"` // RFC3339 when limit was detected
 	ResetsAt  string             `json:"resets_at,omitempty"`  // Human-readable reset time from provider (e.g. "7pm (America/Los_Angeles)")
 	LastUsed  string             `json:"last_used,omitempty"`  // RFC3339 when account was last assigned to a session
+
+	// TokenExpiresAt is the RFC3339 expiry parsed from the OAuth token
+	// (JSON expires_at field or JWT exp claim). Empty when the token is
+	// opaque to the validator. Lets the dashboard surface "/login needed"
+	// before rotation actually fails.
+	TokenExpiresAt string `json:"token_expires_at,omitempty"`
+
+	// TokenLastChecked is the RFC3339 timestamp of the most recent
+	// ValidateKeychainToken result. Lets the dashboard avoid showing stale
+	// expiry warnings.
+	TokenLastChecked string `json:"token_last_checked,omitempty"`
+
+	// RotationCount counts how many times this account has been rotated INTO
+	// (i.e. used as the swap source) for the lifetime of this state file.
+	RotationCount int `json:"rotation_count,omitempty"`
+
+	// LastRotatedAt is the RFC3339 timestamp of the most recent rotation
+	// that used this account as the source.
+	LastRotatedAt string `json:"last_rotated_at,omitempty"`
 }
 
 // CurrentQuotaVersion is the current schema version for QuotaState.
