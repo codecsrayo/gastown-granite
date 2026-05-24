@@ -59,6 +59,11 @@ var AllowedCommands = map[string]CommandMeta{
 	// gotcha (the user can copy the command and run it in their shell).
 	"account login":  {Confirm: true, Interactive: true, Desc: "Re-authenticate an account (refresh expired token)", Category: "Accounts", Args: "<handle>"},
 	"account switch": {Confirm: true, Desc: "Switch the active account", Category: "Accounts", Args: "<handle>"},
+
+	// Bare console — opens a tmux session running the user's shell so the
+	// operator gets a live terminal in the browser without any gt command
+	// pre-baked. Handy for ad-hoc commands, debugging, or following logs.
+	"console":        {Interactive: true, Desc: "Open a terminal console (live tmux session)", Category: "Diagnostics"},
 	"hooks list":  {Safe: true, Desc: "List hooks", Category: "Hooks"},
 	"activity":    {Safe: true, Desc: "Show recent activity", Category: "Status"},
 	"info":        {Safe: true, Desc: "Show workspace info", Category: "Status"},

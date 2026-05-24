@@ -233,7 +233,15 @@ func (h *APIHandler) handleRun(w http.ResponseWriter, r *http.Request) {
 	// HTTP request's headless stdout.
 	if meta.Interactive {
 		start := time.Now()
-		sessionName, spawnErr := h.spawnConsoleSession(args)
+		var sessionName string
+		var spawnErr error
+		// "console" is the bare-shell variant — it doesn't run any gt
+		// subcommand; it just hands the user a live tmux pane.
+		if len(args) > 0 && args[0] == "console" {
+			sessionName, spawnErr = h.spawnShellSession()
+		} else {
+			sessionName, spawnErr = h.spawnConsoleSession(args)
+		}
 		resp := CommandResponse{
 			Command:    req.Command,
 			DurationMs: time.Since(start).Milliseconds(),
@@ -366,6 +374,32 @@ func (h *APIHandler) spawnConsoleSession(args []string) (string, error) {
 		tmuxArgs = append(tmuxArgs, "-L", sock)
 	}
 	tmuxArgs = append(tmuxArgs, "new-session", "-d", "-s", sessionName, wrapper)
+
+	cmd := exec.Command("tmux", tmuxArgs...)
+	if h.workDir != "" {
+		cmd.Dir = h.workDir
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("tmux new-session: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return sessionName, nil
+}
+
+// spawnShellSession creates a detached tmux session running the user's
+// default login shell (no gt command pre-baked). Used by the palette's
+// "console" entry so the operator gets a live terminal in the browser for
+// ad-hoc commands. Distinct from spawnConsoleSession, which wraps a gt
+// invocation; here tmux just opens its default shell.
+func (h *APIHandler) spawnShellSession() (string, error) {
+	sessionName := fmt.Sprintf("gt-console-%d", time.Now().UnixNano())
+
+	tmuxArgs := []string{}
+	if sock := tmux.GetDefaultSocket(); sock != "" {
+		tmuxArgs = append(tmuxArgs, "-L", sock)
+	}
+	// No trailing command → tmux launches its default shell. That shell
+	// inherits SHELL / HOME from the gt-dashboard process environment.
+	tmuxArgs = append(tmuxArgs, "new-session", "-d", "-s", sessionName)
 
 	cmd := exec.Command("tmux", tmuxArgs...)
 	if h.workDir != "" {
