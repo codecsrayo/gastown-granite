@@ -65,6 +65,45 @@ func TestBuildQuotaSummary_CountsByStatusAndDetectsExpiredViaToken(t *testing.T)
 	}
 }
 
+func TestBuildQuotaSummary_PopulatesUnlocksAtFromResetsAt(t *testing.T) {
+	// Use a noon reference so "7pm today" is unambiguously in the future
+	// regardless of which zone the host happens to be in.
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	acctCfg := &config.AccountsConfig{Accounts: map[string]config.Account{
+		"work": {ConfigDir: "/tmp/work"},
+		// "past" account: reset already happened earlier in the day.
+		"past": {ConfigDir: "/tmp/past"},
+	}}
+	state := &config.QuotaState{Accounts: map[string]config.AccountQuotaState{
+		"work": {Status: config.QuotaStatusLimited, ResetsAt: "7pm"},
+		// 8am UTC is before the noon reference → ParseResetTime returns a past
+		// time and we should NOT emit UnlocksAt for it.
+		"past": {Status: config.QuotaStatusLimited, ResetsAt: "8am"},
+	}}
+
+	resp := BuildQuotaSummary(state, acctCfg, nil, now)
+
+	byHandle := map[string]QuotaSummaryAccount{}
+	for _, a := range resp.Accounts {
+		byHandle[a.Handle] = a
+	}
+	if byHandle["work"].UnlocksAt == "" {
+		t.Errorf("work.UnlocksAt empty for limited+future-reset (resets_at=%q)",
+			byHandle["work"].ResetsAt)
+	} else {
+		parsed, err := time.Parse(time.RFC3339, byHandle["work"].UnlocksAt)
+		if err != nil {
+			t.Errorf("UnlocksAt not RFC3339: %v (%q)", err, byHandle["work"].UnlocksAt)
+		} else if !parsed.After(now) {
+			t.Errorf("UnlocksAt = %v should be after now=%v", parsed, now)
+		}
+	}
+	if byHandle["past"].UnlocksAt != "" {
+		t.Errorf("past.UnlocksAt = %q, want empty (parsed reset in the past)",
+			byHandle["past"].UnlocksAt)
+	}
+}
+
 func TestBuildQuotaSummary_FoldsUsageWhenAvailable(t *testing.T) {
 	now := time.Now()
 	acctCfg := &config.AccountsConfig{Accounts: map[string]config.Account{

@@ -3817,13 +3817,23 @@
         if (a.token_expires_at) {
             var exp = Date.parse(a.token_expires_at);
             var cls = '';
+            var elapsed = !isNaN(exp) && exp < Date.now();
             if (!isNaN(exp)) {
-                if (exp < Date.now()) cls = 'bad';
+                if (elapsed) cls = 'bad';
                 else if (exp - Date.now() < 24 * 3600 * 1000) cls = 'warn';
             }
-            html += '<dt>token</dt><dd class="' + cls + '">' + escapeHTML(fmtRelative(a.token_expires_at)) + '</dd>';
+            // Distinguish "expires in 3h" from "expired 16h ago" so the user
+            // never has to infer direction from the relative timestamp.
+            var label = elapsed ? 'expired' : 'expires';
+            html += '<dt>' + label + '</dt><dd class="' + cls + '">' + escapeHTML(fmtRelative(a.token_expires_at)) + '</dd>';
         }
-        if (a.resets_at) {
+        // Unlock countdown: prefer the parsed RFC3339 (unlocks_at) so the user
+        // sees "unlocks in 2h 14m"; fall back to the raw "7pm" string when the
+        // server couldn't parse a future time.
+        if (a.unlocks_at) {
+            var raw = a.resets_at ? ' title="resets ' + escapeHTML(a.resets_at) + '"' : '';
+            html += '<dt>unlocks</dt><dd class="warn"' + raw + '>' + escapeHTML(fmtRelative(a.unlocks_at)) + '</dd>';
+        } else if (a.resets_at) {
             html += '<dt>resets</dt><dd class="warn">' + escapeHTML(a.resets_at) + '</dd>';
         }
         if (a.rotation_count) {
@@ -3834,6 +3844,12 @@
             html += '<dt>last use</dt><dd>' + escapeHTML(fmtRelative(a.last_used)) + '</dd>';
         }
         html += '</dl>';
+
+        // Expired tokens don't auto-unlock — they need a manual relogin. Show
+        // the exact command so the operator can copy it without thinking.
+        if (statusKey === 'expired') {
+            html += '<div class="quota-card-action">needs relogin: <code>gt account login ' + escapeHTML(a.handle) + '</code></div>';
+        }
 
         if (a.active_sessions && a.active_sessions.length) {
             html += '<div class="quota-card-sessions">';

@@ -4087,3 +4087,21 @@
             font-size: 0.7rem;
             color: var(--text-secondary);
         }
+
+        .quota-card-action {
+            font-size: 0.7rem;
+            color: var(--red);
+            background: rgba(240, 113, 120, 0.10);
+            border-radius: 4px;
+            padding: 4px 6px;
+            margin-top: 2px;
+            line-height: 1.4;
+        }
+        .quota-card-action code {
+            font-family: inherit;
+            background: rgba(0, 0, 0, 0.25);
+            padding: 1px 4px;
+            border-radius: 3px;
+            color: var(--text-primary);
+            user-select: all;
+        }

@@ -23,6 +23,11 @@ type QuotaSummaryAccount struct {
 	Status           string  `json:"status"`
 	LimitedAt        string  `json:"limited_at,omitempty"`
 	ResetsAt         string  `json:"resets_at,omitempty"`
+	// UnlocksAt is ResetsAt parsed into an RFC3339 instant (when available).
+	// Populated only for limited/cooldown accounts whose ResetsAt parses to a
+	// future time — lets the UI render a live countdown instead of the raw
+	// "7pm (America/Los_Angeles)" string.
+	UnlocksAt        string  `json:"unlocks_at,omitempty"`
 	LastUsed         string  `json:"last_used,omitempty"`
 	TokenExpiresAt   string  `json:"token_expires_at,omitempty"`
 	TokenLastChecked string  `json:"token_last_checked,omitempty"`
@@ -170,6 +175,17 @@ func BuildQuotaSummary(
 			RotationCount:    qs.RotationCount,
 			LastRotatedAt:    qs.LastRotatedAt,
 			ActiveSessions:   sessionsByAccount[handle],
+		}
+
+		// Parse the human-readable ResetsAt ("7pm", "3:30pm (America/...)") into
+		// an absolute instant so the UI can render a live countdown. Only emit
+		// when the parsed time is still ahead of `now` — a past parse means the
+		// next auto-clear sweep will flip the account to available anyway, and
+		// surfacing a negative countdown would confuse the user.
+		if qs.ResetsAt != "" && (status == string(config.QuotaStatusLimited) || status == string(config.QuotaStatusCooldown)) {
+			if t, err := quota.ParseResetTime(qs.ResetsAt, now); err == nil && t.After(now) {
+				entry.UnlocksAt = t.UTC().Format(time.RFC3339)
+			}
 		}
 		if usageReport != nil {
 			if u, ok := usageReport.Accounts[handle]; ok {
