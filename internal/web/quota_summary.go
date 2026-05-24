@@ -86,6 +86,16 @@ func (h *APIHandler) handleQuotaSummary(w http.ResponseWriter, r *http.Request) 
 	}
 	mgr.EnsureAccountsTracked(state, acctCfg.Accounts)
 
+	// Re-inspect each account's on-disk credentials so a fresh `gt account
+	// login` reflects in the next summary fetch without waiting for a
+	// scan/rotate cycle to update TokenExpiresAt. Persist only when
+	// something changed so we don't write quota.json on every poll.
+	if quota.RefreshTokenExpiries(state, acctCfg.Accounts) {
+		if perr := mgr.Save(state); perr != nil {
+			log.Printf("quota summary: persist refreshed token expiries: %v", perr)
+		}
+	}
+
 	// Best-effort usage aggregation; failures degrade to "no usage data"
 	// rather than failing the whole response — the dashboard should still
 	// render status/expiry even if transcript walking trips. The error is

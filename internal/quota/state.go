@@ -277,6 +277,45 @@ func clearExpiredAt(_ *Manager, state *config.QuotaState, now time.Time) []strin
 	return cleared
 }
 
+// RefreshTokenExpiries re-inspects every registered account's stored token
+// and updates state.Accounts[handle].TokenExpiresAt / TokenLastChecked.
+// Returns true when at least one TokenExpiresAt changed — callers persist
+// state only in that case. Inspection failures (missing credentials file,
+// parse error) leave the existing TokenExpiresAt alone to avoid clobbering
+// known-good data on a transient read failure. Caller must hold the quota
+// lock (or call inside WithLock) before invoking — Save handles the lock
+// when used as a standalone refresh.
+func RefreshTokenExpiries(state *config.QuotaState, accounts map[string]config.Account) bool {
+	if state == nil || len(accounts) == 0 {
+		return false
+	}
+	changed := false
+	now := time.Now().UTC().Format(time.RFC3339)
+	for handle, acct := range accounts {
+		acctState, ok := state.Accounts[handle]
+		if !ok {
+			continue
+		}
+		configDir := util.ExpandHome(acct.ConfigDir)
+		exp, err := InspectKeychainToken(configDir)
+		if err != nil {
+			// Inspection failed — keep the existing TokenExpiresAt.
+			continue
+		}
+		var newExp string
+		if !exp.IsZero() {
+			newExp = exp.UTC().Format(time.RFC3339)
+		}
+		if acctState.TokenExpiresAt != newExp {
+			acctState.TokenExpiresAt = newExp
+			changed = true
+		}
+		acctState.TokenLastChecked = now
+		state.Accounts[handle] = acctState
+	}
+	return changed
+}
+
 // ApplyTokenExpiries records inspected token expiries onto state.Accounts.
 // Accounts whose handle is missing from the inspection map are left untouched.
 // Handles unknown to state.Accounts are ignored — we never invent entries.

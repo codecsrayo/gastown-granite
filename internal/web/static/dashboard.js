@@ -488,7 +488,14 @@
         if (idx === -1) return;
         var ephemeral = consoleTabs[idx].ephemeral;
         consoleTabs.splice(idx, 1);
-        if (ephemeral) killConsoleSession(sessionName);
+        if (ephemeral) {
+            killConsoleSession(sessionName);
+            // The user might have just finished `gt account login` or
+            // another flow that mutated state we render — kick a fresh
+            // quota fetch so the mosaic reflects the new token expiry
+            // without waiting for the 30s polling refresh.
+            if (window.refreshQuotaDrawer) window.refreshQuotaDrawer();
+        }
         if (activeConsoleSession === sessionName) {
             closeSessionAttachInner();
             if (consoleTabs.length > 0) {
@@ -537,8 +544,15 @@
         // Only reap ephemeral (gt-console-*) sessions. Persistent rig /
         // crew / polecat sessions stay alive in tmux — they have their
         // own lifecycle owned by gt.
+        var hadEphemeral = false;
         for (var i = 0; i < consoleTabs.length; i++) {
-            if (consoleTabs[i].ephemeral) killConsoleSession(consoleTabs[i].sessionName);
+            if (consoleTabs[i].ephemeral) {
+                killConsoleSession(consoleTabs[i].sessionName);
+                hadEphemeral = true;
+            }
+        }
+        if (hadEphemeral && window.refreshQuotaDrawer) {
+            window.refreshQuotaDrawer();
         }
         consoleTabs = [];
         activeConsoleSession = null;
