@@ -54,7 +54,25 @@
           default = self.apps.${system}.gt;
         };
 
+        # Default shell: Go toolchain only. Lets `go build`/`go test` run
+        # without depending on the beads flake input, which periodically
+        # breaks here when upstream bumps go.mod without refreshing its own
+        # vendorHash. Use `nix develop .#full` when you need the `bd`
+        # binary available in PATH (Dolt-backed integration paths).
         devShells.default = pkgs.mkShell {
+          buildInputs = [
+            pkgs.go_1_25
+            pkgs.gopls
+            pkgs.gotools
+            pkgs.go-tools
+            pkgs.go-task
+          ];
+        };
+
+        # Full shell: same as default plus the beads CLI. Pin or override
+        # the beads input upstream when its vendorHash drifts; otherwise
+        # this shell fails to evaluate.
+        devShells.full = pkgs.mkShell {
           buildInputs = [
             beadsPkg
             pkgs.go_1_25
