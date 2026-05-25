@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/steveyegge/gastown/internal/beads"
@@ -952,16 +953,17 @@ func (h *APIHandler) handleOptions(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Fetch agents - use --fast to skip bead/MQ lookups (full status can take
-	// 100+ s in some workspaces; --fast returns in ~1-2s with the same agent list).
+	// Fetch agents — `gt status --fast` regressed to 28-40s in some workspaces.
+	// `gt agents list` returns the same names in 2-3s and is enough for the
+	// assign dropdown (UI only needs names, not running state).
 	go func() {
 		defer wg.Done()
-		if output, err := h.runGtCommand(r.Context(), 5*time.Second, []string{"status", "--json", "--fast"}); err == nil {
+		if output, err := h.runGtCommand(r.Context(), 10*time.Second, []string{"agents", "list"}); err == nil {
 			mu.Lock()
-			resp.Agents = parseAgentsFromStatus(output)
+			resp.Agents = parseAgentsListOutput(output)
 			mu.Unlock()
 		} else {
-			log.Printf("warning: handleOptions: status: %v", err)
+			log.Printf("warning: handleOptions: agents list: %v", err)
 		}
 	}()
 
@@ -1226,6 +1228,56 @@ func parseAgentsFromStatus(jsonStr string) []OptionItem {
 		for _, a := range r.Agents {
 			agents = append(agents, makeItem(a, r.Name+"/"+a.Name))
 		}
+	}
+	return agents
+}
+
+// parseAgentsListOutput parses the text output of `gt agents list`.
+// Sample input:
+//
+//	  🎩 Mayor
+//	  🐺 Deacon
+//	── plane ──
+//	  🏭 refinery
+//	  🦉 witness
+//
+// Global agents are returned as "name/"; rig-scoped agents as "rig/name",
+// matching the address format used by handleIssueUpdate / escalations.
+func parseAgentsListOutput(text string) []OptionItem {
+	var agents []OptionItem
+	currentRig := ""
+	for _, raw := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "──") && strings.HasSuffix(trimmed, "──") {
+			currentRig = strings.TrimSpace(strings.Trim(trimmed, "─"))
+			continue
+		}
+		// Agent rows are indented and start with an emoji (non-ASCII).
+		// "No agent sessions running." and other ASCII status lines fail
+		// both checks and are skipped.
+		if !strings.HasPrefix(raw, " ") {
+			continue
+		}
+		first, _ := utf8.DecodeRuneInString(trimmed)
+		if first < 0x80 {
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.ToLower(fields[len(fields)-1])
+		if !isValidID(name) {
+			continue
+		}
+		addr := name + "/"
+		if currentRig != "" {
+			addr = currentRig + "/" + name
+		}
+		agents = append(agents, OptionItem{Name: addr, Status: "running", Running: true})
 	}
 	return agents
 }
