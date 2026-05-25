@@ -4315,11 +4315,6 @@
             .replace(/'/g, '&#39;');
     }
 
-    // Soft usage ceiling for the per-account bar. Anthropic doesn't expose a
-    // remaining-tokens API, so we treat this as a visual hint, not a quota.
-    // Bumped via testing; tweak if your account class differs.
-    var QUOTA_USAGE_SOFT_CEILING = 8000000;
-
     function renderQuotaStatbar(counters) {
         var el = document.getElementById('quota-stat-summary');
         if (!el) return;
@@ -4332,7 +4327,7 @@
         el.innerHTML = parts.join('');
     }
 
-    function renderQuotaCard(a, limitedSessions) {
+    function renderQuotaCard(a, limitedSessions, ceilings) {
         var statusKey = a.status || 'available';
         var classes = 'quota-card status-' + statusKey;
         var html = '<article class="' + classes + '">';
@@ -4346,6 +4341,13 @@
 
         if (a.email) {
             html += '<div class="quota-card-email">' + escapeHTML(a.email) + '</div>';
+        }
+
+        // This config dir is currently borrowing another account's token via a
+        // quota rotation swap. Say so explicitly — otherwise the operator reads
+        // the borrowed login as this account's own and assumes it's signed in.
+        if (a.swapped_to) {
+            html += '<div class="quota-card-swap" title="Quota rotation swapped this account&#39;s credentials">running as <code>' + escapeHTML(a.swapped_to) + '</code></div>';
         }
 
         html += '<dl class="quota-card-meta">';
@@ -4397,43 +4399,62 @@
             html += '</div>';
         }
 
-        // Always render the usage bar slot — even at 0 — so the operator sees
-        // the surface and can tell "we have no transcript yet" apart from "the
-        // card itself is broken". Counts come from the assistant `usage`
-        // blocks in the active Claude transcript for each session's workdir.
-        var total = 0;
-        var sessCount = 0;
-        if (a.usage && a.usage.counts) {
-            total = (a.usage.counts.input_tokens || 0) +
-                    (a.usage.counts.output_tokens || 0) +
-                    (a.usage.counts.cache_read_tokens || 0) +
-                    (a.usage.counts.cache_creation_tokens || 0);
-            sessCount = (a.usage.sessions || []).length;
+        // Two usage bars per account — session (5h) and week (7d) — each
+        // showing "remaining until block": ceiling − tokens used in window.
+        // The ceilings are operator-configured estimates (Anthropic's real
+        // limit is opaque), passed in via resp.usage_ceilings. Always render
+        // both bars even at 0 so the operator can tell "no transcript yet"
+        // apart from "the card itself is broken". Counts come from the
+        // assistant `usage` blocks in this account's Claude transcripts.
+        var ceil = ceilings || {};
+        var sessionUsed = a.usage ? quotaTokenTotal(a.usage.counts) : 0;
+        var weekUsed = a.usage ? quotaTokenTotal(a.usage.week_counts) : 0;
+        var sessCount = (a.usage && a.usage.sessions) ? a.usage.sessions.length : 0;
+        html += renderUsageWindowBar('Session (5h)', sessionUsed, ceil.session_token_ceiling || 0, a.usage != null);
+        html += renderUsageWindowBar('Week (7d)', weekUsed, ceil.weekly_token_ceiling || 0, a.usage != null);
+        if (sessCount > 1) {
+            html += '<div class="quota-card-usage-sess">' + sessCount + ' active sessions</div>';
         }
-        var pct = Math.min(100, Math.round((total / QUOTA_USAGE_SOFT_CEILING) * 100));
+
+        html += '</article>';
+        return html;
+    }
+
+    // Sum input+output+cache from a usage `counts`/`week_counts` block.
+    function quotaTokenTotal(counts) {
+        if (!counts) return 0;
+        return (counts.input_tokens || 0) +
+               (counts.output_tokens || 0) +
+               (counts.cache_read_tokens || 0) +
+               (counts.cache_creation_tokens || 0);
+    }
+
+    // Render one usage window bar showing tokens used / ceiling plus the
+    // estimated remaining-until-block. `hasData` distinguishes an account with
+    // a usage report (0 used → "no usage in window") from one without (—).
+    function renderUsageWindowBar(label, used, ceiling, hasData) {
+        var pct = ceiling > 0 ? Math.min(100, Math.round((used / ceiling) * 100)) : 0;
         var fillCls = 'quota-card-usage-fill';
         if (pct >= 90) fillCls += ' over';
         else if (pct >= 70) fillCls += ' near';
-        var rightLabel;
-        if (total > 0) {
-            rightLabel = pct + '%';
-        } else if (a.usage) {
-            rightLabel = 'no usage in window';
-        } else {
-            rightLabel = '—';
-        }
-        var leftLabel = total > 0
-            ? fmtTokens(total) + ' tok' + (sessCount > 1 ? ' · ' + sessCount + ' sess' : '')
-            : '0 tok';
-        html += '<div class="quota-card-usage">';
-        html += '<div class="quota-card-usage-bar"><div class="' + fillCls + '" style="width:' + pct + '%"></div></div>';
-        html += '<div class="quota-card-usage-label">';
-        html += '<span>' + escapeHTML(leftLabel) + '</span>';
-        html += '<span>' + escapeHTML(rightLabel) + '</span>';
-        html += '</div>';
-        html += '</div>';
 
-        html += '</article>';
+        var rightLabel;
+        if (ceiling > 0) {
+            rightLabel = fmtTokens(used) + ' / ' + fmtTokens(ceiling);
+        } else if (used > 0) {
+            rightLabel = fmtTokens(used) + ' tok';
+        } else {
+            rightLabel = hasData ? 'no usage in window' : '—';
+        }
+
+        var html = '<div class="quota-card-usage">';
+        html += '<div class="quota-card-usage-label"><span>' + escapeHTML(label) + '</span><span>' + escapeHTML(rightLabel) + '</span></div>';
+        html += '<div class="quota-card-usage-bar"><div class="' + fillCls + '" style="width:' + pct + '%"></div></div>';
+        if (ceiling > 0) {
+            var remaining = Math.max(0, ceiling - used);
+            html += '<div class="quota-card-usage-remaining">~' + fmtTokens(remaining) + ' faltan</div>';
+        }
+        html += '</div>';
         return html;
     }
 
@@ -4447,7 +4468,7 @@
         }
         var html = '';
         for (var i = 0; i < accounts.length; i++) {
-            html += renderQuotaCard(accounts[i], resp.limited_sessions);
+            html += renderQuotaCard(accounts[i], resp.limited_sessions, resp.usage_ceilings);
         }
         mosaic.innerHTML = html;
 
@@ -4593,5 +4614,23 @@
     bindQuotaDrawerToggle();
     applyQuotaDrawerVisibility();
     loadQuotaSummary();
+
+    // Dedicated live poll for token usage. The dashboard's htmx morph (which
+    // also refreshes quota) only fires on `dashboard-update` SSE events, and
+    // those are driven by writes to .events.jsonl — token consumption never
+    // writes there, so the usage counts would otherwise go stale while an
+    // agent silently burns tokens. Poll the summary endpoint directly so the
+    // mosaic stays live independent of town event activity. Skip when the tab
+    // is hidden: each call walks tmux sessions + transcripts server-side, so
+    // there's no point paying that cost for a backgrounded dashboard.
+    var QUOTA_POLL_MS = 15000;
+    setInterval(function() {
+        if (document.hidden) return;
+        loadQuotaSummary();
+    }, QUOTA_POLL_MS);
+    // Catch up immediately when the tab regains focus after being hidden.
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) loadQuotaSummary();
+    });
 
 })();

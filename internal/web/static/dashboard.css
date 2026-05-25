@@ -4325,12 +4325,27 @@
         }
         .quota-card-usage-fill.near { background: var(--yellow); }
         .quota-card-usage-fill.over { background: var(--red); }
+        .quota-card-usage + .quota-card-usage {
+            margin-top: 6px;
+        }
         .quota-card-usage-label {
             font-size: 0.65rem;
             color: var(--text-muted);
-            margin-top: 2px;
+            margin-bottom: 2px;
             display: flex;
             justify-content: space-between;
+        }
+        .quota-card-usage-remaining {
+            font-size: 0.6rem;
+            color: var(--text-muted);
+            margin-top: 1px;
+            text-align: right;
+            opacity: 0.85;
+        }
+        .quota-card-usage-sess {
+            font-size: 0.6rem;
+            color: var(--text-muted);
+            margin-top: 4px;
         }
 
         .quota-waiting,
@@ -4386,6 +4401,23 @@
             border-radius: 3px;
             color: var(--text-primary);
             user-select: all;
+        }
+
+        .quota-card-swap {
+            font-size: 0.7rem;
+            color: var(--yellow);
+            background: rgba(255, 180, 84, 0.10);
+            border-radius: 4px;
+            padding: 3px 6px;
+            margin: 2px 0;
+            line-height: 1.4;
+        }
+        .quota-card-swap code {
+            font-family: inherit;
+            background: rgba(0, 0, 0, 0.25);
+            padding: 1px 4px;
+            border-radius: 3px;
+            color: var(--text-primary);
         }
 
         .quota-usage-note {
