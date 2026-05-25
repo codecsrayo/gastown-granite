@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -14,13 +13,13 @@ import (
 	"golang.org/x/term"
 
 	"github.com/steveyegge/gastown/internal/beads"
-	"github.com/steveyegge/gastown/internal/cli"
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/events"
 	"github.com/steveyegge/gastown/internal/git"
 	"github.com/steveyegge/gastown/internal/mail"
 	"github.com/steveyegge/gastown/internal/session"
+	"github.com/steveyegge/gastown/internal/sessionrestart"
 	"github.com/steveyegge/gastown/internal/style"
 	"github.com/steveyegge/gastown/internal/tmux"
 	"github.com/steveyegge/gastown/internal/ui"
@@ -737,254 +736,17 @@ func resolvePathToSession(path string) (string, error) {
 	return "", fmt.Errorf("cannot parse path '%s' - expected <rig>/<polecat>, <rig>/crew/<name>, <rig>/witness, or <rig>/refinery", path)
 }
 
-// claudeEnvVars lists the Claude-related environment variables to propagate
-// during handoff. These vars aren't inherited by tmux respawn-pane's fresh shell.
-var claudeEnvVars = []string{
-	// Claude API and config
-	"ANTHROPIC_API_KEY",
-	"CLAUDE_CODE_USE_BEDROCK",
-	// AWS vars for Bedrock
-	"AWS_PROFILE",
-	"AWS_REGION",
-	// OTEL telemetry — propagate so Claude keeps sending metrics after handoff
-	// (tmux respawn-pane starts a fresh shell that doesn't inherit these)
-	"CLAUDE_CODE_ENABLE_TELEMETRY",
-	"OTEL_METRICS_EXPORTER",
-	"OTEL_METRIC_EXPORT_INTERVAL",
-	"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-	"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
-	"OTEL_LOGS_EXPORTER",
-	"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-	"OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
-	"OTEL_LOG_TOOL_DETAILS",
-	"OTEL_LOG_TOOL_CONTENT",
-	"OTEL_LOG_USER_PROMPTS",
-	"OTEL_RESOURCE_ATTRIBUTES",
-	// bd telemetry — so `bd` calls inside Claude emit to VictoriaMetrics/Logs
-	"BD_OTEL_METRICS_URL",
-	"BD_OTEL_LOGS_URL",
-	// GT telemetry source vars — needed to recompute derived vars after handoff
-	"GT_OTEL_METRICS_URL",
-	"GT_OTEL_LOGS_URL",
-}
 
-// buildRestartCommand creates the command to run when respawning a session's pane.
-// This needs to be the actual command to execute (e.g., claude), not a session attach command.
-// The command includes a cd to the correct working directory for the role.
-//
-// buildRestartCommandOpts controls restart command generation.
-type buildRestartCommandOpts struct {
-	// ContinueSession adds --continue and omits the beacon prompt,
-	// so the agent resumes its previous conversation silently.
-	ContinueSession bool
-	// ContinuePrompt overrides the default continuation prompt when
-	// ContinueSession is true. If empty, falls back to a generic
-	// continuation message.
-	ContinuePrompt string
-}
+// buildRestartCommandOpts is the cmd-local alias for sessionrestart.Options.
+// Kept so existing call sites compile without churn.
+type buildRestartCommandOpts = sessionrestart.Options
 
 func buildRestartCommand(sessionName string) (string, error) {
-	return buildRestartCommandWithOpts(sessionName, buildRestartCommandOpts{})
+	return sessionrestart.BuildCommand(sessionName, sessionrestart.Options{})
 }
 
 func buildRestartCommandWithOpts(sessionName string, opts buildRestartCommandOpts) (string, error) {
-	// Detect town root from current directory
-	townRoot := detectTownRootFromCwd()
-	if townRoot == "" {
-		return "", fmt.Errorf("cannot detect town root - run from within a Gas Town workspace")
-	}
-
-	// Determine the working directory for this session type
-	workDir, err := sessionWorkDir(sessionName, townRoot)
-	if err != nil {
-		return "", err
-	}
-
-	// Parse the session name to get the identity (used for GT_ROLE and beacon)
-	identity, err := session.ParseSessionName(sessionName)
-	if err != nil {
-		return "", fmt.Errorf("cannot parse session name %q: %w", sessionName, err)
-	}
-	gtRole := identity.GTRole()
-	simpleRole := config.ExtractSimpleRole(gtRole)
-
-	// Derive rigPath from session identity for --settings flag resolution
-	rigPath := ""
-	if identity.Rig != "" {
-		rigPath = filepath.Join(townRoot, identity.Rig)
-	}
-
-	// Build startup beacon for predecessor discovery via /resume.
-	// When ContinueSession is set, use a continuation prompt instead of
-	// the full handoff beacon — the agent resumes its previous context.
-	beacon := ""
-	if opts.ContinueSession {
-		if opts.ContinuePrompt != "" {
-			beacon = opts.ContinuePrompt
-		} else {
-			beacon = "Your account was rotated to avoid a rate limit. Continue your previous task."
-		}
-	} else if isPatrolRole(simpleRole) {
-		// Patrol roles (refinery, witness, deacon) must re-enter their patrol
-		// loop on handoff, not "wait for instructions." Without this, idle
-		// patrol agents cycle through handoff→prime→no-work→handoff burning
-		// CPU and tokens indefinitely. The patrol instruction ensures they
-		// reach the await-event idle state in their burn-or-loop step.
-		beacon = session.BuildStartupPrompt(session.BeaconConfig{
-			Recipient: identity.BeaconAddress(),
-			Sender:    "self",
-			Topic:     "patrol",
-		}, "Run `"+cli.Name()+" prime --hook` and begin patrol.")
-	} else {
-		beacon = session.FormatStartupBeacon(session.BeaconConfig{
-			Recipient: identity.BeaconAddress(),
-			Sender:    "self",
-			Topic:     "handoff",
-		})
-	}
-
-	// For respawn-pane, we:
-	// 1. cd to the right directory (role's canonical home)
-	// 2. export GT_ROLE and BD_ACTOR so role detection works correctly
-	// 3. export Claude-related env vars (not inherited by fresh shell)
-	// 4. run claude with the startup beacon (triggers immediate context loading)
-	// Use exec to ensure clean process replacement.
-	//
-	// Check if current session is using a non-default agent (GT_AGENT env var).
-	// If so, preserve it across handoff by using the override variant.
-	// Fall back to tmux session environment if process env doesn't have it,
-	// since exec env vars may not propagate through all agent runtimes.
-	currentAgent, agentInEnv := os.LookupEnv("GT_AGENT")
-	if !agentInEnv {
-		// GT_AGENT not in process env at all — try tmux session environment
-		// as fallback, since exec env vars may not propagate through all runtimes.
-		t := tmux.NewTmux()
-		if val, err := t.GetEnvironment(sessionName, "GT_AGENT"); err == nil && val != "" {
-			currentAgent = val
-		}
-	}
-	var runtimeCmd string
-	if currentAgent != "" {
-		var err error
-		runtimeCmd, err = config.GetRuntimeCommandWithPromptAndAgentOverride(rigPath, beacon, currentAgent)
-		if err != nil {
-			return "", fmt.Errorf("resolving agent config: %w", err)
-		}
-	} else if simpleRole != "" {
-		// Preserve role_agents model selection across self-handoff by resolving
-		// runtime command via role-aware config (instead of default-agent lookup).
-		runtimeCmd = config.ResolveRoleAgentConfig(simpleRole, townRoot, rigPath).BuildCommandWithPrompt(beacon)
-	} else {
-		runtimeCmd = config.GetRuntimeCommandWithPrompt(rigPath, beacon)
-	}
-
-	// Add --continue flag to resume the most recent session.
-	// Note: runtimeCmd starts with the command name (e.g., "claude --settings ..."),
-	// not "exec claude" — the "exec" prefix is added later in the Sprintf.
-	if opts.ContinueSession {
-		// Handle both Unix ("claude ") and Windows ("claude.exe ") binary names
-		if n := strings.Replace(runtimeCmd, "claude.exe ", "claude.exe --continue ", 1); n != runtimeCmd {
-			runtimeCmd = n
-		} else {
-			runtimeCmd = strings.Replace(runtimeCmd, "claude ", "claude --continue ", 1)
-		}
-	}
-
-	// Build environment variables map — role vars first, then Claude vars.
-	// Uses config.PrependEnv for OS-aware export syntax (bash export on
-	// Unix, $env: on Windows).
-	envMap := make(map[string]string)
-	var agentEnv map[string]string // agent config Env (rc.toml [agents.X.env])
-	if gtRole != "" {
-		// When GT_AGENT is set, resolve config with the override so we pick up
-		// the active agent's env (e.g., NODE_OPTIONS from [agents.X.env]).
-		// Otherwise, fall back to role-based resolution.
-		var runtimeConfig *config.RuntimeConfig
-		if currentAgent != "" {
-			rc, _, err := config.ResolveAgentConfigWithOverride(townRoot, rigPath, currentAgent)
-			if err == nil {
-				runtimeConfig = rc
-			} else {
-				runtimeConfig = config.ResolveRoleAgentConfig(simpleRole, townRoot, rigPath)
-			}
-		} else if simpleRole != "" {
-			runtimeConfig = config.ResolveRoleAgentConfig(simpleRole, townRoot, rigPath)
-		} else {
-			runtimeConfig = config.ResolveAgentConfig(townRoot, rigPath)
-		}
-		agentEnv = runtimeConfig.Env
-		envMap["GT_ROLE"] = gtRole
-		envMap["BD_ACTOR"] = gtRole
-		envMap["GIT_AUTHOR_NAME"] = gtRole
-		if runtimeConfig.Session != nil && runtimeConfig.Session.SessionIDEnv != "" {
-			envMap["GT_SESSION_ID_ENV"] = runtimeConfig.Session.SessionIDEnv
-		}
-	}
-
-	// Propagate GT_ROOT so subsequent handoffs can use it as fallback
-	// when cwd-based detection fails (broken state recovery)
-	envMap["GT_ROOT"] = townRoot
-
-	// Preserve GT_AGENT across handoff so agent override persists
-	if currentAgent != "" {
-		envMap["GT_AGENT"] = currentAgent
-	}
-
-	// Preserve GT_PROCESS_NAMES across handoff for accurate liveness detection.
-	// Without this, custom agents that shadow built-in presets (e.g., custom
-	// "codex" running "opencode") would revert to GT_AGENT-based lookup after
-	// handoff, causing false liveness failures.
-	if processNames := os.Getenv("GT_PROCESS_NAMES"); processNames != "" {
-		envMap["GT_PROCESS_NAMES"] = processNames
-	} else if currentAgent != "" {
-		resolved := config.ResolveProcessNames(currentAgent, "")
-		envMap["GT_PROCESS_NAMES"] = strings.Join(resolved, ",")
-	}
-
-	// Add Claude-related env vars from current environment
-	for _, name := range claudeEnvVars {
-		if val := os.Getenv(name); val != "" {
-			envMap[name] = val
-		}
-	}
-
-	// Merge all agent preset env vars from config.json [agents.X.env] so the
-	// new session inherits the same custom configuration (e.g. ANTHROPIC_BASE_URL,
-	// CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_CUSTOM_HEADERS for proxied Claude).
-	// This mirrors the first-spawn path in config/loader.go where preset.Env is
-	// merged into RuntimeConfig.Env. Existing keys (GT_ROLE, BD_ACTOR, etc.) take
-	// precedence over agent-defined keys.
-	for k, v := range agentEnv {
-		if _, exists := envMap[k]; !exists {
-			envMap[k] = v
-		}
-	}
-
-	// Special case: clear NODE_OPTIONS when not explicitly set in the agent
-	// config, to prevent debugger flags (e.g., --inspect from VSCode) from
-	// being inherited through tmux into Claude's Node.js runtime.
-	// Note: agentEnv is intentionally nil when gtRole is empty (non-role
-	// handoffs), which causes the nil map lookup to return ("", false) —
-	// clearing NODE_OPTIONS.
-	if _, hasNodeOpts := agentEnv["NODE_OPTIONS"]; !hasNodeOpts {
-		envMap["NODE_OPTIONS"] = ""
-	}
-
-	// Build the full command with OS-appropriate env prefix
-	var cdPrefix string
-	if runtime.GOOS == "windows" {
-		cdPrefix = fmt.Sprintf("cd %s; ", workDir)
-	} else {
-		cdPrefix = fmt.Sprintf("cd %s && ", workDir)
-	}
-
-	var execPrefix string
-	if runtime.GOOS != "windows" {
-		execPrefix = "exec "
-	}
-
-	envCmd := config.PrependEnv(execPrefix+runtimeCmd, envMap)
-	return cdPrefix + envCmd, nil
+	return sessionrestart.BuildCommand(sessionName, opts)
 }
 
 // updateSessionEnvForHandoff updates the tmux session environment with the
@@ -1045,62 +807,9 @@ func updateSessionEnvForHandoff(t *tmux.Tmux, sessionName, agentOverride string)
 	_ = t.SetEnvironment(sessionName, "GT_PROCESS_NAMES", processNames)
 }
 
-// sessionWorkDir returns the correct working directory for a session.
-// This is the canonical home for each role type.
+// sessionWorkDir delegates to sessionrestart.SessionWorkDir.
 func sessionWorkDir(sessionName, townRoot string) (string, error) {
-	// Get session names for comparison
-	mayorSession := getMayorSessionName()
-	deaconSession := getDeaconSessionName()
-
-	bootSession := session.BootSessionName()
-
-	switch {
-	case sessionName == mayorSession:
-		// Mayor runs from ~/gt/mayor/, not town root.
-		// Tools use workspace.FindFromCwd() which walks UP to find town root.
-		return townRoot + "/mayor", nil
-
-	case sessionName == bootSession:
-		// Boot watchdog runs from ~/gt/deacon/dogs/boot/, not ~/gt/deacon/.
-		// Boot is ephemeral (fresh each daemon tick) with its own CLAUDE.md.
-		return townRoot + "/deacon/dogs/boot", nil
-
-	case sessionName == deaconSession:
-		return townRoot + "/deacon", nil
-
-	case strings.Contains(sessionName, "-crew-"):
-		// gt-<rig>-crew-<name> -> <townRoot>/<rig>/crew/<name>
-		rig, name, _, ok := parseCrewSessionName(sessionName)
-		if !ok {
-			return "", fmt.Errorf("cannot parse crew session name: %s", sessionName)
-		}
-		return fmt.Sprintf("%s/%s/crew/%s", townRoot, rig, name), nil
-
-	default:
-		// Parse session name to determine role and resolve paths
-		identity, err := session.ParseSessionName(sessionName)
-		if err != nil {
-			return "", fmt.Errorf("unknown session type: %s (%w)", sessionName, err)
-		}
-		switch identity.Role {
-		case session.RoleMayor:
-			return townRoot + "/mayor", nil
-		case session.RoleDeacon:
-			return townRoot + "/deacon", nil
-		case session.RoleOverseer:
-			return townRoot + "/deacon", nil
-		case session.RoleWitness:
-			return fmt.Sprintf("%s/%s/witness", townRoot, identity.Rig), nil
-		case session.RoleRefinery:
-			return fmt.Sprintf("%s/%s/refinery/rig", townRoot, identity.Rig), nil
-		case session.RolePolecat:
-			return fmt.Sprintf("%s/%s/polecats/%s", townRoot, identity.Rig, identity.Name), nil
-		case session.RoleDog:
-			return fmt.Sprintf("%s/deacon/dogs/%s", townRoot, identity.Name), nil
-		default:
-			return "", fmt.Errorf("unknown session type: %s (role %s, try specifying role explicitly)", sessionName, identity.Role)
-		}
-	}
+	return sessionrestart.SessionWorkDir(sessionName, townRoot)
 }
 
 // sessionToGTRole converts a session name to a GT_ROLE value.
@@ -1113,49 +822,9 @@ func sessionToGTRole(sessionName string) string {
 	return identity.GTRole()
 }
 
-// detectTownRootFromCwd walks up from the current directory to find the town root.
-// Falls back to GT_TOWN_ROOT or GT_ROOT env vars if cwd detection fails (broken state recovery).
+// detectTownRootFromCwd delegates to sessionrestart.DetectTownRoot.
 func detectTownRootFromCwd() string {
-	// Use workspace.FindFromCwd which handles both primary (mayor/town.json)
-	// and secondary (mayor/ directory) markers
-	townRoot, err := workspace.FindFromCwd()
-	if err == nil && townRoot != "" {
-		return townRoot
-	}
-
-	// Fallback: try environment variables for town root
-	// GT_TOWN_ROOT is set by shell integration, GT_ROOT is set by session manager
-	// This enables handoff to work even when cwd detection fails due to
-	// detached HEAD, wrong branch, deleted worktree, etc.
-	for _, envName := range []string{"GT_TOWN_ROOT", "GT_ROOT"} {
-		if envRoot := os.Getenv(envName); envRoot != "" {
-			// Verify it's actually a workspace
-			if _, statErr := os.Stat(filepath.Join(envRoot, workspace.PrimaryMarker)); statErr == nil {
-				return envRoot
-			}
-			// Try secondary marker too
-			if info, statErr := os.Stat(filepath.Join(envRoot, workspace.SecondaryMarker)); statErr == nil && info.IsDir() {
-				return envRoot
-			}
-		}
-	}
-
-	// Final fallback: read GT_TOWN_ROOT from tmux global environment.
-	// This handles the run-shell case where CWD is $HOME and process env
-	// vars aren't set — the daemon sets GT_TOWN_ROOT in tmux global env.
-	if socket := tmux.SocketFromEnv(); socket != "" {
-		t := tmux.NewTmuxWithSocket(socket)
-		if envRoot, err := t.GetGlobalEnvironment("GT_TOWN_ROOT"); err == nil && envRoot != "" {
-			if _, statErr := os.Stat(filepath.Join(envRoot, workspace.PrimaryMarker)); statErr == nil {
-				return envRoot
-			}
-			if info, statErr := os.Stat(filepath.Join(envRoot, workspace.SecondaryMarker)); statErr == nil && info.IsDir() {
-				return envRoot
-			}
-		}
-	}
-
-	return ""
+	return sessionrestart.DetectTownRoot()
 }
 
 // handoffRemoteSession respawns a different session and optionally switches to it.
@@ -1726,13 +1395,7 @@ func recordHandoffTime() {
 	_ = os.WriteFile(tsPath, []byte(fmt.Sprintf("%d", time.Now().Unix())), 0644)
 }
 
-// isPatrolRole returns true if the role runs a patrol loop (refinery, witness, deacon).
-// Patrol roles must re-enter their patrol molecule on handoff rather than
-// "waiting for instructions," which leads to idle CPU burn.
+// isPatrolRole delegates to sessionrestart.IsPatrolRole.
 func isPatrolRole(role string) bool {
-	switch role {
-	case "refinery", "witness", "deacon":
-		return true
-	}
-	return false
+	return sessionrestart.IsPatrolRole(role)
 }
