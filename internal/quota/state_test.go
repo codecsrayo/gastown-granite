@@ -547,3 +547,99 @@ func TestClearExpired_NoResetsAt(t *testing.T) {
 		t.Errorf("expected no_reset to remain limited")
 	}
 }
+
+// --- ResolveResetInstant (rollover) tests ---
+
+func TestResolveResetInstant_RollsPastMidnight(t *testing.T) {
+	bogota, _ := time.LoadLocation("America/Bogota")
+	// Detection in the evening; provider says reset at 12:40am.
+	detected := time.Date(2026, 5, 24, 21, 35, 0, 0, bogota) // 9:35pm May 24
+
+	got, err := ResolveResetInstant("12:40am (America/Bogota)", detected)
+	if err != nil {
+		t.Fatalf("ResolveResetInstant error: %v", err)
+	}
+	// Must resolve to the NEXT morning (May 25 00:40), not ~21h in the past.
+	want := time.Date(2026, 5, 25, 0, 40, 0, 0, bogota)
+	if !got.Equal(want) {
+		t.Errorf("got %s, want %s", got, want)
+	}
+}
+
+func TestResolveResetInstant_SameDayWhenStillAhead(t *testing.T) {
+	bogota, _ := time.LoadLocation("America/Bogota")
+	detected := time.Date(2026, 5, 25, 0, 10, 0, 0, bogota) // 12:10am, reset 30m out
+
+	got, err := ResolveResetInstant("12:40am (America/Bogota)", detected)
+	if err != nil {
+		t.Fatalf("ResolveResetInstant error: %v", err)
+	}
+	want := time.Date(2026, 5, 25, 0, 40, 0, 0, bogota)
+	if !got.Equal(want) {
+		t.Errorf("got %s, want %s — must not roll forward when reset is still ahead", got, want)
+	}
+}
+
+// TestClearExpired_NoPrematureClearAcrossMidnight reproduces the incident: an
+// account limited in the evening with a post-midnight reset must NOT clear
+// before that reset actually arrives, and must clear once it does.
+func TestClearExpired_NoPrematureClearAcrossMidnight(t *testing.T) {
+	bogota, _ := time.LoadLocation("America/Bogota")
+	limitedAt := time.Date(2026, 5, 24, 21, 35, 0, 0, bogota)
+
+	newState := func() *config.QuotaState {
+		return &config.QuotaState{Accounts: map[string]config.AccountQuotaState{
+			"acct": {
+				Status:    config.QuotaStatusLimited,
+				LimitedAt: limitedAt.UTC().Format(time.RFC3339),
+				ResetsAt:  "12:40am (America/Bogota)",
+			},
+		}}
+	}
+
+	// 23:00 May 24 — before the real reset. Old code (anchor=now, no rollover)
+	// resolved 12:40am to May 24 00:40 (past) and cleared here prematurely.
+	beforeMidnight := time.Date(2026, 5, 24, 23, 0, 0, 0, bogota)
+	if cleared := clearExpiredAt(nil, newState(), beforeMidnight); len(cleared) != 0 {
+		t.Errorf("premature clear before reset: %v", cleared)
+	}
+
+	// 00:50 May 25 — 10 minutes after the real reset. Must clear now.
+	afterReset := time.Date(2026, 5, 25, 0, 50, 0, 0, bogota)
+	if cleared := clearExpiredAt(nil, newState(), afterReset); len(cleared) != 1 {
+		t.Errorf("expected clear after reset, got %v", cleared)
+	}
+}
+
+// --- MarkLimitedState resolves + refreshes UnlocksAt ---
+
+func TestMarkLimitedState_ResolvesUnlocksAt(t *testing.T) {
+	bogota, _ := time.LoadLocation("America/Bogota")
+	detected := time.Date(2026, 5, 24, 21, 35, 0, 0, bogota)
+
+	state := &config.QuotaState{Accounts: map[string]config.AccountQuotaState{}}
+	MarkLimitedState(state, "acct", "12:40am (America/Bogota)", detected)
+
+	acct := state.Accounts["acct"]
+	if acct.Status != config.QuotaStatusLimited {
+		t.Fatalf("status = %s, want limited", acct.Status)
+	}
+	wantUnlock := time.Date(2026, 5, 25, 0, 40, 0, 0, bogota).UTC().Format(time.RFC3339)
+	if acct.UnlocksAt != wantUnlock {
+		t.Errorf("UnlocksAt = %q, want %q", acct.UnlocksAt, wantUnlock)
+	}
+	firstLimitedAt := acct.LimitedAt
+
+	// A later refresh (provider pushed reset to 1:15am) keeps the original
+	// LimitedAt anchor but moves UnlocksAt forward.
+	later := time.Date(2026, 5, 25, 0, 30, 0, 0, bogota)
+	MarkLimitedState(state, "acct", "1:15am (America/Bogota)", later)
+	acct = state.Accounts["acct"]
+	if acct.LimitedAt != firstLimitedAt {
+		t.Errorf("LimitedAt moved on refresh: %q -> %q", firstLimitedAt, acct.LimitedAt)
+	}
+	wantUnlock2 := time.Date(2026, 5, 25, 1, 15, 0, 0, bogota).UTC().Format(time.RFC3339)
+	if acct.UnlocksAt != wantUnlock2 {
+		t.Errorf("refreshed UnlocksAt = %q, want %q", acct.UnlocksAt, wantUnlock2)
+	}
+}

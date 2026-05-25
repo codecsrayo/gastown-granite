@@ -140,12 +140,9 @@ func ShouldProbe(acctState config.AccountQuotaState, now time.Time, lead time.Du
 	if acctState.Status != config.QuotaStatusLimited {
 		return false
 	}
-	if acctState.ResetsAt == "" {
-		return true
-	}
-	resetTime, err := ParseResetTime(acctState.ResetsAt, now)
-	if err != nil {
-		return true
+	resetTime, ok := resolvedUnlock(acctState, now)
+	if !ok {
+		return true // no parseable reset — nothing to gate on
 	}
 	return !now.Before(resetTime.Add(-lead))
 }

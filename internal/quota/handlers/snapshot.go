@@ -59,6 +59,24 @@ func (s *SnapshotLink) Handle(_ context.Context, e bus.Event, next chain.Next) e
 			return err
 		}
 		quota.RecordLimitedSessions(state, sessions)
+		// Keep the reset time current for accounts that are ALREADY persisted
+		// as limited. We deliberately do not flip available→limited here: the
+		// planner's available pool is sourced from persisted state, and a stale
+		// pane still showing old rate-limit text would otherwise shrink the pool
+		// and block rotations (see PlanRotation). Refreshing only existing
+		// limited accounts tracks a provider-pushed reset without that risk.
+		// MarkLimitedState preserves LimitedAt (no transition) and re-resolves
+		// UnlocksAt against it, so the cooldown anchor stays fixed.
+		now := s.now()
+		for _, r := range sc.Results {
+			if !r.RateLimited || r.AccountHandle == "" || r.ResetsAt == "" {
+				continue
+			}
+			if existing, ok := state.Accounts[r.AccountHandle]; !ok || existing.Status != config.QuotaStatusLimited {
+				continue
+			}
+			quota.MarkLimitedState(state, r.AccountHandle, r.ResetsAt, now)
+		}
 		return s.mgr.SaveUnlocked(state)
 	})
 	return next(e)

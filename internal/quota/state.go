@@ -224,12 +224,9 @@ func clearExpiredAt(_ *Manager, state *config.QuotaState, now time.Time) []strin
 		if acctState.Status != config.QuotaStatusLimited {
 			continue
 		}
-		if acctState.ResetsAt == "" {
-			continue
-		}
-		resetTime, err := ParseResetTime(acctState.ResetsAt, now)
-		if err != nil {
-			continue // can't parse — leave as-is
+		resetTime, ok := resolvedUnlock(acctState, now)
+		if !ok {
+			continue // no parseable reset — leave as-is
 		}
 		if now.After(resetTime) {
 			preserved := config.AccountQuotaState{
@@ -347,16 +344,70 @@ func RecordRotation(state *config.QuotaState, sourceHandle string, now time.Time
 // rotated *away* from is recorded as limited — otherwise the respawn clears
 // the rate-limit text from the pane and the next scan never re-detects it,
 // leaving the blocked account showing "available" on the dashboard.
+//
+// LimitedAt is stamped only on the available→limited transition so the
+// detection moment stays fixed across re-detections; UnlocksAt is always
+// re-resolved from the (possibly refreshed) reset string anchored to that
+// fixed LimitedAt, letting a provider-pushed reset move forward without the
+// anchor sliding into the future and starving the cooldown clear.
 // Caller must hold the quota lock or invoke this within WithLock.
 func MarkLimitedState(state *config.QuotaState, handle, resetsAt string, now time.Time) {
 	if handle == "" {
 		return
 	}
 	acct := state.Accounts[handle]
+	if acct.Status != config.QuotaStatusLimited {
+		acct.LimitedAt = now.UTC().Format(time.RFC3339)
+	}
 	acct.Status = config.QuotaStatusLimited
-	acct.LimitedAt = now.UTC().Format(time.RFC3339)
 	acct.ResetsAt = resetsAt
+	acct.UnlocksAt = ""
+	if resetsAt != "" {
+		ref := now
+		if acct.LimitedAt != "" {
+			if t, err := time.Parse(time.RFC3339, acct.LimitedAt); err == nil {
+				ref = t
+			}
+		}
+		if t, err := ResolveResetInstant(resetsAt, ref); err == nil {
+			acct.UnlocksAt = t.UTC().Format(time.RFC3339)
+		}
+	}
 	state.Accounts[handle] = acct
+}
+
+// resolvedUnlock returns the absolute reset instant for a limited account.
+// ok=false means no reset is known — callers leave the account untouched.
+//
+// Resolution order:
+//  1. Persisted UnlocksAt (already resolved at detection) — authoritative.
+//  2. ResetsAt anchored to LimitedAt with next-day rollover — so a post-midnight
+//     reset string ("12:40am" captured in the evening) lands on the correct
+//     upcoming instant instead of ~23h in the past.
+//  3. ResetsAt against today with NO rollover — legacy fallback for old or
+//     malformed state that has neither UnlocksAt nor LimitedAt; preserves the
+//     original ClearExpired semantics (clear once the wall-clock time passes).
+func resolvedUnlock(acct config.AccountQuotaState, now time.Time) (time.Time, bool) {
+	if acct.UnlocksAt != "" {
+		if t, err := time.Parse(time.RFC3339, acct.UnlocksAt); err == nil {
+			return t, true
+		}
+	}
+	if acct.ResetsAt == "" {
+		return time.Time{}, false
+	}
+	if acct.LimitedAt != "" {
+		if ref, err := time.Parse(time.RFC3339, acct.LimitedAt); err == nil {
+			if t, rerr := ResolveResetInstant(acct.ResetsAt, ref); rerr == nil {
+				return t, true
+			}
+		}
+	}
+	t, err := ParseResetTime(acct.ResetsAt, now)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // parseResetTimePattern matches formats like "7pm", "11am", "3:30pm", "7:00pm"
@@ -414,4 +465,24 @@ func ParseResetTime(resetsAt string, reference time.Time) (time.Time, error) {
 		hour, minute, 0, 0, loc)
 
 	return resetTime, nil
+}
+
+// ResolveResetInstant parses a human-readable reset time and returns the first
+// absolute instant at or after reference. It rolls to the next day when the
+// wall-clock time has already elapsed on reference's date, so an evening
+// detection of "12:40am" resolves to the following morning instead of ~23h in
+// the past (which made ClearExpired fire prematurely on the same day).
+//
+// Anchor reference to the detection moment (LimitedAt), not to a recurring
+// "now": re-resolving against now every tick would keep the instant in the
+// future and the cooldown clear would never fire.
+func ResolveResetInstant(resetsAt string, reference time.Time) (time.Time, error) {
+	t, err := ParseResetTime(resetsAt, reference)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if t.Before(reference) {
+		t = t.AddDate(0, 0, 1)
+	}
+	return t, nil
 }
