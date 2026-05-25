@@ -1707,7 +1707,7 @@ func (f *LiveConvoyFetcher) FetchIssues() ([]IssueRow, error) {
 	}
 
 	// Fetch open issues (newest first so freshly-created issues are always visible).
-	if stdout, err := f.runBdCmd(f.townRoot, "list", "--status=open", "--json", "--sort=created", "--reverse", "--limit=100"); err == nil {
+	if stdout, err := f.runBdCmd(f.townRoot, "list", "--status=open", "--json", "--sort=created", "--limit=100"); err == nil {
 		var openBeads []struct {
 			ID        string   `json:"id"`
 			Title     string   `json:"title"`
@@ -1722,7 +1722,7 @@ func (f *LiveConvoyFetcher) FetchIssues() ([]IssueRow, error) {
 	}
 
 	// Fetch hooked issues (in progress) — newest first for parity with open list.
-	if stdout, err := f.runBdCmd(f.townRoot, "list", "--status=hooked", "--json", "--sort=created", "--reverse", "--limit=100"); err == nil {
+	if stdout, err := f.runBdCmd(f.townRoot, "list", "--status=hooked", "--json", "--sort=created", "--limit=100"); err == nil {
 		var hookedBeads []struct {
 			ID        string   `json:"id"`
 			Title     string   `json:"title"`
