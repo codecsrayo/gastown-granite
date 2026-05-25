@@ -1903,37 +1903,38 @@ func extractRig(actor string) string {
 	return ""
 }
 
-// eventIcon returns an emoji for an event type.
+// eventIcon returns a Tabler sprite icon name for an event type.
+// Rendered in the activity timeline as <svg><use href="#icon-NAME"/></svg>.
 func eventIcon(eventType string) string {
 	icons := map[string]string{
-		"sling":             "🎯",
-		"hook":              "🪝",
-		"unhook":            "🔓",
-		"done":              "✅",
-		"mail":              "📬",
-		"spawn":             "🦨",
-		"kill":              "💀",
-		"nudge":             "👉",
-		"handoff":           "🤝",
-		"session_start":     "▶️",
-		"session_end":       "⏹️",
-		"session_death":     "☠️",
-		"mass_death":        "💥",
-		"patrol_started":    "🔍",
-		"patrol_complete":   "✔️",
-		"escalation_sent":   "⚠️",
-		"escalation_acked":  "👍",
-		"escalation_closed": "🔕",
-		"merge_started":     "🔀",
-		"merged":            "✨",
-		"merge_failed":      "❌",
-		"boot":              "🚀",
-		"halt":              "🛑",
+		"sling":             "target",
+		"hook":              "anchor",
+		"unhook":            "unlink",
+		"done":              "check",
+		"mail":              "mail",
+		"spawn":             "paw",
+		"kill":              "skull",
+		"nudge":             "hand-finger",
+		"handoff":           "arrows-right-left",
+		"session_start":     "player-play",
+		"session_end":       "player-stop",
+		"session_death":     "skull",
+		"mass_death":        "bomb",
+		"patrol_started":    "search",
+		"patrol_complete":   "check",
+		"escalation_sent":   "alert-triangle",
+		"escalation_acked":  "thumb-up",
+		"escalation_closed": "bell-off",
+		"merge_started":     "git-pull-request",
+		"merged":            "git-merge",
+		"merge_failed":      "x",
+		"boot":              "rocket",
+		"halt":              "player-stop",
 	}
 	if icon, ok := icons[eventType]; ok {
 		return icon
 	}
-	return "📋"
+	return "clipboard-list"
 }
 
 // eventSummary generates a human-readable summary for an event.

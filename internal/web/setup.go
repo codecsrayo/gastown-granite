@@ -929,7 +929,7 @@ const setupHTML = `<!DOCTYPE html>
                 if (data.success) {
                     // Show loading message
                     document.body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;color:#e6edf3;font-family:monospace;background:#0d1117;">' +
-                        '<div style="font-size:1.5rem;color:#58a6ff;margin-bottom:16px;">🚚</div>' +
+                        '<div style="font-size:1.5rem;color:#58a6ff;margin-bottom:16px;"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 17a2 2 0 1 0 4 0a2 2 0 1 0-4 0m10 0a2 2 0 1 0 4 0a2 2 0 1 0-4 0"/><path d="M5 17H3V6a1 1 0 0 1 1-1h9v12m-4 0h6m4 0h2v-6h-8m0-5h5l3 5"/></svg></div>' +
                         '<div style="font-size:1rem;color:#8b949e;">loading control center...</div>' +
                         '</div>';
                     // Redirect to the new dashboard

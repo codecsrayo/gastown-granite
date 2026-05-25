@@ -23,6 +23,24 @@
             padding: 0;
         }
 
+        .icon {
+            width: 1em;
+            height: 1em;
+            display: inline-block;
+            vertical-align: -0.125em;
+            fill: none;
+            stroke: currentColor;
+            flex-shrink: 0;
+        }
+        .icon-lg { width: 1.25em; height: 1.25em; }
+        .icon-sm { width: 0.85em; height: 0.85em; }
+        .icon-red    { color: var(--red); }
+        .icon-orange { color: var(--orange); }
+        .icon-yellow { color: var(--yellow); }
+        .icon-green  { color: var(--green); }
+        .icon-blue   { color: var(--blue); }
+        .icon-muted  { color: var(--text-muted); }
+
         body {
             font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
             background: var(--bg-dark);
@@ -68,17 +86,50 @@
             font-size: 0.75rem;
         }
 
-        .connection-live {
+        @keyframes status-pulse {
+            0%, 100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+            50%      { box-shadow: 0 0 0 4px transparent; opacity: 0.55; }
+        }
+        @keyframes status-blink {
+            0%, 100% { opacity: 1; }
+            50%      { opacity: 0.25; }
+        }
+        .status-dot::before,
+        .connection-live::before,
+        .connection-reconnecting::before,
+        .connection-offline::before,
+        .git-status.connected::before,
+        .git-status.disconnected::before,
+        .git-status::before {
+            content: "";
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            margin-right: 6px;
+            vertical-align: 1px;
+        }
+        .connection-live,
+        .git-status.connected {
             color: var(--green);
         }
-        .connection-live::before {
-            content: "● ";
+        .connection-live::before,
+        .git-status.connected::before {
+            animation: status-pulse 1.8s ease-in-out infinite;
         }
         .connection-reconnecting {
-            color: var(--yellow);
+            color: var(--red);
         }
         .connection-reconnecting::before {
-            content: "○ ";
+            animation: status-blink 0.9s ease-in-out infinite;
+        }
+        .connection-offline,
+        .git-status.disconnected {
+            color: var(--red);
+        }
+        .git-status {
+            color: var(--text-muted);
         }
 
         /* Grid layout for panels - auto-fit responsive */
@@ -2612,6 +2663,34 @@
             display: none;
         }
 
+        /* Solo mode: header items hug the title (no space-between gap pushing
+           the count chip to the middle of the window). */
+        body.solo-mode .panel.solo-target > .panel-header {
+            justify-content: flex-start;
+            gap: 10px;
+        }
+        body.solo-mode .panel.solo-target > .panel-header .help-btn {
+            margin-left: auto;
+        }
+
+        /* Solo mode: drop fixed height caps so lists/feeds fill the body. */
+        body.solo-mode .panel.solo-target .tl-timeline,
+        body.solo-mode .panel.solo-target .feed-list,
+        body.solo-mode .panel.solo-target .git-feed {
+            max-height: none;
+            height: 100%;
+            flex: 1 1 auto;
+        }
+        /* Git panel: panel-body wraps filters + feed. Make it a flex column so
+           the feed can grow into the leftover space below the filters. */
+        body.solo-mode .panel#git-panel.solo-target > .panel-body {
+            display: flex;
+            flex-direction: column;
+        }
+        body.solo-mode .panel#git-panel.solo-target > .panel-body > .git-filters {
+            flex: 0 0 auto;
+        }
+
         /* Don't truncate text when a panel has the whole window to itself. */
         body.solo-mode .panel.solo-target .pr-title,
         body.solo-mode .panel.solo-target .convoy-id,
@@ -4171,7 +4250,7 @@
             white-space: nowrap;
         }
         .quota-card-handle .default-marker {
-            color: var(--yellow);
+            color: var(--green);
             margin-right: 2px;
         }
         .quota-card-status {
@@ -4358,6 +4437,31 @@
             color: var(--text-muted);
             margin-left: 8px;
             font-weight: 400;
+        }
+        .output-panel-status::before {
+            content: "";
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            margin-right: 6px;
+            vertical-align: 1px;
+        }
+        .output-panel-status.live {
+            color: var(--green);
+        }
+        .output-panel-status.live::before {
+            animation: status-pulse 1.8s ease-in-out infinite;
+        }
+        .output-panel-status.warn {
+            color: var(--red);
+        }
+        .output-panel-status.warn::before {
+            animation: status-blink 0.9s ease-in-out infinite;
+        }
+        .output-panel-status.muted {
+            color: var(--text-muted);
         }
 
         /* Multi-console tab strip inside the output panel. Each tab is a
@@ -4588,5 +4692,3 @@
             color: var(--text-muted);
             margin-left: 6px;
         }
-        .git-status.connected { color: var(--green, #3fb950); }
-        .git-status.disconnected { color: var(--red, #f85149); }

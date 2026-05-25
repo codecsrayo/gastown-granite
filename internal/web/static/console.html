@@ -51,12 +51,32 @@
             white-space: nowrap;
             flex: 1;
         }
+        @keyframes console-status-pulse {
+            0%, 100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+            50%      { box-shadow: 0 0 0 4px transparent; opacity: 0.55; }
+        }
+        @keyframes console-status-blink {
+            0%, 100% { opacity: 1; }
+            50%      { opacity: 0.25; }
+        }
         .console-status {
             font-size: 0.7rem;
             color: var(--muted);
         }
+        .console-status::before {
+            content: "";
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            margin-right: 6px;
+            vertical-align: 1px;
+        }
         .console-status.live   { color: var(--green); }
+        .console-status.live::before { animation: console-status-pulse 1.8s ease-in-out infinite; }
         .console-status.warn   { color: var(--red); }
+        .console-status.warn::before { animation: console-status-blink 0.9s ease-in-out infinite; }
         .console-btn {
             background: transparent;
             border: 1px solid var(--border);
@@ -69,6 +89,10 @@
         }
         .console-btn:hover  { background: rgba(89, 194, 255, 0.15); border-color: var(--blue); }
         .console-btn.danger:hover { background: var(--red); color: #fff; border-color: var(--red); }
+        .icon {
+            width: 1em; height: 1em; display: inline-block;
+            vertical-align: -0.125em; fill: none; stroke: currentColor;
+        }
         #terminal {
             flex: 1 1 auto;
             min-height: 0;
@@ -87,8 +111,8 @@
     <div class="console-header">
         <span class="console-title" id="console-title">Console</span>
         <span class="console-status" id="console-status">connecting…</span>
-        <button class="console-btn" id="merge-btn" title="Send this console back to the dashboard tabs">⇲ Merge</button>
-        <button class="console-btn danger" id="close-btn" title="Close">✕</button>
+        <button class="console-btn" id="merge-btn" title="Send this console back to the dashboard tabs"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#icon-arrows-minimize"/></svg> Merge</button>
+        <button class="console-btn danger" id="close-btn" title="Close"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#icon-x"/></svg></button>
     </div>
     <div id="terminal"></div>
 

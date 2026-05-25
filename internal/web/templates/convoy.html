@@ -11,9 +11,10 @@
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
-    <link rel="stylesheet" href="/static/dashboard.css?v=20">
+    <link rel="stylesheet" href="/static/dashboard.css?v=26">
 </head>
 <body>
+    <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true"><symbol id="icon-rocket" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M4 13a8 8 0 0 1 7 7a6 6 0 0 0 3-5a9 9 0 0 0 6-8a3 3 0 0 0-3-3a9 9 0 0 0-8 6a6 6 0 0 0-5 3"/><path d="M7 14a6 6 0 0 0-3 6a6 6 0 0 0 6-3m4-8a1 1 0 1 0 2 0a1 1 0 1 0-2 0"/></g></symbol><symbol id="icon-command" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 9a2 2 0 1 1 2-2v10a2 2 0 1 1-2-2h10a2 2 0 1 1-2 2V7a2 2 0 1 1 2 2z"/></symbol><symbol id="icon-refresh" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 11A8.1 8.1 0 0 0 4.5 9M4 5v4h4m-4 4a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4"/></symbol><symbol id="icon-crown" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m12 6l4 6l5-4l-2 10H5L3 8l5 4z"/></symbol><symbol id="icon-check" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m5 12l5 5L20 7"/></symbol><symbol id="icon-alert-triangle" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m-1.637-9.409L2.257 17.125a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636-2.87L13.637 3.59a1.914 1.914 0 0 0-3.274 0M12 16h.01"/></symbol><symbol id="icon-heartbeat" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M19.5 13.572L12 21l-2.896-2.868m-6.117-8.104A5 5 0 0 1 12 7.006a5 5 0 1 1 7.5 6.572"/><path d="M3 13h2l2 3l2-6l1 3h3"/></g></symbol><symbol id="icon-paw" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.7 13.5c-1.1-2-1.441-2.5-2.7-2.5s-1.736.755-2.836 2.747c-.942 1.703-2.846 1.845-3.321 3.291c-.097.265-.145.677-.143.962c0 1.176.787 2 1.8 2c1.259 0 3-1 4.5-1s3.241 1 4.5 1c1.013 0 1.8-.823 1.8-2c0-.285-.049-.697-.146-.962c-.475-1.451-2.512-1.835-3.454-3.538m5.488-5.418A1 1 0 0 0 19.782 8h-.015c-.735.012-1.56.75-1.993 1.866c-.519 1.335-.28 2.7.538 3.052q.196.082.406.082c.739 0 1.575-.742 2.011-1.866c.516-1.335.273-2.7-.54-3.052zM9.474 9c.055 0 .109 0 .163-.011c.944-.128 1.533-1.346 1.32-2.722C10.754 4.97 9.91 4 9.025 4c-.055 0-.109 0-.163.011c-.944.128-1.533 1.346-1.32 2.722C7.746 8.026 8.59 9 9.475 9m6.981-2.267c.214-1.376-.375-2.594-1.32-2.722A1 1 0 0 0 14.974 4c-.885 0-1.728.97-1.93 2.267c-.214 1.376.375 2.594 1.32 2.722q.081.01.162.011c.885 0 1.73-.974 1.93-2.267M5.69 12.918c.816-.352 1.054-1.719.536-3.052C5.79 8.742 4.955 8 4.217 8q-.211 0-.407.082c-.816.352-1.054 1.719-.536 3.052C3.71 12.258 4.545 13 5.283 13q.211 0 .407-.082"/></symbol><symbol id="icon-anchor" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v12m-8-8a8 8 0 0 0 16 0m1 0h-2M5 13H3m6-7a3 3 0 1 0 6 0a3 3 0 1 0-6 0"/></symbol><symbol id="icon-clipboard-list" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><path d="M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2m0 7h.01M13 12h2m-6 4h.01M13 16h2"/></g></symbol><symbol id="icon-truck" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M5 17a2 2 0 1 0 4 0a2 2 0 1 0-4 0m10 0a2 2 0 1 0 4 0a2 2 0 1 0-4 0"/><path d="M5 17H3V6a1 1 0 0 1 1-1h9v12m-4 0h6m4 0h2v-6h-8m0-5h5l3 5"/></g></symbol><symbol id="icon-ticket" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 5v2m0 4v2m0 4v2M5 5h14a2 2 0 0 1 2 2v3a2 2 0 0 0 0 4v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 0 0-4V7a2 2 0 0 1 2-2"/></symbol><symbol id="icon-skull" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12 4c4.418 0 8 3.358 8 7.5c0 1.901-.755 3.637-2 4.96V19a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-2.54c-1.245-1.322-2-3.058-2-4.96C4 7.358 7.582 4 12 4m-2 13v3m4-3v3"/><path d="M8 11a1 1 0 1 0 2 0a1 1 0 1 0-2 0m6 0a1 1 0 1 0 2 0a1 1 0 1 0-2 0"/></g></symbol><symbol id="icon-clock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0-18 0"/><path d="M12 7v5l3 3"/></g></symbol><symbol id="icon-bell" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 5a2 2 0 1 1 4 0a7 7 0 0 1 4 6v3a4 4 0 0 0 2 3H4a4 4 0 0 0 2-3v-3a7 7 0 0 1 4-6M9 17v1a3 3 0 0 0 6 0v-1"/></symbol><symbol id="icon-flame" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10.941c2.333-3.308.167-7.823-1-8.941c0 3.395-2.235 5.299-3.667 6.706C5.903 10.114 5 12 5 14.294C5 17.998 8.134 21 12 21s7-3.002 7-6.706c0-1.712-1.232-4.403-2.333-5.588c-2.084 3.353-3.257 3.353-4.667 2.235"/></symbol><symbol id="icon-users" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 7a4 4 0 1 0 8 0a4 4 0 1 0-8 0M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2m1-17.87a4 4 0 0 1 0 7.75M21 21v-2a4 4 0 0 0-3-3.85"/></symbol><symbol id="icon-device-desktop" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1zm4 15h10m-8-4v4m6-4v4"/></symbol><symbol id="icon-history" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12 8v4l2 2"/><path d="M3.05 11a9 9 0 1 1 .5 4m-.5 5v-5h5"/></g></symbol><symbol id="icon-git-branch" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M5 18a2 2 0 1 0 4 0a2 2 0 1 0-4 0M5 6a2 2 0 1 0 4 0a2 2 0 1 0-4 0m10 0a2 2 0 1 0 4 0a2 2 0 1 0-4 0M7 8v8m2 2h6a2 2 0 0 0 2-2v-5"/><path d="m14 14l3-3l3 3"/></g></symbol><symbol id="icon-mail" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m3 7l9 6l9-6"/></g></symbol><symbol id="icon-pencil" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 20h4L18.5 9.5a2.828 2.828 0 1 0-4-4L4 16zm9.5-13.5l4 4"/></symbol><symbol id="icon-arrow-back-up" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m9 14l-4-4l4-4"/><path d="M5 10h11a4 4 0 1 1 0 8h-1"/></g></symbol><symbol id="icon-git-pull-request" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M4 18a2 2 0 1 0 4 0a2 2 0 1 0-4 0M4 6a2 2 0 1 0 4 0a2 2 0 1 0-4 0m12 12a2 2 0 1 0 4 0a2 2 0 1 0-4 0M6 8v8"/><path d="M11 6h5a2 2 0 0 1 2 2v8"/><path d="m14 9l-3-3l3-3"/></g></symbol><symbol id="icon-alert-octagon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m12.802 2.165l5.575 2.389c.48.206.863.589 1.07 1.07l2.388 5.574c.22.512.22 1.092 0 1.604l-2.389 5.575c-.206.48-.589.863-1.07 1.07l-5.574 2.388c-.512.22-1.092.22-1.604 0l-5.575-2.389a2.04 2.04 0 0 1-1.07-1.07l-2.388-5.574a2.04 2.04 0 0 1 0-1.604l2.389-5.575c.206-.48.589-.863 1.07-1.07l5.574-2.388a2.04 2.04 0 0 1 1.604 0M12 8v4m0 4h.01"/></symbol><symbol id="icon-building-factory-2" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M3 21h18M5 21V9l5 4V9l5 4h4"/><path d="M19 21v-8l-1.436-9.574A.5.5 0 0 0 17.069 3h-1.145a.5.5 0 0 0-.494.418L14 12m-5 5h1m4 0h1"/></g></symbol><symbol id="icon-eye" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0-4 0"/><path d="M21 12q-3.6 6-9 6t-9-6q3.6-6 9-6t9 6"/></g></symbol><symbol id="icon-flask" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3h6m-5 6h4m-4-6v6L6 20a.7.7 0 0 0 .5 1h11a.7.7 0 0 0 .5-1L14 9V3"/></symbol><symbol id="icon-dog" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M11 5h2m6 7q-1 8-5 8h-4q-4 0-5-8"/><path d="M11 16q0 1 1 1c1 0 1-.333 1-1zm1 2v2m-2-9v.01m4-.01v.01M5 4l6 .97l-6.238 6.688a1.02 1.02 0 0 1-1.41.111a.95.95 0 0 1-.327-.954zm14 0l-6 .97l6.238 6.688c.358.408.989.458 1.41.111a.95.95 0 0 0 .327-.954z"/></g></symbol><symbol id="icon-plus" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m-7-7h14"/></symbol><symbol id="icon-bolt" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 3v7h6l-8 11v-7H5z"/></symbol><symbol id="icon-x" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12"/></symbol><symbol id="icon-chevron-down" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m6 9l6 6l6-6"/></symbol><symbol id="icon-chevron-right" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 6l6 6l-6 6"/></symbol><symbol id="icon-minus" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14"/></symbol><symbol id="icon-arrows-maximize" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 4h4v4m-6 2l6-6M8 20H4v-4m0 4l6-6m6 6h4v-4m-6-2l6 6M8 4H4v4m0-4l6 6"/></symbol><symbol id="icon-arrows-minimize" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 9h4V5M3 3l6 6m-4 6h4v4m-6 2l6-6m10-6h-4V5m0 4l6-6m-2 12h-4v4m0-4l6 6"/></symbol><symbol id="icon-arrow-up-right" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 7L7 17M8 7h9v9"/></symbol><symbol id="icon-arrow-up" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m6-8l-6-6m-6 6l6-6"/></symbol><symbol id="icon-arrow-narrow-right" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m-4 4l4-4m-4-4l4 4"/></symbol><symbol id="icon-arrow-left" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12l6 6m-6-6l6-6"/></symbol><symbol id="icon-circle-filled" viewBox="0 0 24 24"><path fill="currentColor" d="M7 3.34a10 10 0 1 1-4.995 8.984L2 12l.005-.324A10 10 0 0 1 7 3.34"/></symbol><symbol id="icon-circle" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0"/></symbol><symbol id="icon-thumb-up" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 11v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1za4 4 0 0 0 4-4V6a2 2 0 0 1 4 0v5h3a2 2 0 0 1 2 2l-1 5a2 3 0 0 1-2 2h-7a3 3 0 0 1-3-3"/></symbol><symbol id="icon-info-circle" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0-18 0m9-3h.01"/><path d="M11 12h1v4h1"/></g></symbol><symbol id="icon-paperclip" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3L18 10a3 3 0 0 0-6-6l-6.5 6.5a4.5 4.5 0 0 0 9 9L21 13"/></symbol><symbol id="icon-hourglass-empty" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M6 20v-2a6 6 0 1 1 12 0v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1"/><path d="M6 4v2a6 6 0 1 0 12 0V4a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1"/></g></symbol><symbol id="icon-player-pause" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1zm8 0a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1z"/></symbol><symbol id="icon-help" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0m9 5v.01"/><path d="M12 13.5a1.5 1.5 0 0 1 1-1.5a2.6 2.6 0 1 0-3-4"/></g></symbol><symbol id="icon-lock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M5 13a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z"/><path d="M11 16a1 1 0 1 0 2 0a1 1 0 0 0-2 0m-3-5V7a4 4 0 1 1 8 0v4"/></g></symbol><symbol id="icon-point-filled" viewBox="0 0 24 24"><path fill="currentColor" d="M12 7a5 5 0 1 1-4.995 5.217L7 12l.005-.217A5 5 0 0 1 12 7"/></symbol><symbol id="icon-point" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0-8 0"/></symbol><symbol id="icon-circle-half-2" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0m9-9v18m0-7l7-7m-7 12l8.5-8.5M12 9l4.5-4.5"/></symbol><symbol id="icon-rotate" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.95 11a8 8 0 1 0-.5 4m.5 5v-5h-5"/></symbol><symbol id="icon-question-mark" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 8a3.5 3 0 0 1 3.5-3h1A3.5 3 0 0 1 16 8a3 3 0 0 1-2 3a3 4 0 0 0-2 4m0 4v.01"/></symbol><symbol id="icon-target" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0-2 0"/><path d="M7 12a5 5 0 1 0 10 0a5 5 0 1 0-10 0"/><path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0"/></g></symbol><symbol id="icon-unlink" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 22v-2m-8-5l6-6m-4-3l.463-.536a5 5 0 0 1 7.071 7.072L18 13m-5 5l-.397.534a5.07 5.07 0 0 1-7.127 0a4.97 4.97 0 0 1 0-7.071L6 11m14 6h2M2 7h2m3-5v2"/></symbol><symbol id="icon-hand-finger" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M8 13V4.5a1.5 1.5 0 0 1 3 0V12m0-.5v-2a1.5 1.5 0 1 1 3 0V12m0-1.5a1.5 1.5 0 0 1 3 0V12"/><path d="M17 11.5a1.5 1.5 0 0 1 3 0V16a6 6 0 0 1-6 6h-2h.208a6 6 0 0 1-5.012-2.7L7 19q-.468-.718-3.286-5.728a1.5 1.5 0 0 1 .536-2.022a1.87 1.87 0 0 1 2.28.28L8 13"/></g></symbol><symbol id="icon-arrows-right-left" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 7H3m15 3l3-3l-3-3M6 20l-3-3l3-3m-3 3h18"/></symbol><symbol id="icon-player-play" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4v16l13-8z"/></symbol><symbol id="icon-player-stop" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z"/></symbol><symbol id="icon-bomb" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M15.349 5.349L18.65 8.65a1.2 1.2 0 0 1 0 1.698l-.972.972a7.5 7.5 0 1 1-5-5l.972-.972a1.2 1.2 0 0 1 1.698 0z"/><path d="m17 7l1.293-1.293A2.4 2.4 0 0 0 19 4a1 1 0 0 1 1-1h1M7 13a3 3 0 0 1 3-3"/></g></symbol><symbol id="icon-search" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10a7 7 0 1 0 14 0a7 7 0 1 0-14 0m18 11l-6-6"/></symbol><symbol id="icon-bell-off" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.346 5.353Q9.661 5.16 10 5a2 2 0 1 1 4 0a7 7 0 0 1 4 6v3m-1 3H4a4 4 0 0 0 2-3v-3a7 7 0 0 1 1.273-3.707M9 17v1a3 3 0 0 0 6 0v-1M3 3l18 18"/></symbol><symbol id="icon-git-merge" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M5 18a2 2 0 1 0 4 0a2 2 0 1 0-4 0M5 6a2 2 0 1 0 4 0a2 2 0 1 0-4 0m10 6a2 2 0 1 0 4 0a2 2 0 1 0-4 0M7 8v8"/><path d="M7 8a4 4 0 0 0 4 4h4"/></g></symbol></svg>
     <div class="dashboard" id="dashboard-main" hx-get="/" hx-trigger="sse:dashboard-update, every 30s [!window.pauseRefresh && !window.sseConnected]" hx-swap="morph:outerHTML" hx-ext="morph">
         <header>
             <pre class="ascii-title">  __  __    __   _____ __  _   _  __  _    ___ __  __  _ _____ ___  __  _      ______ __  _ _____ ___ ___ 
@@ -22,14 +23,14 @@
  \__/_||_||___/   |_| \__/!_/ \_!|_|\__|  \__/\__/|_|\__| |_| |_|_\\__/|___|  \__/___|_|\__| |_| |___|_|_\</pre>
             <div style="display: flex; align-items: center; gap: 12px;">
                 <button class="cmd-btn" id="launch-agents-btn" title="gt up --restore — start daemon, deacon, mayor, witnesses, refineries, crew, polecats">
-                    <span>🚀</span> Launch Agents
+                    <svg class="icon icon-rocket" aria-hidden="true"><use href="#icon-rocket"/></svg> Launch Agents
                 </button>
                 <button class="cmd-btn" id="open-palette-btn">
-                    <span>⌘</span> Commands <kbd>⌘K</kbd>
+                    <svg class="icon icon-command" aria-hidden="true"><use href="#icon-command"/></svg> Commands <kbd>⌘K</kbd>
                 </button>
                 <span class="refresh-info" id="refresh-info">
                     <span id="connection-status">Connecting...</span>
-                    <span class="htmx-indicator">⟳</span>
+                    <span class="htmx-indicator"><svg class="icon icon-refresh" aria-hidden="true"><use href="#icon-refresh"/></svg></span>
                 </span>
             </div>
         </header>
@@ -37,7 +38,7 @@
         <!-- Mayor Status Banner -->
         <div class="mayor-banner {{if .Mayor}}{{if .Mayor.IsAttached}}attached{{else}}detached{{end}}{{else}}detached{{end}}">
             <div class="mayor-info">
-                <span class="mayor-icon">🎩</span>
+                <span class="mayor-icon"><svg class="icon icon-crown" aria-hidden="true"><use href="#icon-crown"/></svg></span>
                 <span class="mayor-title">The Mayor</span>
                 {{if .Mayor}}
                     {{if .Mayor.IsAttached}}
@@ -71,59 +72,59 @@
             <div class="summary-stats">
                 {{if .Health}}
                 <div class="stat health-stat {{if .Health.HeartbeatFresh}}healthy{{else}}unhealthy{{end}}">
-                    <span class="stat-value">{{if .Health.HeartbeatFresh}}✓{{else}}⚠{{end}}</span>
-                    <span class="stat-label">💓 {{.Health.DeaconHeartbeat}}</span>
+                    <span class="stat-value">{{if .Health.HeartbeatFresh}}<svg class="icon icon-check icon-green" aria-hidden="true"><use href="#icon-check"/></svg>{{else}}<svg class="icon icon-alert-triangle icon-yellow" aria-hidden="true"><use href="#icon-alert-triangle"/></svg>{{end}}</span>
+                    <span class="stat-label"><svg class="icon icon-heartbeat" aria-hidden="true"><use href="#icon-heartbeat"/></svg> {{.Health.DeaconHeartbeat}}</span>
                 </div>
                 {{end}}
                 <div class="stat">
                     <span class="stat-value">{{.Summary.PolecatCount}}</span>
-                    <span class="stat-label">🦨 Polecats</span>
+                    <span class="stat-label"><svg class="icon icon-paw" aria-hidden="true"><use href="#icon-paw"/></svg> Polecats</span>
                 </div>
                 <div class="stat">
                     <span class="stat-value">{{.Summary.HookCount}}</span>
-                    <span class="stat-label">🪝 Hooks</span>
+                    <span class="stat-label"><svg class="icon icon-anchor" aria-hidden="true"><use href="#icon-anchor"/></svg> Hooks</span>
                 </div>
                 <div class="stat">
                     <span class="stat-value">{{.Summary.IssueCount}}</span>
-                    <span class="stat-label">📋 Work</span>
+                    <span class="stat-label"><svg class="icon icon-clipboard-list" aria-hidden="true"><use href="#icon-clipboard-list"/></svg> Work</span>
                 </div>
                 <div class="stat">
                     <span class="stat-value">{{.Summary.ConvoyCount}}</span>
-                    <span class="stat-label">🚚 Convoys</span>
+                    <span class="stat-label"><svg class="icon icon-truck" aria-hidden="true"><use href="#icon-truck"/></svg> Convoys</span>
                 </div>
                 <div class="stat">
                     <span class="stat-value">{{.Summary.EscalationCount}}</span>
-                    <span class="stat-label">⚠️ Escalations</span>
+                    <span class="stat-label"><svg class="icon icon-alert-triangle" aria-hidden="true"><use href="#icon-alert-triangle"/></svg> Escalations</span>
                 </div>
                 <div class="stat stat-quota clickable" id="quota-stat-trigger"
                      role="button" tabindex="0"
                      aria-controls="quota-drawer" aria-expanded="false"
                      title="Toggle Quota drawer">
                     <span class="stat-value" id="quota-stat-summary">·</span>
-                    <span class="stat-label">🎫 Quota</span>
+                    <span class="stat-label"><svg class="icon icon-ticket" aria-hidden="true"><use href="#icon-ticket"/></svg> Quota</span>
                 </div>
             </div>
             {{if .Summary.HasAlerts}}
             <div class="summary-alerts">
                 {{if .Summary.StuckPolecats}}
-                <span class="alert-item alert-red">💀 {{.Summary.StuckPolecats}} stuck</span>
+                <span class="alert-item alert-red"><svg class="icon icon-skull" aria-hidden="true"><use href="#icon-skull"/></svg> {{.Summary.StuckPolecats}} stuck</span>
                 {{end}}
                 {{if .Summary.StaleHooks}}
-                <span class="alert-item alert-yellow">⏰ {{.Summary.StaleHooks}} stale hooks</span>
+                <span class="alert-item alert-yellow"><svg class="icon icon-clock" aria-hidden="true"><use href="#icon-clock"/></svg> {{.Summary.StaleHooks}} stale hooks</span>
                 {{end}}
                 {{if .Summary.UnackedEscalations}}
-                <span class="alert-item alert-orange">🔔 {{.Summary.UnackedEscalations}} unacked</span>
+                <span class="alert-item alert-orange"><svg class="icon icon-bell" aria-hidden="true"><use href="#icon-bell"/></svg> {{.Summary.UnackedEscalations}} unacked</span>
                 {{end}}
                 {{if .Summary.HighPriorityIssues}}
-                <span class="alert-item alert-red">🔥 {{.Summary.HighPriorityIssues}} P1/P2</span>
+                <span class="alert-item alert-red"><svg class="icon icon-flame" aria-hidden="true"><use href="#icon-flame"/></svg> {{.Summary.HighPriorityIssues}} P1/P2</span>
                 {{end}}
                 {{if .Summary.DeadSessions}}
-                <span class="alert-item alert-red">☠️ {{.Summary.DeadSessions}} dead</span>
+                <span class="alert-item alert-red"><svg class="icon icon-skull" aria-hidden="true"><use href="#icon-skull"/></svg> {{.Summary.DeadSessions}} dead</span>
                 {{end}}
             </div>
             {{else}}
             <div class="summary-alerts">
-                <span class="alert-item alert-green">✓ All clear</span>
+                <span class="alert-item alert-green"><svg class="icon icon-check" aria-hidden="true"><use href="#icon-check"/></svg> All clear</span>
             </div>
             {{end}}
         </div>
@@ -132,10 +133,10 @@
         <!-- Quota drawer (Mosaic grid) — hydrated by dashboard.js via /api/quota/summary -->
         <aside id="quota-drawer" class="quota-drawer" hidden aria-labelledby="quota-drawer-title">
             <header class="quota-drawer-header">
-                <h2 id="quota-drawer-title">🎫 Account Quota</h2>
+                <h2 id="quota-drawer-title"><svg class="icon icon-ticket" aria-hidden="true"><use href="#icon-ticket"/></svg> Account Quota</h2>
                 <span class="quota-drawer-meta" id="quota-drawer-meta"></span>
                 <button class="quota-drawer-close" id="quota-drawer-close"
-                        type="button" aria-label="Close Quota drawer">✕</button>
+                        type="button" aria-label="Close Quota drawer"><svg class="icon icon-x" aria-hidden="true"><use href="#icon-x"/></svg></button>
             </header>
             <div class="quota-drawer-body">
                 <div class="quota-mosaic" id="quota-mosaic"></div>
@@ -151,12 +152,12 @@
             <!-- Convoys Panel -->
             <div class="panel" id="convoy-panel">
                 <div class="panel-header">
-                    <h2>🚚 Convoys</h2>
+                    <h2><svg class="icon icon-truck" aria-hidden="true"><use href="#icon-truck"/></svg> Convoys</h2>
                     <span class="count">{{len .Convoys}}</span>
                     <button class="new-convoy-btn" id="new-convoy-btn">+ New Convoy</button>
                     <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
-                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
+                    <button class="collapse-btn" aria-label="Toggle panel"><svg class="icon icon-chevron-down" aria-hidden="true"><use href="#icon-chevron-down"/></svg></button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte"><svg class="icon icon-arrows-maximize" aria-hidden="true"><use href="#icon-arrows-maximize"/></svg></button>
                 </div>
                 <div class="panel-body">
                     <!-- Convoy List View -->
@@ -176,9 +177,9 @@
                                 {{range .Convoys}}
                                 <tr class="convoy-row" data-convoy-id="{{.ID}}">
                                     <td>
-                                        <span class="convoy-toggle">▶</span>
+                                        <span class="convoy-toggle"><svg class="icon icon-chevron-right" aria-hidden="true"><use href="#icon-chevron-right"/></svg></span>
                                         {{if eq .WorkStatus "complete"}}
-                                        <span class="badge badge-green" title="All issues completed">✓ Done</span>
+                                        <span class="badge badge-green" title="All issues completed"><svg class="icon icon-check" aria-hidden="true"><use href="#icon-check"/></svg> Done</span>
                                         {{else if eq .WorkStatus "active"}}
                                         <span class="badge badge-green" title="Workers actively progressing">Active</span>
                                         {{else if eq .WorkStatus "stale"}}
@@ -231,7 +232,7 @@
                     <!-- Convoy Detail View (hidden by default) -->
                     <div id="convoy-detail" style="display: none;">
                         <div class="detail-header">
-                            <button id="convoy-back-btn" class="btn-back">← Back</button>
+                            <button id="convoy-back-btn" class="btn-back"><svg class="icon icon-arrow-left" aria-hidden="true"><use href="#icon-arrow-left"/></svg> Back</button>
                             <span id="convoy-detail-title" class="convoy-detail-title"></span>
                         </div>
                         <div class="convoy-detail-content">
@@ -273,7 +274,7 @@
                     <!-- New Convoy Form (hidden by default) -->
                     <div id="convoy-create-form" class="convoy-create-form" style="display: none;">
                         <div class="detail-header">
-                            <button id="convoy-create-back-btn" class="btn-back">← Back</button>
+                            <button id="convoy-create-back-btn" class="btn-back"><svg class="icon icon-arrow-left" aria-hidden="true"><use href="#icon-arrow-left"/></svg> Back</button>
                             <span class="convoy-detail-title">New Convoy</span>
                         </div>
                         <div class="convoy-create-fields">
@@ -297,11 +298,11 @@
             <!-- Crew Panel (named, long-lived workers) -->
             <div class="panel" id="crew-panel">
                 <div class="panel-header">
-                    <h2>👨‍💼 Crew</h2>
+                    <h2><svg class="icon icon-users" aria-hidden="true"><use href="#icon-users"/></svg> Crew</h2>
                     <span class="count" id="crew-count">0</span>
                     <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
-                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
+                    <button class="collapse-btn" aria-label="Toggle panel"><svg class="icon icon-chevron-down" aria-hidden="true"><use href="#icon-chevron-down"/></svg></button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte"><svg class="icon icon-arrows-maximize" aria-hidden="true"><use href="#icon-arrows-maximize"/></svg></button>
                 </div>
                 <div class="panel-body">
                     <div class="loading-state" id="crew-loading">Loading crew...</div>
@@ -330,11 +331,11 @@
             <!-- Polecats Panel -->
             <div class="panel" id="polecats-panel">
                 <div class="panel-header">
-                    <h2>🦨 Polecats</h2>
+                    <h2><svg class="icon icon-paw" aria-hidden="true"><use href="#icon-paw"/></svg> Polecats</h2>
                     <span class="count">{{len .Workers}}</span>
                     <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
-                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
+                    <button class="collapse-btn" aria-label="Toggle panel"><svg class="icon icon-chevron-down" aria-hidden="true"><use href="#icon-chevron-down"/></svg></button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte"><svg class="icon icon-arrows-maximize" aria-hidden="true"><use href="#icon-arrows-maximize"/></svg></button>
                 </div>
                 <div class="panel-body">
                     {{if .Workers}}
@@ -393,11 +394,11 @@
             <!-- Sessions Panel -->
             <div class="panel" id="sessions-panel">
                 <div class="panel-header">
-                    <h2>📟 Sessions</h2>
+                    <h2><svg class="icon icon-device-desktop" aria-hidden="true"><use href="#icon-device-desktop"/></svg> Sessions</h2>
                     <span class="count">{{len .Sessions}}</span>
                     <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
-                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
+                    <button class="collapse-btn" aria-label="Toggle panel"><svg class="icon icon-chevron-down" aria-hidden="true"><use href="#icon-chevron-down"/></svg></button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte"><svg class="icon icon-arrows-maximize" aria-hidden="true"><use href="#icon-arrows-maximize"/></svg></button>
                 </div>
                 <div class="panel-body">
                     {{if .Sessions}}
@@ -438,11 +439,11 @@
             <!-- Activity Timeline Panel -->
             <div class="panel" id="activity-panel">
                 <div class="panel-header">
-                    <h2>📜 Activity</h2>
+                    <h2><svg class="icon icon-history" aria-hidden="true"><use href="#icon-history"/></svg> Activity</h2>
                     <span class="count">{{len .Activity}}</span>
                     <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
-                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
+                    <button class="collapse-btn" aria-label="Toggle panel"><svg class="icon icon-chevron-down" aria-hidden="true"><use href="#icon-chevron-down"/></svg></button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte"><svg class="icon icon-arrows-maximize" aria-hidden="true"><use href="#icon-arrows-maximize"/></svg></button>
                 </div>
                 {{if .Activity}}
                 <div class="tl-filters">
@@ -479,7 +480,7 @@
                             </div>
                             <div class="tl-content">
                                 <div class="tl-header">
-                                    <span class="tl-icon">{{.Icon}}</span>
+                                    <span class="tl-icon"><svg class="icon" aria-hidden="true"><use href="#icon-{{.Icon}}"/></svg></span>
                                     <span class="tl-summary">{{.Summary}}</span>
                                 </div>
                                 <div class="tl-meta">
@@ -505,12 +506,12 @@
             <!-- Git activity feed: live ref changes across rigs + polecat worktrees -->
             <div class="panel" id="git-panel">
                 <div class="panel-header">
-                    <h2>🌳 Git</h2>
+                    <h2><svg class="icon icon-git-branch" aria-hidden="true"><use href="#icon-git-branch"/></svg> Git</h2>
                     <span class="count" id="git-count" hx-preserve="true">0</span>
-                    <span class="git-status" id="git-status" title="live stream status" hx-preserve="true" style="font-size:0.75rem;color:var(--text-muted);margin-left:6px;">connecting…</span>
+                    <span class="git-status" id="git-status" title="live stream status" hx-preserve="true" style="font-size:0.75rem;margin-left:6px;">connecting…</span>
                     <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
-                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
+                    <button class="collapse-btn" aria-label="Toggle panel"><svg class="icon icon-chevron-down" aria-hidden="true"><use href="#icon-chevron-down"/></svg></button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte"><svg class="icon icon-arrows-maximize" aria-hidden="true"><use href="#icon-arrows-maximize"/></svg></button>
                 </div>
                 <div class="panel-body">
                     <div class="git-filters" id="git-filters" hx-preserve="true">
@@ -545,16 +546,16 @@
             <!-- Mail Panel -->
             <div class="panel" id="mail-panel">
                 <div class="panel-header">
-                    <h2>✉️ Mail</h2>
+                    <h2><svg class="icon icon-mail" aria-hidden="true"><use href="#icon-mail"/></svg> Mail</h2>
                     <span class="count" id="mail-count">{{len .Mail}}</span>
                     <div class="mail-tabs">
                         <button class="mail-tab active" data-tab="inbox">Inbox</button>
                         <button class="mail-tab" data-tab="all">All Traffic</button>
                     </div>
-                    <button class="compose-btn" id="compose-mail-btn" title="Compose new message">✎</button>
+                    <button class="compose-btn" id="compose-mail-btn" title="Compose new message"><svg class="icon icon-pencil" aria-hidden="true"><use href="#icon-pencil"/></svg></button>
                     <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
-                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
+                    <button class="collapse-btn" aria-label="Toggle panel"><svg class="icon icon-chevron-down" aria-hidden="true"><use href="#icon-chevron-down"/></svg></button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte"><svg class="icon icon-arrows-maximize" aria-hidden="true"><use href="#icon-arrows-maximize"/></svg></button>
                 </div>
                 <div class="panel-body">
                     <!-- Inbox view (threaded conversations via API) -->
@@ -583,7 +584,7 @@
                                     <td class="mail-from">{{.From}}</td>
                                     <td class="mail-to">{{.To}}</td>
                                     <td>
-                                        {{if eq .Priority "urgent"}}<span class="priority-urgent">⚡</span>{{end}}
+                                        {{if eq .Priority "urgent"}}<span class="priority-urgent"><svg class="icon icon-bolt" aria-hidden="true"><use href="#icon-bolt"/></svg></span>{{end}}
                                         {{if eq .Priority "high"}}<span class="priority-high">!</span>{{end}}
                                         <span class="mail-subject">{{.Subject}}</span>
                                     </td>
@@ -601,7 +602,7 @@
                     <!-- Message detail view (hidden by default) -->
                     <div id="mail-detail" class="mail-detail" style="display: none;">
                         <div class="mail-detail-header">
-                            <button class="mail-back-btn" id="mail-back-btn">← Back</button>
+                            <button class="mail-back-btn" id="mail-back-btn"><svg class="icon icon-arrow-left" aria-hidden="true"><use href="#icon-arrow-left"/></svg> Back</button>
                             <span class="mail-detail-subject" id="mail-detail-subject"></span>
                         </div>
                         <div class="mail-detail-meta">
@@ -610,13 +611,13 @@
                         </div>
                         <div class="mail-detail-body" id="mail-detail-body"></div>
                         <div class="mail-detail-actions">
-                            <button class="mail-reply-btn" id="mail-reply-btn">↩ Reply</button>
+                            <button class="mail-reply-btn" id="mail-reply-btn"><svg class="icon icon-arrow-back-up" aria-hidden="true"><use href="#icon-arrow-back-up"/></svg> Reply</button>
                         </div>
                     </div>
                     <!-- Compose form (hidden by default) -->
                     <div id="mail-compose" class="mail-compose" style="display: none;">
                         <div class="mail-compose-header">
-                            <button class="mail-back-btn" id="compose-back-btn">← Back</button>
+                            <button class="mail-back-btn" id="compose-back-btn"><svg class="icon icon-arrow-left" aria-hidden="true"><use href="#icon-arrow-left"/></svg> Back</button>
                             <span class="mail-compose-title" id="mail-compose-title">New Message</span>
                         </div>
                         <div class="mail-compose-form">
@@ -645,11 +646,11 @@
             <!-- Merge Queue Panel -->
             <div class="panel" id="merge-queue-panel">
                 <div class="panel-header">
-                    <h2>🔀 Merge Queue</h2>
+                    <h2><svg class="icon icon-git-pull-request" aria-hidden="true"><use href="#icon-git-pull-request"/></svg> Merge Queue</h2>
                     <span class="count">{{len .MergeQueue}}</span>
                     <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
-                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
+                    <button class="collapse-btn" aria-label="Toggle panel"><svg class="icon icon-chevron-down" aria-hidden="true"><use href="#icon-chevron-down"/></svg></button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte"><svg class="icon icon-arrows-maximize" aria-hidden="true"><use href="#icon-arrows-maximize"/></svg></button>
                 </div>
                 <div class="panel-body">
                     <!-- PR List View -->
@@ -694,8 +695,8 @@
                     <!-- PR Detail View (hidden by default) -->
                     <div id="pr-detail" style="display: none;">
                         <div class="detail-header">
-                            <button id="pr-back-btn" class="btn-back">← Back</button>
-                            <a id="pr-detail-link" href="#" target="_blank" class="btn-link">Open in GitHub ↗</a>
+                            <button id="pr-back-btn" class="btn-back"><svg class="icon icon-arrow-left" aria-hidden="true"><use href="#icon-arrow-left"/></svg> Back</button>
+                            <a id="pr-detail-link" href="#" target="_blank" class="btn-link">Open in GitHub <svg class="icon icon-arrow-up-right" aria-hidden="true"><use href="#icon-arrow-up-right"/></svg></a>
                         </div>
                         <div class="pr-detail-content">
                             <div class="pr-detail-title">
@@ -733,11 +734,11 @@
             <!-- Escalations Panel -->
             <div class="panel" id="escalations-panel">
                 <div class="panel-header">
-                    <h2>🚨 Escalations</h2>
+                    <h2><svg class="icon icon-alert-octagon" aria-hidden="true"><use href="#icon-alert-octagon"/></svg> Escalations</h2>
                     <span class="count{{if .Escalations}} count-alert{{end}}">{{len .Escalations}}</span>
                     <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
-                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
+                    <button class="collapse-btn" aria-label="Toggle panel"><svg class="icon icon-chevron-down" aria-hidden="true"><use href="#icon-chevron-down"/></svg></button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte"><svg class="icon icon-arrows-maximize" aria-hidden="true"><use href="#icon-arrows-maximize"/></svg></button>
                 </div>
                 <div class="panel-body">
                     {{if .Escalations}}
@@ -768,10 +769,10 @@
                                 <td>{{.Age}}</td>
                                 <td class="escalation-actions">
                                     {{if not .Acked}}
-                                    <button class="esc-btn esc-ack-btn" data-action="ack" data-id="{{.ID}}" title="Acknowledge">👍 Ack</button>
+                                    <button class="esc-btn esc-ack-btn" data-action="ack" data-id="{{.ID}}" title="Acknowledge"><svg class="icon icon-thumb-up" aria-hidden="true"><use href="#icon-thumb-up"/></svg> Ack</button>
                                     {{end}}
-                                    <button class="esc-btn esc-resolve-btn" data-action="resolve" data-id="{{.ID}}" title="Resolve">✓ Resolve</button>
-                                    <button class="esc-btn esc-reassign-btn" data-action="reassign" data-id="{{.ID}}" title="Reassign">↻ Reassign</button>
+                                    <button class="esc-btn esc-resolve-btn" data-action="resolve" data-id="{{.ID}}" title="Resolve"><svg class="icon icon-check" aria-hidden="true"><use href="#icon-check"/></svg> Resolve</button>
+                                    <button class="esc-btn esc-reassign-btn" data-action="reassign" data-id="{{.ID}}" title="Reassign"><svg class="icon icon-rotate" aria-hidden="true"><use href="#icon-rotate"/></svg> Reassign</button>
                                 </td>
                             </tr>
                             {{end}}
@@ -790,11 +791,11 @@
             <!-- Rigs Panel -->
             <div class="panel" id="rigs-panel">
                 <div class="panel-header">
-                    <h2>🏗️ Rigs</h2>
+                    <h2><svg class="icon icon-building-factory-2" aria-hidden="true"><use href="#icon-building-factory-2"/></svg> Rigs</h2>
                     <span class="count">{{len .Rigs}}</span>
                     <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
-                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
+                    <button class="collapse-btn" aria-label="Toggle panel"><svg class="icon icon-chevron-down" aria-hidden="true"><use href="#icon-chevron-down"/></svg></button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte"><svg class="icon icon-arrows-maximize" aria-hidden="true"><use href="#icon-arrows-maximize"/></svg></button>
                 </div>
                 <div class="panel-body">
                     {{if .Rigs}}
@@ -814,8 +815,8 @@
                                 <td>{{.PolecatCount}}</td>
                                 <td>{{.CrewCount}}</td>
                                 <td class="agent-icons">
-                                    <span class="agent-icon{{if .HasWitness}} active{{end}}" title="Witness">👁</span>
-                                    <span class="agent-icon{{if .HasRefinery}} active{{end}}" title="Refinery">⚗️</span>
+                                    <span class="agent-icon{{if .HasWitness}} active{{end}}" title="Witness"><svg class="icon icon-eye" aria-hidden="true"><use href="#icon-eye"/></svg></span>
+                                    <span class="agent-icon{{if .HasRefinery}} active{{end}}" title="Refinery"><svg class="icon icon-flask" aria-hidden="true"><use href="#icon-flask"/></svg></span>
                                 </td>
                             </tr>
                             {{end}}
@@ -832,11 +833,11 @@
             <!-- Dogs Panel -->
             <div class="panel" id="dogs-panel">
                 <div class="panel-header">
-                    <h2>🐕 Dogs</h2>
+                    <h2><svg class="icon icon-dog" aria-hidden="true"><use href="#icon-dog"/></svg> Dogs</h2>
                     <span class="count">{{len .Dogs}}</span>
                     <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
-                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
+                    <button class="collapse-btn" aria-label="Toggle panel"><svg class="icon icon-chevron-down" aria-hidden="true"><use href="#icon-chevron-down"/></svg></button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte"><svg class="icon icon-arrows-maximize" aria-hidden="true"><use href="#icon-arrows-maximize"/></svg></button>
                 </div>
                 <div class="panel-body">
                     {{if .Dogs}}
@@ -875,11 +876,11 @@
             {{if .Queues}}
             <div class="panel" id="queues-panel">
                 <div class="panel-header">
-                    <h2>📋 Queues</h2>
+                    <h2><svg class="icon icon-clipboard-list" aria-hidden="true"><use href="#icon-clipboard-list"/></svg> Queues</h2>
                     <span class="count">{{len .Queues}}</span>
                     <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
-                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
+                    <button class="collapse-btn" aria-label="Toggle panel"><svg class="icon icon-chevron-down" aria-hidden="true"><use href="#icon-chevron-down"/></svg></button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte"><svg class="icon icon-arrows-maximize" aria-hidden="true"><use href="#icon-arrows-maximize"/></svg></button>
                 </div>
                 <div class="panel-body">
                     <table>
@@ -917,12 +918,12 @@
             <!-- Work Panel (Combined Issues + Ready Work) -->
             <div class="panel" id="work-panel">
                 <div class="panel-header">
-                    <h2>📋 Work</h2>
+                    <h2><svg class="icon icon-clipboard-list" aria-hidden="true"><use href="#icon-clipboard-list"/></svg> Work</h2>
                     <span class="count">{{len .Issues}}</span>
                     <button class="new-issue-btn" onclick="openIssueModal()">+ New</button>
                     <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
-                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
+                    <button class="collapse-btn" aria-label="Toggle panel"><svg class="icon icon-chevron-down" aria-hidden="true"><use href="#icon-chevron-down"/></svg></button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte"><svg class="icon icon-arrows-maximize" aria-hidden="true"><use href="#icon-arrows-maximize"/></svg></button>
                 </div>
                 <div class="panel-tabs">
                     <button class="tab-btn active" data-tab="ready" onclick="switchWorkTab('ready')">Ready</button>
@@ -995,7 +996,7 @@
                     <!-- Issue Detail View (hidden by default) -->
                     <div id="issue-detail" style="display: none;">
                         <div class="detail-header">
-                            <button id="issue-back-btn" class="btn-back">← Back</button>
+                            <button id="issue-back-btn" class="btn-back"><svg class="icon icon-arrow-left" aria-hidden="true"><use href="#icon-arrow-left"/></svg> Back</button>
                         </div>
                         <div class="issue-detail-content">
                             <div class="issue-detail-title">
@@ -1030,13 +1031,13 @@
             <!-- Hooks Panel -->
             <div class="panel" id="hooks-panel">
                 <div class="panel-header">
-                    <h2>🪝 Hooks</h2>
+                    <h2><svg class="icon icon-anchor" aria-hidden="true"><use href="#icon-anchor"/></svg> Hooks</h2>
                     <span class="count{{if .Hooks}} {{end}}">{{len .Hooks}}</span>
                     <button class="hook-attach-btn" onclick="openHookAttachForm()">+ Attach</button>
                     {{if .Hooks}}<button class="hook-clear-all-btn" onclick="clearAllHooks()">Clear All</button>{{end}}
                     <button class="help-btn" type="button" aria-label="Ayuda" title="¿Qué es esto?" aria-expanded="false">?</button>
-                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
-                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte">&#8689;</button>
+                    <button class="collapse-btn" aria-label="Toggle panel"><svg class="icon icon-chevron-down" aria-hidden="true"><use href="#icon-chevron-down"/></svg></button>
+                    <button class="popout-btn" aria-label="Abrir en ventana aparte" title="Abrir en ventana aparte"><svg class="icon icon-arrows-maximize" aria-hidden="true"><use href="#icon-arrows-maximize"/></svg></button>
                 </div>
                 <div class="panel-body">
                     <!-- Attach Hook Form (hidden by default) -->
@@ -1108,8 +1109,8 @@
         <div class="modal-backdrop" onclick="closeIssueModal()"></div>
         <div class="modal-content">
             <div class="modal-header">
-                <h3>📿 Create New Issue</h3>
-                <button class="modal-close" onclick="closeIssueModal()">✕</button>
+                <h3><svg class="icon icon-plus" aria-hidden="true"><use href="#icon-plus"/></svg> Create New Issue</h3>
+                <button class="modal-close" onclick="closeIssueModal()"><svg class="icon icon-x" aria-hidden="true"><use href="#icon-x"/></svg></button>
             </div>
             <form id="issue-form" onsubmit="submitIssue(event)">
                 <div class="form-group">
@@ -1119,10 +1120,10 @@
                 <div class="form-group">
                     <label for="issue-priority">Priority</label>
                     <select id="issue-priority">
-                        <option value="1">🔴 P1 - Critical</option>
-                        <option value="2" selected>🟠 P2 - High (default)</option>
-                        <option value="3">🟡 P3 - Medium</option>
-                        <option value="4">⚪ P4 - Low</option>
+                        <option value="1">P1 - Critical</option>
+                        <option value="2" selected>P2 - High (default)</option>
+                        <option value="3">P3 - Medium</option>
+                        <option value="4">P4 - Low</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -1141,17 +1142,17 @@
         <!-- Drag handle on top edge: pulls the panel up so the user can grow
              the terminal as tall as they need without leaving keyboard focus. -->
         <div id="output-panel-resize" class="output-panel-resize" title="Drag to resize">
-            <span class="output-panel-resize-grip">⋮⋮⋮</span>
+            <span class="output-panel-resize-grip"></span>
         </div>
         <div class="output-panel-header">
             <span class="output-panel-title">
-                <span>📋</span>
+                <span><svg class="icon icon-clipboard-list" aria-hidden="true"><use href="#icon-clipboard-list"/></svg></span>
                 <span id="output-panel-cmd">Command Output</span>
                 <span id="output-panel-status" class="output-panel-status"></span>
             </span>
             <div class="output-panel-actions">
-                <button id="output-min-btn" class="output-panel-btn output-panel-icon-btn" title="Minimize" aria-label="Minimize panel">🗕</button>
-                <button id="output-close-btn" class="output-panel-btn output-panel-icon-btn" title="Close" aria-label="Close panel">✕</button>
+                <button id="output-min-btn" class="output-panel-btn output-panel-icon-btn" title="Minimize" aria-label="Minimize panel"><svg class="icon icon-minus" aria-hidden="true"><use href="#icon-minus"/></svg></button>
+                <button id="output-close-btn" class="output-panel-btn output-panel-icon-btn" title="Close" aria-label="Close panel"><svg class="icon icon-x" aria-hidden="true"><use href="#icon-x"/></svg></button>
             </div>
         </div>
         <!-- Tab strip: one button per live gt-console-* session. Active
@@ -1171,7 +1172,7 @@
     <script src="/static/terminal-attach.js?v=1"></script>
     <script src="/static/store.js?v=1"></script>
     <script src="/static/tear-off.js?v=1"></script>
-    <script src="/static/help-popover.js?v=1"></script>
-    <script src="/static/dashboard.js?v=31"></script>
+    <script src="/static/help-popover.js?v=2"></script>
+    <script src="/static/dashboard.js?v=33"></script>
 </body>
 </html>

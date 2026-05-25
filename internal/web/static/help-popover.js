@@ -27,10 +27,13 @@
     function buildPopover(c) {
         var p = document.createElement('div');
         p.className = 'help-popover';
+        var xIcon = (typeof window.gtIcon === 'function')
+            ? window.gtIcon('x')
+            : '✕';
         p.innerHTML =
             '<div class="help-popover-header">' +
               '<span>' + c.title + '</span>' +
-              '<button class="help-popover-close" type="button" aria-label="Cerrar">✕</button>' +
+              '<button class="help-popover-close" type="button" aria-label="Cerrar">' + xIcon + '</button>' +
             '</div>' +
             '<div class="help-popover-body">' + c.html + '</div>' +
             (footer ? '<div class="help-popover-footer">' + footer + '</div>' : '');

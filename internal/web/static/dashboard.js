@@ -18,6 +18,16 @@
     };
 
     // ============================================
+    // ICON HELPER
+    // ============================================
+    // Build a Tabler SVG sprite reference. Sprite lives in #gt-icon-sprite (inlined in body).
+    function icon(name, extra) {
+        var cls = 'icon icon-' + name + (extra ? ' ' + extra : '');
+        return '<svg class="' + cls + '" aria-hidden="true"><use href="#icon-' + name + '"/></svg>';
+    }
+    window.gtIcon = icon;
+
+    // ============================================
     // SSE (Server-Sent Events) CONNECTION
     // ============================================
     window.sseConnected = false;
@@ -128,11 +138,11 @@
                 showActionToast({
                     tag: 'login:' + session,
                     type: 'warning',
-                    icon: '🔐',
+                    icon: '<svg class="icon icon-lock" aria-hidden="true"><use href="#icon-lock"/></svg>',
                     title: 'Account needs login',
                     message: session + ' is waiting on OAuth — open the URL in a browser to authenticate.',
                     actionValue: url,
-                    actionLabel: '📋 Copy URL',
+                    actionLabel: 'Copy URL',
                 });
             } catch (err) {
                 console.warn('login_required: bad payload', err);
@@ -291,7 +301,7 @@
             row.dataset.repo = ev.repo_label || '';
             var bodyHTML = '';
             if (ev.kind === 'commit' || ev.kind === 'remote_update') {
-                var prefix = ev.kind === 'remote_update' ? '↑ ' : '';
+                var prefix = ev.kind === 'remote_update' ? '<svg class="icon icon-arrow-up" aria-hidden="true"><use href="#icon-arrow-up"/></svg>' + ' ' : '';
                 bodyHTML =
                     '<span class="git-sha">' + esc(ev.short_sha || '') + '</span>' +
                     '<span class="git-branch">' + esc(prefix + (ev.branch || '')) + '</span>' +
@@ -305,9 +315,9 @@
                     '<span class="git-sha">' + esc(ev.short_sha || '') + '</span>' +
                     (ev.subject ? '<span class="git-subject">' + esc(ev.subject) + '</span>' : '');
             } else if (ev.kind === 'branch_delete' || ev.kind === 'remote_delete') {
-                bodyHTML = '<span class="git-branch">− ' + esc(ev.branch || '') + '</span>';
+                bodyHTML = '<span class="git-branch">' + '<svg class="icon icon-minus" aria-hidden="true"><use href="#icon-minus"/></svg>' + ' ' + esc(ev.branch || '') + '</span>';
             } else if (ev.kind === 'head_change') {
-                bodyHTML = '<span class="git-branch">→ ' + esc(ev.branch || '') + '</span>';
+                bodyHTML = '<span class="git-branch">' + '<svg class="icon icon-arrow-narrow-right" aria-hidden="true"><use href="#icon-arrow-narrow-right"/></svg>' + ' ' + esc(ev.branch || '') + '</span>';
             } else {
                 bodyHTML = '<span class="git-subject">' + esc(JSON.stringify(ev)) + '</span>';
             }
@@ -419,7 +429,7 @@
             note.className = 'panel-popped-note';
             note.innerHTML =
                 '<span class="panel-popped-label">Abierto en ventana aparte</span>' +
-                '<button class="panel-merge-back-btn" type="button">⇲ Reintegrar</button>';
+                '<button class="panel-merge-back-btn" type="button">' + '<svg class="icon icon-arrows-minimize" aria-hidden="true"><use href="#icon-arrows-minimize"/></svg>' + ' Reintegrar</button>';
             panel.appendChild(note);
         }
     }
@@ -470,7 +480,7 @@
     // panel-specific content sourced from docs/glossary.md and install it.
     GTHelpPopover.registerAll({
         'convoy-panel': {
-            title: '🚚 Convoys',
+            title: '<svg class="icon icon-truck" aria-hidden="true"><use href="#icon-truck"/></svg>' + ' Convoys',
             html:
                 '<p>Órdenes de trabajo principales que envuelven Beads relacionados.</p>' +
                 '<ul>' +
@@ -480,7 +490,7 @@
                 '</ul>',
         },
         'crew-panel': {
-            title: '👨‍💼 Crew',
+            title: '<svg class="icon icon-users" aria-hidden="true"><use href="#icon-users"/></svg>' + ' Crew',
             html:
                 '<p>Agentes nombrados de larga vida para colaboración persistente.</p>' +
                 '<ul>' +
@@ -489,7 +499,7 @@
                 '</ul>',
         },
         'polecats-panel': {
-            title: '🦨 Polecats',
+            title: '<svg class="icon icon-paw" aria-hidden="true"><use href="#icon-paw"/></svg>' + ' Polecats',
             html:
                 '<p>Workers con identidad persistente pero sesiones efímeras.</p>' +
                 '<ul>' +
@@ -499,7 +509,7 @@
                 '</ul>',
         },
         'sessions-panel': {
-            title: '📟 Sessions',
+            title: '<svg class="icon icon-device-desktop" aria-hidden="true"><use href="#icon-device-desktop"/></svg>' + ' Sessions',
             html:
                 '<p>Sesiones tmux vivas de todos los agentes.</p>' +
                 '<ul>' +
@@ -508,7 +518,7 @@
                 '</ul>',
         },
         'activity-panel': {
-            title: '📜 Activity',
+            title: '<svg class="icon icon-history" aria-hidden="true"><use href="#icon-history"/></svg>' + ' Activity',
             html:
                 '<p>Timeline de eventos del sistema (boot, sling, done, merges, escalaciones…).</p>' +
                 '<ul>' +
@@ -517,7 +527,7 @@
                 '</ul>',
         },
         'git-panel': {
-            title: '🌳 Git',
+            title: '<svg class="icon icon-git-branch" aria-hidden="true"><use href="#icon-git-branch"/></svg>' + ' Git',
             html:
                 '<p>Cambios de refs en vivo a través de Rigs y worktrees de Polecats.</p>' +
                 '<ul>' +
@@ -526,7 +536,7 @@
                 '</ul>',
         },
         'mail-panel': {
-            title: '✉️ Mail',
+            title: '<svg class="icon icon-mail" aria-hidden="true"><use href="#icon-mail"/></svg>' + ' Mail',
             html:
                 '<p>Mensajería persistente entre agentes — cartas con thread.</p>' +
                 '<ul>' +
@@ -535,7 +545,7 @@
                 '</ul>',
         },
         'merge-queue-panel': {
-            title: '🔀 Merge Queue',
+            title: '<svg class="icon icon-git-pull-request" aria-hidden="true"><use href="#icon-git-pull-request"/></svg>' + ' Merge Queue',
             html:
                 '<p>Cola del <strong>Refinery</strong> — branches de Polecats esperando merge.</p>' +
                 '<ul>' +
@@ -544,7 +554,7 @@
                 '</ul>',
         },
         'escalations-panel': {
-            title: '🚨 Escalations',
+            title: '<svg class="icon icon-alert-octagon" aria-hidden="true"><use href="#icon-alert-octagon"/></svg>' + ' Escalations',
             html:
                 '<p>Alertas de Polecats o Refinery que requieren atención humana.</p>' +
                 '<ul>' +
@@ -553,7 +563,7 @@
                 '</ul>',
         },
         'rigs-panel': {
-            title: '🏗️ Rigs',
+            title: '<svg class="icon icon-building-factory-2" aria-hidden="true"><use href="#icon-building-factory-2"/></svg>' + ' Rigs',
             html:
                 '<p>Repos git bajo manejo de Gas Town — donde ocurre el trabajo real.</p>' +
                 '<ul>' +
@@ -562,7 +572,7 @@
                 '</ul>',
         },
         'dogs-panel': {
-            title: '🐕 Dogs',
+            title: '<svg class="icon icon-dog" aria-hidden="true"><use href="#icon-dog"/></svg>' + ' Dogs',
             html:
                 '<p>Crew de mantenimiento del <strong>Deacon</strong>: cleanup, health checks, tareas background.</p>' +
                 '<ul>' +
@@ -570,7 +580,7 @@
                 '</ul>',
         },
         'queues-panel': {
-            title: '📋 Queues',
+            title: '<svg class="icon icon-clipboard-list" aria-hidden="true"><use href="#icon-clipboard-list"/></svg>' + ' Queues',
             html:
                 '<p>Colas de trabajo por agente (basadas en Hook).</p>' +
                 '<ul>' +
@@ -578,7 +588,7 @@
                 '</ul>',
         },
         'work-panel': {
-            title: '📋 Work',
+            title: '<svg class="icon icon-clipboard-list" aria-hidden="true"><use href="#icon-clipboard-list"/></svg>' + ' Work',
             html:
                 '<p><strong>Beads</strong> — unidades atómicas de trabajo en Dolt (issues, tasks, epics).</p>' +
                 '<ul>' +
@@ -587,7 +597,7 @@
                 '</ul>',
         },
         'hooks-panel': {
-            title: '🪝 Hooks',
+            title: '<svg class="icon icon-anchor" aria-hidden="true"><use href="#icon-anchor"/></svg>' + ' Hooks',
             html:
                 '<p>Bead pinneado por agente — su cola principal de trabajo.</p>' +
                 '<ul>' +
@@ -654,7 +664,7 @@
         var bar = document.createElement('div');
         bar.className = 'solo-bar';
         bar.innerHTML = '<button class="solo-merge-btn" type="button" ' +
-            'title="Reintegrar al dashboard">⇲ Reintegrar</button>';
+            'title="Reintegrar al dashboard">' + '<svg class="icon icon-arrows-minimize" aria-hidden="true"><use href="#icon-arrows-minimize"/></svg>' + ' Reintegrar</button>';
         document.body.appendChild(bar);
 
         var merge = GTTearOff.createMergeChannel('gastown-panel');
@@ -901,8 +911,8 @@
             // outside the strip and we open it in a standalone window.
             html += '<span class="' + cls + '" data-sess="' + escapeHtml(t.sessionName) + '" draggable="true">';
             html += '<span class="output-tab-label" title="' + escapeHtml(t.sessionName) + '">' + escapeHtml(t.cmdName || t.sessionName) + '</span>';
-            html += '<span class="output-tab-popout" data-sess="' + escapeHtml(t.sessionName) + '" title="Open in standalone window">⇱</span>';
-            html += '<span class="output-tab-close" data-sess="' + escapeHtml(t.sessionName) + '" title="Close tab">✕</span>';
+            html += '<span class="output-tab-popout" data-sess="' + escapeHtml(t.sessionName) + '" title="Open in standalone window">' + '<svg class="icon icon-arrows-maximize" aria-hidden="true"><use href="#icon-arrows-maximize"/></svg>' + '</span>';
+            html += '<span class="output-tab-close" data-sess="' + escapeHtml(t.sessionName) + '" title="Close tab">' + '<svg class="icon icon-x" aria-hidden="true"><use href="#icon-x"/></svg>' + '</span>';
             html += '</span>';
         }
         tabsEl.innerHTML = html;
@@ -1241,7 +1251,7 @@
                 return { value: opt, label: opt, disabled: false };
             }
             // Agent format: {name, status, running}
-            var statusText = opt.running ? '● running' : '○ stopped';
+            var statusText = opt.running ? '<svg class="icon icon-point-filled icon-green" aria-hidden="true"><use href="#icon-point-filled"/></svg>' + ' running' : '<svg class="icon icon-point" aria-hidden="true"><use href="#icon-point"/></svg>' + ' stopped';
             return {
                 value: opt.name,
                 label: opt.name + ' (' + statusText + ')',
@@ -1640,13 +1650,13 @@
     function showToast(type, title, message) {
         var toast = document.createElement('div');
         toast.className = 'toast ' + type;
-        var icon = type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ';
+        var icon = type === 'success' ? '<svg class="icon icon-check" aria-hidden="true"><use href="#icon-check"/></svg>' : type === 'error' ? '<svg class="icon icon-x" aria-hidden="true"><use href="#icon-x"/></svg>' : '<svg class="icon icon-info-circle" aria-hidden="true"><use href="#icon-info-circle"/></svg>';
         toast.innerHTML = '<span class="toast-icon">' + icon + '</span>' +
             '<div class="toast-content">' +
             '<div class="toast-title">' + escapeHtml(title) + '</div>' +
             '<div class="toast-message">' + escapeHtml(message) + '</div>' +
             '</div>' +
-            '<button class="toast-close">✕</button>';
+            '<button class="toast-close">' + '<svg class="icon icon-x" aria-hidden="true"><use href="#icon-x"/></svg>' + '</button>';
         toastContainer.appendChild(toast);
 
         setTimeout(function() {
@@ -1671,7 +1681,7 @@
         }
         var toast = document.createElement('div');
         toast.className = 'toast ' + (opts.type || 'info') + ' toast-persistent';
-        var icon = opts.icon || 'ℹ';
+        var icon = opts.icon || '<svg class="icon icon-info-circle" aria-hidden="true"><use href="#icon-info-circle"/></svg>';
         var actionLabel = opts.actionLabel || 'Copy';
         var actionValue = opts.actionValue || '';
         toast.innerHTML = '<span class="toast-icon">' + icon + '</span>' +
@@ -1681,7 +1691,7 @@
             (actionValue ? '<div class="toast-action-value">' + escapeHtml(actionValue) + '</div>' : '') +
             '</div>' +
             (actionValue ? '<button class="toast-action-btn">' + escapeHtml(actionLabel) + '</button>' : '') +
-            '<button class="toast-close">✕</button>';
+            '<button class="toast-close">' + '<svg class="icon icon-x" aria-hidden="true"><use href="#icon-x"/></svg>' + '</button>';
         toastContainer.appendChild(toast);
         _persistentToastsByTag[tag] = toast;
 
@@ -1690,7 +1700,7 @@
             actionBtn.onclick = function() {
                 if (navigator.clipboard && actionValue) {
                     navigator.clipboard.writeText(actionValue).then(function() {
-                        actionBtn.textContent = '✓ Copied';
+                        actionBtn.innerHTML = '<svg class="icon icon-check" aria-hidden="true"><use href="#icon-check"/></svg>' + ' Copied';
                         actionBtn.classList.add('copied');
                     }).catch(function() {
                         actionBtn.textContent = 'Copy failed';
@@ -1746,7 +1756,7 @@
         }
         var origText = btn.innerHTML;
         btn.disabled = true;
-        btn.innerHTML = '<span>⏳</span> Launching...';
+        btn.innerHTML = '<svg class="icon icon-hourglass-empty" aria-hidden="true"><use href="#icon-hourglass-empty"/></svg>' + ' Launching...';
         showToast('info', 'Running...', 'gt up --restore');
 
         fetch('/api/run', {
@@ -1905,7 +1915,7 @@
                         var unreadDot = thread.unread_count > 0 ? '<span class="thread-unread-dot"></span>' : '';
 
                         var priorityIcon = '';
-                        if (last.priority === 'urgent') priorityIcon = '<span class="priority-urgent">⚡</span> ';
+                        if (last.priority === 'urgent') priorityIcon = '<span class="priority-urgent">' + '<svg class="icon icon-bolt" aria-hidden="true"><use href="#icon-bolt"/></svg>' + '</span> ';
                         else if (last.priority === 'high') priorityIcon = '<span class="priority-high">!</span> ';
 
                         // Thread header (always visible)
@@ -2042,10 +2052,10 @@
                         var stateClass = 'crew-state-' + member.state;
                         var stateText = member.state.charAt(0).toUpperCase() + member.state.slice(1);
                         var stateIcon = '';
-                        if (member.state === 'spinning') stateIcon = '🔄 ';
-                        else if (member.state === 'finished') stateIcon = '✅ ';
-                        else if (member.state === 'questions') stateIcon = '❓ ';
-                        else if (member.state === 'ready') stateIcon = '⏸️ ';
+                        if (member.state === 'spinning') stateIcon = '<svg class="icon icon-refresh" aria-hidden="true"><use href="#icon-refresh"/></svg>' + ' ';
+                        else if (member.state === 'finished') stateIcon = '<svg class="icon icon-check icon-green" aria-hidden="true"><use href="#icon-check"/></svg>' + ' ';
+                        else if (member.state === 'questions') stateIcon = '<svg class="icon icon-question-mark" aria-hidden="true"><use href="#icon-question-mark"/></svg>' + ' ';
+                        else if (member.state === 'ready') stateIcon = '<svg class="icon icon-player-pause" aria-hidden="true"><use href="#icon-player-pause"/></svg>' + ' ';
 
                         var sessionBadge = '';
                         if (member.session === 'attached') {
@@ -2078,7 +2088,7 @@
                             '<td class="crew-activity">' + (member.last_active || '—') + '</td>' +
                             '<td>' + sessionBadge + '</td>' +
                             '<td>' + accountCell + '</td>' +
-                            '<td><button class="attach-btn" data-cmd="' + escapeHtml(attachCmd) + '" title="Copy attach command">📎 Attach</button></td>';
+                            '<td><button class="attach-btn" data-cmd="' + escapeHtml(attachCmd) + '" title="Copy attach command">' + icon('paperclip') + ' Attach</button></td>';
                         tbody.appendChild(tr);
                     });
 
@@ -3087,7 +3097,7 @@
         var select = document.getElementById('compose-to');
         
         // Show loading state
-        select.innerHTML = '<option value="">⏳ Loading recipients...</option>';
+        select.innerHTML = '<option value="">Loading recipients...</option>';
         select.disabled = true;
 
         // If we have a selected value for reply, add it immediately so it's available
@@ -3132,7 +3142,7 @@
 
                     var opt = document.createElement('option');
                     opt.value = name;
-                    opt.textContent = name + (running ? ' (● running)' : ' (○ stopped)');
+                    opt.innerHTML = escapeHtml(name) + (running ? ' (' + '<svg class="icon icon-point-filled icon-green" aria-hidden="true"><use href="#icon-point-filled"/></svg>' + ' running)' : ' (' + '<svg class="icon icon-point" aria-hidden="true"><use href="#icon-point"/></svg>' + ' stopped)');
                     if (!running) opt.disabled = true;
                     select.appendChild(opt);
                 });
@@ -3141,7 +3151,7 @@
             })
             .catch(function(err) {
                 console.error('Failed to load agents for To dropdown:', err);
-                select.innerHTML = '<option value="">⚠ Failed to load recipients</option>';
+                select.innerHTML = '<option value="">Failed to load recipients</option>';
                 select.disabled = false;
             });
     }
@@ -3301,9 +3311,9 @@
 
         // Close / Reopen button
         if (isClosed) {
-            html += '<button class="issue-action-btn reopen" onclick="reopenIssue(\'' + escapeHtml(issueId) + '\')">↺ Reopen</button>';
+            html += '<button class="issue-action-btn reopen" onclick="reopenIssue(\'' + escapeHtml(issueId) + '\')">' + '<svg class="icon icon-rotate" aria-hidden="true"><use href="#icon-rotate"/></svg>' + ' Reopen</button>';
         } else {
-            html += '<button class="issue-action-btn close" onclick="closeIssue(\'' + escapeHtml(issueId) + '\')">✓ Close</button>';
+            html += '<button class="issue-action-btn close" onclick="closeIssue(\'' + escapeHtml(issueId) + '\')">' + '<svg class="icon icon-check" aria-hidden="true"><use href="#icon-check"/></svg>' + ' Close</button>';
         }
 
         // Priority dropdown
@@ -3768,13 +3778,13 @@
             } else {
                 showToast('error', 'Failed', data.error || 'Unknown error');
                 btn.disabled = false;
-                btn.textContent = action === 'ack' ? '👍 Ack' : '✓ Resolve';
+                btn.innerHTML = action === 'ack' ? ('<svg class="icon icon-thumb-up" aria-hidden="true"><use href="#icon-thumb-up"/></svg>' + ' Ack') : ('<svg class="icon icon-check" aria-hidden="true"><use href="#icon-check"/></svg>' + ' Resolve');
             }
         })
         .catch(function(err) {
             showToast('error', 'Error', err.message || 'Request failed');
             btn.disabled = false;
-            btn.textContent = action === 'ack' ? '👍 Ack' : '✓ Resolve';
+            btn.innerHTML = action === 'ack' ? ('<svg class="icon icon-thumb-up" aria-hidden="true"><use href="#icon-thumb-up"/></svg>' + ' Ack') : ('<svg class="icon icon-check" aria-hidden="true"><use href="#icon-check"/></svg>' + ' Resolve');
         });
     }
 
@@ -3790,7 +3800,7 @@
         picker.className = 'reassign-picker';
         picker.innerHTML = '<select class="reassign-select"><option value="">Loading...</option></select>' +
             '<button class="esc-btn esc-reassign-confirm">Go</button>' +
-            '<button class="esc-btn esc-reassign-cancel">✕</button>';
+            '<button class="esc-btn esc-reassign-cancel">' + '<svg class="icon icon-x" aria-hidden="true"><use href="#icon-x"/></svg>' + '</button>';
         btn.parentNode.appendChild(picker);
 
         var select = picker.querySelector('.reassign-select');
@@ -3852,12 +3862,12 @@
                     showToast('error', 'Failed', data.error || 'Unknown error');
                 }
                 btn.disabled = false;
-                btn.textContent = '↻ Reassign';
+                btn.innerHTML = '<svg class="icon icon-rotate" aria-hidden="true"><use href="#icon-rotate"/></svg>' + ' Reassign';
             })
             .catch(function(err) {
                 showToast('error', 'Error', err.message || 'Request failed');
                 btn.disabled = false;
-                btn.textContent = '↻ Reassign';
+                btn.innerHTML = '<svg class="icon icon-rotate" aria-hidden="true"><use href="#icon-rotate"/></svg>' + ' Reassign';
             });
         });
 
@@ -4052,7 +4062,11 @@
         var statusEl = document.getElementById(attachTargets.statusId);
         currentAttach = window.GTTerminalAttach.create({
             sessionName: sessionName,
-            onStatus: function(text) { if (statusEl) statusEl.textContent = text; },
+            onStatus: function(text, level) {
+                if (!statusEl) return;
+                statusEl.textContent = text;
+                statusEl.className = 'output-panel-status ' + (level === 'ok' ? 'live' : level === 'warn' ? 'warn' : level === 'muted' ? 'muted' : '');
+            },
             // Surface the tmux window title as the panel header tooltip.
             onTitle: function(title) { if (outputCmd) outputCmd.title = title; },
         });
@@ -4100,7 +4114,7 @@
             existingDetail.remove();
             row.classList.remove('convoy-expanded');
             var toggle = row.querySelector('.convoy-toggle');
-            if (toggle) toggle.textContent = '▶';
+            if (toggle) toggle.innerHTML = '<svg class="icon icon-chevron-right" aria-hidden="true"><use href="#icon-chevron-right"/></svg>';
             return;
         }
 
@@ -4109,13 +4123,13 @@
         document.querySelectorAll('.convoy-row.convoy-expanded').forEach(function(r) {
             r.classList.remove('convoy-expanded');
             var t = r.querySelector('.convoy-toggle');
-            if (t) t.textContent = '▶';
+            if (t) t.innerHTML = '<svg class="icon icon-chevron-right" aria-hidden="true"><use href="#icon-chevron-right"/></svg>';
         });
 
         // Mark this row as expanded
         row.classList.add('convoy-expanded');
         var toggleEl = row.querySelector('.convoy-toggle');
-        if (toggleEl) toggleEl.textContent = '▼';
+        if (toggleEl) toggleEl.innerHTML = '<svg class="icon icon-chevron-down" aria-hidden="true"><use href="#icon-chevron-down"/></svg>';
 
         // Create detail row
         var detailRow = document.createElement('tr');
@@ -4191,7 +4205,7 @@
             // Worker info as progress indicator
             var progress = '';
             if (issue.status === 'closed') {
-                progress = '<span class="convoy-progress-done">✓</span>';
+                progress = '<span class="convoy-progress-done">' + '<svg class="icon icon-check" aria-hidden="true"><use href="#icon-check"/></svg>' + '</span>';
             } else if (issue.worker) {
                 var workerName = issue.worker.split('/').pop();
                 progress = '<span class="convoy-progress-active">@' + escapeHtml(workerName) + '</span>';
@@ -4311,10 +4325,10 @@
         if (!el) return;
         var c = counters || {};
         var parts = [];
-        parts.push('<span class="qv-avail">' + (c.available || 0) + '●</span>');
-        if (c.limited)  { parts.push('<span class="qv-sep">|</span><span class="qv-lim">' + c.limited + '⚠</span>'); }
-        if (c.expired)  { parts.push('<span class="qv-sep">|</span><span class="qv-exp">' + c.expired + '✕</span>'); }
-        if (c.cooldown) { parts.push('<span class="qv-sep">|</span><span class="qv-cool">' + c.cooldown + '⏳</span>'); }
+        parts.push('<span class="qv-avail">' + (c.available || 0) + ' ' + '<svg class="icon icon-point-filled icon-green" aria-hidden="true"><use href="#icon-point-filled"/></svg>' + '</span>');
+        if (c.limited)  { parts.push('<span class="qv-sep">|</span><span class="qv-lim">' + c.limited + ' ' + '<svg class="icon icon-alert-triangle icon-yellow" aria-hidden="true"><use href="#icon-alert-triangle"/></svg>' + '</span>'); }
+        if (c.expired)  { parts.push('<span class="qv-sep">|</span><span class="qv-exp">' + c.expired + ' ' + '<svg class="icon icon-x icon-red" aria-hidden="true"><use href="#icon-x"/></svg>' + '</span>'); }
+        if (c.cooldown) { parts.push('<span class="qv-sep">|</span><span class="qv-cool">' + c.cooldown + ' ' + '<svg class="icon icon-hourglass-empty" aria-hidden="true"><use href="#icon-hourglass-empty"/></svg>' + '</span>'); }
         el.innerHTML = parts.join('');
     }
 
@@ -4324,7 +4338,7 @@
         var html = '<article class="' + classes + '">';
         html += '<div class="quota-card-head">';
         html += '<span class="quota-card-handle">';
-        if (a.is_default) html += '<span class="default-marker" title="Default account">★</span>';
+        if (a.is_default) html += '<span class="default-marker" title="Default account">' + '<svg class="icon icon-chevron-right" aria-hidden="true"><use href="#icon-chevron-right"/></svg>' + '</span>';
         html += escapeHTML(a.handle);
         html += '</span>';
         html += '<span class="quota-card-status s-' + statusKey + '">' + escapeHTML(statusKey) + '</span>';

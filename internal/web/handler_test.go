@@ -448,7 +448,7 @@ func TestConvoyHandler_WorkStatusRendering(t *testing.T) {
 		wantClass      string
 		wantStatusText string
 	}{
-		{"complete status", "complete", "badge-green", "✓"},
+		{"complete status", "complete", "badge-green", "icon-check"},
 		{"active status", "active", "badge-green", "Active"},
 		{"stale status", "stale", "badge-yellow", "Stale"},
 		{"stuck status", "stuck", "badge-red", "Stuck"},
