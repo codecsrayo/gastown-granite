@@ -33,6 +33,7 @@ import (
 	"github.com/steveyegge/gastown/internal/feed"
 	gitpkg "github.com/steveyegge/gastown/internal/git"
 	"github.com/steveyegge/gastown/internal/mayor"
+	"github.com/steveyegge/gastown/internal/patrol"
 	"github.com/steveyegge/gastown/internal/polecat"
 	"github.com/steveyegge/gastown/internal/refinery"
 	"github.com/steveyegge/gastown/internal/rig"
@@ -559,181 +560,126 @@ func (d *Daemon) Run() (err error) {
 		}
 	}
 
-	// Start dedicated Dolt health check ticker if Dolt server is configured.
-	// This runs at a much higher frequency (default 30s) than the general
-	// heartbeat (3 min) so Dolt crashes are detected quickly.
-	var doltHealthTicker *time.Ticker
-	var doltHealthChan <-chan time.Time
+	// Build the patrol registry — replaces the ~200 lines of per-patrol
+	// ticker boilerplate this block used to contain. Each entry is gated
+	// by its enable flag and runs on its own goroutine.
+	patrolReg := patrol.New(d.logger)
+	skipOnShutdown := func() bool { return d.isShutdownInProgress() }
+
 	if d.doltServer != nil && d.doltServer.IsEnabled() {
-		interval := d.doltServer.HealthCheckInterval()
-		doltHealthTicker = time.NewTicker(interval)
-		doltHealthChan = doltHealthTicker.C
-		defer doltHealthTicker.Stop()
-		d.logger.Printf("Dolt health check ticker started (interval %v)", interval)
+		patrolReg.Add(patrol.Patrol{
+			Name:     "dolt_health",
+			Enabled:  true,
+			Interval: d.doltServer.HealthCheckInterval(),
+			Tick:     func(context.Context) { d.ensureDoltServerRunning() },
+		})
 	}
+	patrolReg.Add(patrol.Patrol{
+		Name:       "dolt_remotes",
+		Enabled:    d.isPatrolActive("dolt_remotes"),
+		Interval:   doltRemotesInterval(d.patrolConfig),
+		ShouldSkip: skipOnShutdown,
+		Tick:       func(context.Context) { d.pushDoltRemotes() },
+	})
+	patrolReg.Add(patrol.Patrol{
+		Name:       "dolt_backup",
+		Enabled:    d.isPatrolActive("dolt_backup"),
+		Interval:   doltBackupInterval(d.patrolConfig),
+		ShouldSkip: skipOnShutdown,
+		Tick:       func(context.Context) { d.syncDoltBackups() },
+	})
+	patrolReg.Add(patrol.Patrol{
+		Name:       "jsonl_git_backup",
+		Enabled:    d.isPatrolActive("jsonl_git_backup"),
+		Interval:   jsonlGitBackupInterval(d.patrolConfig),
+		ShouldSkip: skipOnShutdown,
+		Tick:       func(context.Context) { d.syncJsonlGitBackup() },
+	})
+	patrolReg.Add(patrol.Patrol{
+		Name:       "wisp_reaper",
+		Enabled:    d.isPatrolActive("wisp_reaper"),
+		Interval:   wispReaperInterval(d.patrolConfig),
+		ShouldSkip: skipOnShutdown,
+		Tick:       func(context.Context) { d.reapWisps() },
+	})
+	patrolReg.Add(patrol.Patrol{
+		Name:       "doctor_dog",
+		Enabled:    d.isPatrolActive("doctor_dog"),
+		Interval:   doctorDogInterval(d.patrolConfig),
+		ShouldSkip: skipOnShutdown,
+		Tick:       func(context.Context) { d.runDoctorDog() },
+	})
+	patrolReg.Add(patrol.Patrol{
+		Name:       "compactor_dog",
+		Enabled:    d.isPatrolActive("compactor_dog"),
+		Interval:   compactorDogInterval(d.patrolConfig),
+		ShouldSkip: skipOnShutdown,
+		Tick:       func(context.Context) { d.runCompactorDog() },
+	})
+	patrolReg.Add(patrol.Patrol{
+		Name:       "checkpoint_dog",
+		Enabled:    d.isPatrolActive("checkpoint_dog"),
+		Interval:   checkpointDogInterval(d.patrolConfig),
+		ShouldSkip: skipOnShutdown,
+		Tick:       func(context.Context) { d.runCheckpointDog() },
+	})
+	patrolReg.Add(patrol.Patrol{
+		Name:       "scheduled_maintenance",
+		Enabled:    d.isPatrolActive("scheduled_maintenance"),
+		Interval:   maintenanceCheckInterval(d.patrolConfig),
+		ShouldSkip: skipOnShutdown,
+		Tick:       func(context.Context) { d.runScheduledMaintenance() },
+	})
+	patrolReg.Add(patrol.Patrol{
+		Name:       "main_branch_test",
+		Enabled:    d.isPatrolActive("main_branch_test"),
+		Interval:   mainBranchTestInterval(d.patrolConfig),
+		ShouldSkip: skipOnShutdown,
+		Tick:       func(context.Context) { d.runMainBranchTests() },
+	})
+	patrolReg.Add(patrol.Patrol{
+		Name:       "quota_dog",
+		Enabled:    d.isPatrolActive("quota_dog"),
+		Interval:   quotaDogInterval(d.patrolConfig),
+		ShouldSkip: skipOnShutdown,
+		Tick:       func(context.Context) { d.runQuotaDog() },
+	})
+	patrolReg.Add(patrol.Patrol{
+		Name:       "quota_prober",
+		Enabled:    d.isPatrolActive("quota_prober"),
+		Interval:   quotaProberInterval(d.patrolConfig),
+		ShouldSkip: skipOnShutdown,
+		Tick:       func(context.Context) { d.runQuotaProber() },
+	})
+	patrolReg.Add(patrol.Patrol{
+		Name:       "services_up",
+		Enabled:    d.isPatrolActive("services_up"),
+		Interval:   servicesUpInterval(d.patrolConfig),
+		ShouldSkip: skipOnShutdown,
+		Tick:       func(context.Context) { d.runServicesUp() },
+	})
+	patrolReg.Add(patrol.Patrol{
+		Name:     "login_watch",
+		Enabled:  d.isPatrolActive("login_watch"),
+		Interval: loginWatchInterval(d.patrolConfig),
+		Tick:     func(context.Context) { d.runLoginWatch() },
+	})
 
-	// Start dedicated Dolt remotes push ticker if configured.
-	// This runs at a lower frequency (default 15 min) than the heartbeat (3 min)
-	// to periodically push databases to their git remotes.
-	var doltRemotesTicker *time.Ticker
-	var doltRemotesChan <-chan time.Time
-	if d.isPatrolActive("dolt_remotes") {
-		interval := doltRemotesInterval(d.patrolConfig)
-		doltRemotesTicker = time.NewTicker(interval)
-		doltRemotesChan = doltRemotesTicker.C
-		defer doltRemotesTicker.Stop()
-		d.logger.Printf("Dolt remotes push ticker started (interval %v)", interval)
-	}
-
-	// Start dedicated Dolt backup ticker if configured.
-	// Runs filesystem backup sync (dolt backup sync) for production databases.
-	var doltBackupTicker *time.Ticker
-	var doltBackupChan <-chan time.Time
-	if d.isPatrolActive("dolt_backup") {
-		interval := doltBackupInterval(d.patrolConfig)
-		doltBackupTicker = time.NewTicker(interval)
-		doltBackupChan = doltBackupTicker.C
-		defer doltBackupTicker.Stop()
-		d.logger.Printf("Dolt backup ticker started (interval %v)", interval)
-	}
-
-	// Start JSONL git backup ticker if configured.
-	// Exports issues to JSONL, scrubs ephemeral data, pushes to git repo.
-	var jsonlGitBackupTicker *time.Ticker
-	var jsonlGitBackupChan <-chan time.Time
-	if d.isPatrolActive("jsonl_git_backup") {
-		interval := jsonlGitBackupInterval(d.patrolConfig)
-		jsonlGitBackupTicker = time.NewTicker(interval)
-		jsonlGitBackupChan = jsonlGitBackupTicker.C
-		defer jsonlGitBackupTicker.Stop()
-		d.logger.Printf("JSONL git backup ticker started (interval %v)", interval)
-	}
-
-	// Start wisp reaper ticker if configured.
-	// Closes stale wisps (abandoned molecule steps, old patrol data) across all databases.
-	var wispReaperTicker *time.Ticker
-	var wispReaperChan <-chan time.Time
-	if d.isPatrolActive("wisp_reaper") {
-		interval := wispReaperInterval(d.patrolConfig)
-		wispReaperTicker = time.NewTicker(interval)
-		wispReaperChan = wispReaperTicker.C
-		defer wispReaperTicker.Stop()
-		d.logger.Printf("Wisp reaper ticker started (interval %v)", interval)
-	}
-
-	// Start doctor dog ticker if configured.
-	// Health monitor: TCP check, latency, DB count, gc, zombie detection, backup/disk checks.
-	var doctorDogTicker *time.Ticker
-	var doctorDogChan <-chan time.Time
-	if d.isPatrolActive("doctor_dog") {
-		interval := doctorDogInterval(d.patrolConfig)
-		doctorDogTicker = time.NewTicker(interval)
-		doctorDogChan = doctorDogTicker.C
-		defer doctorDogTicker.Stop()
-		d.logger.Printf("Doctor dog ticker started (interval %v)", interval)
-	}
-
-	// Start compactor dog ticker if configured.
-	// Flattens Dolt commit history to reclaim graph storage (daily).
-	var compactorDogTicker *time.Ticker
-	var compactorDogChan <-chan time.Time
-	if d.isPatrolActive("compactor_dog") {
-		interval := compactorDogInterval(d.patrolConfig)
-		compactorDogTicker = time.NewTicker(interval)
-		compactorDogChan = compactorDogTicker.C
-		defer compactorDogTicker.Stop()
-		d.logger.Printf("Compactor dog ticker started (interval %v)", interval)
-	}
-
-	// Start checkpoint dog ticker if configured.
-	// Auto-commits WIP changes in active polecat worktrees to prevent data loss.
-	var checkpointDogTicker *time.Ticker
-	var checkpointDogChan <-chan time.Time
-	if d.isPatrolActive("checkpoint_dog") {
-		interval := checkpointDogInterval(d.patrolConfig)
-		checkpointDogTicker = time.NewTicker(interval)
-		checkpointDogChan = checkpointDogTicker.C
-		defer checkpointDogTicker.Stop()
-		d.logger.Printf("Checkpoint dog ticker started (interval %v)", interval)
-	}
-
-	// Start scheduled maintenance ticker if configured.
-	// Checks periodically whether we're in the maintenance window and
-	// runs `gt maintain --force` when commit counts exceed threshold.
-	var scheduledMaintenanceTicker *time.Ticker
-	var scheduledMaintenanceChan <-chan time.Time
-	if d.isPatrolActive("scheduled_maintenance") {
-		interval := maintenanceCheckInterval(d.patrolConfig)
-		scheduledMaintenanceTicker = time.NewTicker(interval)
-		scheduledMaintenanceChan = scheduledMaintenanceTicker.C
-		defer scheduledMaintenanceTicker.Stop()
-		window := maintenanceWindow(d.patrolConfig)
-		d.logger.Printf("Scheduled maintenance ticker started (check interval %v, window %s)", interval, window)
-	}
-
-	// Start main-branch test runner ticker if configured.
-	// Periodically runs quality gates on each rig's main branch to catch regressions.
-	var mainBranchTestTicker *time.Ticker
-	var mainBranchTestChan <-chan time.Time
-	if d.isPatrolActive("main_branch_test") {
-		interval := mainBranchTestInterval(d.patrolConfig)
-		mainBranchTestTicker = time.NewTicker(interval)
-		mainBranchTestChan = mainBranchTestTicker.C
-		defer mainBranchTestTicker.Stop()
-		d.logger.Printf("Main branch test ticker started (interval %v)", interval)
-	}
-
-	// Start quota dog ticker if configured.
-	// Scans for rate-limited sessions and automatically rotates credentials.
-	var quotaDogTicker *time.Ticker
-	var quotaDogChan <-chan time.Time
-	if d.isPatrolActive("quota_dog") {
-		interval := quotaDogInterval(d.patrolConfig)
-		quotaDogTicker = time.NewTicker(interval)
-		quotaDogChan = quotaDogTicker.C
-		defer quotaDogTicker.Stop()
-		d.logger.Printf("Quota dog ticker started (interval %v)", interval)
-	}
-
-	// Start quota prober ticker if configured.
-	// Actively probes limited accounts to validate reactivation, since the
-	// provider's shown reset time is imprecise. Marks probed-clean accounts
-	// available and emits quota_reactivated events.
-	var quotaProberTicker *time.Ticker
-	var quotaProberChan <-chan time.Time
-	if d.isPatrolActive("quota_prober") {
-		interval := quotaProberInterval(d.patrolConfig)
-		quotaProberTicker = time.NewTicker(interval)
-		quotaProberChan = quotaProberTicker.C
-		defer quotaProberTicker.Stop()
-		d.logger.Printf("Quota prober ticker started (interval %v)", interval)
-	}
-
-	// Start services_up ticker if configured.
-	// Periodically runs `gt up` (idempotent) so any expected service that is
-	// no longer running gets re-launched. Self-healing for missing agents.
-	var servicesUpTicker *time.Ticker
-	var servicesUpChan <-chan time.Time
-	if d.isPatrolActive("services_up") {
-		interval := servicesUpInterval(d.patrolConfig)
-		servicesUpTicker = time.NewTicker(interval)
-		servicesUpChan = servicesUpTicker.C
-		defer servicesUpTicker.Stop()
-		d.logger.Printf("Services up ticker started (interval %v)", interval)
-	}
-
-	// Start login_watch ticker if configured.
-	// Scans tmux panes for OAuth URLs and emits login_required events that
-	// surface as copy-able toasts in the dashboard.
-	var loginWatchTicker *time.Ticker
-	var loginWatchChan <-chan time.Time
-	if d.isPatrolActive("login_watch") {
-		interval := loginWatchInterval(d.patrolConfig)
-		loginWatchTicker = time.NewTicker(interval)
-		loginWatchChan = loginWatchTicker.C
-		defer loginWatchTicker.Stop()
-		d.logger.Printf("Login watch ticker started (interval %v)", interval)
-	}
+	// Run patrols off a separate goroutine. They exit on d.ctx cancellation.
+	patrolDone := make(chan struct{})
+	go func() {
+		patrolReg.Run(d.ctx)
+		close(patrolDone)
+	}()
+	defer func() {
+		// Best-effort wait for patrols to drain after ctx is cancelled.
+		// Bounded so a stuck patrol can't pin daemon shutdown forever.
+		select {
+		case <-patrolDone:
+		case <-time.After(5 * time.Second):
+			d.logger.Println("daemon: patrol shutdown timeout, proceeding anyway")
+		}
+	}()
 
 	// Note: PATCH-010 uses per-session hooks in deacon/manager.go (SetAutoRespawnHook).
 	// Global pane-died hooks don't fire reliably in tmux 3.2a, so we rely on the
@@ -765,104 +711,6 @@ func (d *Daemon) Run() (err error) {
 			} else {
 				d.logger.Printf("Received signal %v, shutting down", sig)
 				return d.shutdown(state)
-			}
-
-		case <-doltHealthChan:
-			// Dedicated Dolt health check — fast crash detection independent
-			// of the 3-minute general heartbeat.
-			if !d.isShutdownInProgress() {
-				d.ensureDoltServerRunning()
-			}
-
-		case <-doltRemotesChan:
-			// Periodic Dolt remote push — pushes databases to their configured
-			// git remotes on a 15-minute cadence (independent of heartbeat).
-			if !d.isShutdownInProgress() {
-				d.pushDoltRemotes()
-			}
-
-		case <-doltBackupChan:
-			// Periodic Dolt filesystem backup — syncs production databases to
-			// local backup directory on a 15-minute cadence.
-			if !d.isShutdownInProgress() {
-				d.syncDoltBackups()
-			}
-
-		case <-jsonlGitBackupChan:
-			// Periodic JSONL git backup — exports issues, scrubs ephemeral data,
-			// commits and pushes to git repo.
-			if !d.isShutdownInProgress() {
-				d.syncJsonlGitBackup()
-			}
-
-		case <-wispReaperChan:
-			// Periodic wisp reaper — closes stale wisps (abandoned molecule steps,
-			// old patrol data) to prevent unbounded table growth (Clown Show audit).
-			if !d.isShutdownInProgress() {
-				d.reapWisps()
-			}
-
-		case <-doctorDogChan:
-			// Doctor dog — comprehensive Dolt health monitor: connectivity, latency,
-			// gc, zombie detection, backup staleness, and disk usage checks.
-			if !d.isShutdownInProgress() {
-				d.runDoctorDog()
-			}
-
-		case <-compactorDogChan:
-			// Compactor dog — flattens Dolt commit history on production databases.
-			// Reclaims commit graph storage, then runs gc to reclaim chunks.
-			if !d.isShutdownInProgress() {
-				d.runCompactorDog()
-			}
-
-		case <-checkpointDogChan:
-			// Checkpoint dog — auto-commits WIP changes in active polecat
-			// worktrees to prevent data loss from session crashes.
-			if !d.isShutdownInProgress() {
-				d.runCheckpointDog()
-			}
-
-		case <-scheduledMaintenanceChan:
-			// Scheduled maintenance — checks if we're in the maintenance window
-			// and runs `gt maintain --force` when commit counts exceed threshold.
-			if !d.isShutdownInProgress() {
-				d.runScheduledMaintenance()
-			}
-
-		case <-mainBranchTestChan:
-			// Main branch test runner — periodically runs quality gates on each
-			// rig's main branch to catch regressions from merges or direct pushes.
-			if !d.isShutdownInProgress() {
-				d.runMainBranchTests()
-			}
-
-		case <-quotaDogChan:
-			// Quota dog — scans for rate-limited sessions and automatically
-			// rotates credentials to available accounts via keychain swap.
-			if !d.isShutdownInProgress() {
-				d.runQuotaDog()
-			}
-
-		case <-quotaProberChan:
-			// Quota prober — probes limited accounts to validate reactivation
-			// (the shown reset time is imprecise), marking probed-clean accounts
-			// available and emitting quota_reactivated events.
-			if !d.isShutdownInProgress() {
-				d.runQuotaProber()
-			}
-
-		case <-servicesUpChan:
-			// Services up — periodically runs `gt up` so any missing service
-			// (mayor/deacon/witness/refinery/crew/pinned polecats) is relaunched.
-			if !d.isShutdownInProgress() {
-				d.runServicesUp()
-			}
-
-		case <-loginWatchChan:
-			// Login watch — scans tmux panes for OAuth URLs needing user copy.
-			if !d.isShutdownInProgress() {
-				d.runLoginWatch()
 			}
 
 		case <-timer.C:
