@@ -375,8 +375,9 @@ func (s *SpawnedPolecatInfo) StartSession() (string, error) {
 
 	fmt.Printf("Starting session for %s/%s...\n", s.RigName, s.PolecatName)
 	startOpts := polecat.SessionStartOptions{
-		RuntimeConfigDir: claudeConfigDir,
-		Agent:            s.agent,
+		RuntimeConfigDir:   claudeConfigDir,
+		Agent:              s.agent,
+		PreflightValidator: quotaPreflight(townRoot, s.account, polecatSessMgr.SessionName(s.PolecatName)),
 	}
 	if err := polecatSessMgr.Start(s.PolecatName, startOpts); err != nil {
 		return "", fmt.Errorf("starting session: %w", err)

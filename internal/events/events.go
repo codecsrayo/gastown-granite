@@ -91,6 +91,7 @@ const (
 	TypeQuotaBlocked      = "quota_blocked"       // Limited sessions with no available accounts
 	TypeQuotaAssigned     = "quota_assigned"      // Rotation plan snapshot (configDir → handle)
 	TypeQuotaReactivated  = "quota_reactivated"   // Limited account probe succeeded → available
+	TypeQuotaSpawnDenied  = "quota_spawn_denied"  // Preflight validator rejected a spawn (expired/limited token)
 )
 
 // EventsFile is the name of the raw events log.
@@ -214,6 +215,18 @@ func SpawnPayload(rig, polecat string) map[string]interface{} {
 	return map[string]interface{}{
 		"rig":     rig,
 		"polecat": polecat,
+	}
+}
+
+// QuotaSpawnDeniedPayload creates a payload for preflight rejection events.
+// account is the resolved account handle (empty when default), reason carries
+// the validator error string. session is the tmux session ID the spawn was
+// targeting — empty for callers that haven't computed it (e.g. up.go batch).
+func QuotaSpawnDeniedPayload(account, session, reason string) map[string]interface{} {
+	return map[string]interface{}{
+		"account": account,
+		"session": session,
+		"reason":  reason,
 	}
 }
 

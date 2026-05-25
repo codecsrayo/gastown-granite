@@ -985,8 +985,13 @@ func startPolecatsWithWork(townRoot, rigName string) ([]string, map[string]error
 			continue
 		}
 
-		// This polecat has work - start it using SessionManager
-		if err := polecatMgr.Start(polecatName, polecat.SessionStartOptions{}); err != nil {
+		// This polecat has work - start it using SessionManager.
+		// Preflight gates spawn on the default account's keychain state so a
+		// bulk `gt up` does not create tmux sessions backed by expired tokens.
+		startOpts := polecat.SessionStartOptions{
+			PreflightValidator: quotaPreflight(townRoot, "", polecatMgr.SessionName(polecatName)),
+		}
+		if err := polecatMgr.Start(polecatName, startOpts); err != nil {
 			if err == polecat.ErrSessionRunning {
 				started = append(started, polecatName)
 			} else {

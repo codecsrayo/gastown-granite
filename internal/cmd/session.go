@@ -24,14 +24,16 @@ import (
 
 // Session command flags
 var (
-	sessionIssue      string
-	sessionForce      bool
-	sessionLines      int
-	sessionMessage    string
-	sessionFile       string
-	sessionRigFilter  string
-	sessionListJSON   bool
-	sessionStatusJSON bool
+	sessionIssue       string
+	sessionForce       bool
+	sessionAccount     string
+	sessionSkipPreflight bool
+	sessionLines       int
+	sessionMessage     string
+	sessionFile        string
+	sessionRigFilter   string
+	sessionListJSON    bool
+	sessionStatusJSON  bool
 )
 
 var sessionCmd = &cobra.Command{
@@ -171,6 +173,8 @@ Examples:
 func init() {
 	// Start flags
 	sessionStartCmd.Flags().StringVar(&sessionIssue, "issue", "", "Issue ID to work on")
+	sessionStartCmd.Flags().StringVar(&sessionAccount, "account", "", "Account handle to use (overrides default)")
+	sessionStartCmd.Flags().BoolVar(&sessionSkipPreflight, "skip-preflight", false, "Skip quota/token preflight validation")
 
 	// Stop flags
 	sessionStopCmd.Flags().BoolVarP(&sessionForce, "force", "f", false, "Force immediate shutdown")
@@ -188,6 +192,8 @@ func init() {
 
 	// Restart flags
 	sessionRestartCmd.Flags().BoolVarP(&sessionForce, "force", "f", false, "Force immediate shutdown")
+	sessionRestartCmd.Flags().StringVar(&sessionAccount, "account", "", "Account handle to use (overrides default)")
+	sessionRestartCmd.Flags().BoolVar(&sessionSkipPreflight, "skip-preflight", false, "Skip quota/token preflight validation")
 
 	// Status flags
 	sessionStatusCmd.Flags().BoolVar(&sessionStatusJSON, "json", false, "Output as JSON")
@@ -267,7 +273,12 @@ func runSessionStart(cmd *cobra.Command, args []string) error {
 	}
 
 	opts := polecat.SessionStartOptions{
-		Issue: sessionIssue,
+		Issue:   sessionIssue,
+		Account: sessionAccount,
+	}
+	if !sessionSkipPreflight {
+		townRoot, _ := workspace.FindFromCwd()
+		opts.PreflightValidator = quotaPreflight(townRoot, sessionAccount, polecatMgr.SessionName(polecatName))
 	}
 
 	fmt.Printf("Starting session for %s/%s...\n", rigName, polecatName)
@@ -546,7 +557,11 @@ func runSessionRestart(cmd *cobra.Command, args []string) error {
 
 	// Start fresh session
 	fmt.Printf("Starting session for %s/%s...\n", rigName, polecatName)
-	opts := polecat.SessionStartOptions{}
+	opts := polecat.SessionStartOptions{Account: sessionAccount}
+	if !sessionSkipPreflight {
+		townRoot, _ := workspace.FindFromCwd()
+		opts.PreflightValidator = quotaPreflight(townRoot, sessionAccount, polecatMgr.SessionName(polecatName))
+	}
 	if err := polecatMgr.Start(polecatName, opts); err != nil {
 		return fmt.Errorf("starting session: %w", err)
 	}

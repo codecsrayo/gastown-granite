@@ -110,6 +110,13 @@ type SessionConfig struct {
 
 	// VerifySurvived checks that the session is still alive after startup.
 	VerifySurvived bool
+
+	// PreflightValidator runs after config resolution but before the tmux
+	// session is created. A non-nil error aborts the spawn — no tmux session,
+	// no PID tracking, no agent.instantiate telemetry. Lets callers gate on
+	// quota/token/account state without coupling this package to the quota
+	// subsystem. Nil skips validation.
+	PreflightValidator func() error
 }
 
 // StartResult contains the results of session startup.
@@ -206,6 +213,16 @@ func StartSession(t *tmux.Tmux, cfg SessionConfig) (_ *StartResult, retErr error
 	envVars["GT_RUN"] = runID
 	for k, v := range cfg.ExtraEnv {
 		envVars[k] = v
+	}
+
+	// Preflight validator — gate spawn on caller-supplied checks (quota status,
+	// token expiry, account availability). Runs after all config resolution and
+	// env var assembly but BEFORE NewSessionWithCommandAndEnv so a rejected
+	// spawn produces no tmux session, no PID file, no telemetry side effects.
+	if cfg.PreflightValidator != nil {
+		if err := cfg.PreflightValidator(); err != nil {
+			return nil, fmt.Errorf("preflight validation: %w", err)
+		}
 	}
 
 	// 5. Create tmux session with command and env vars via -e flags so the

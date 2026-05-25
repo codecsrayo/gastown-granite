@@ -1,6 +1,8 @@
 package session
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/steveyegge/gastown/internal/config"
@@ -42,6 +44,37 @@ func TestStartSession_RequiresRole(t *testing.T) {
 	}
 	if err.Error() != "Role is required" {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestStartSession_PreflightRejection verifies that a PreflightValidator
+// returning an error aborts spawn BEFORE the tmux session is created. Passing
+// a nil tmux ensures the test fails loudly if the rejection path ever skips
+// past the validator into NewSessionWithCommandAndEnv.
+func TestStartSession_PreflightRejection(t *testing.T) {
+	sentinel := errors.New("token expired")
+	called := false
+	_, err := StartSession(nil, SessionConfig{
+		SessionID: "gt-test",
+		WorkDir:   "/tmp",
+		Role:      "polecat",
+		Command:   "true", // skip buildCommand path
+		PreflightValidator: func() error {
+			called = true
+			return sentinel
+		},
+	})
+	if !called {
+		t.Fatal("expected PreflightValidator to be called")
+	}
+	if err == nil {
+		t.Fatal("expected error from preflight rejection")
+	}
+	if !strings.Contains(err.Error(), "preflight validation") {
+		t.Errorf("error should mention preflight: %v", err)
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("error should wrap sentinel: %v", err)
 	}
 }
 

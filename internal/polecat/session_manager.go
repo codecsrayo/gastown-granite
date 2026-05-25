@@ -76,6 +76,12 @@ type SessionStartOptions struct {
 	// If set, GT_AGENT is written to the tmux session environment table so that
 	// IsAgentAlive and waitForPolecatReady read the correct process names.
 	Agent string
+
+	// PreflightValidator runs immediately before the tmux session is created.
+	// A non-nil error aborts the spawn — no tmux session, no PID tracking, no
+	// telemetry. Lets callers gate on quota/token/account state without coupling
+	// this package to the quota subsystem. Nil skips validation.
+	PreflightValidator func() error
 }
 
 // SessionInfo contains information about a running polecat session.
@@ -495,6 +501,16 @@ func (m *SessionManager) Start(polecat string, opts SessionStartOptions) error {
 	// Custom agent config dir env (e.g., GEMINI_CONFIG_DIR) for non-Claude agents.
 	if runtimeConfig.Session != nil && runtimeConfig.Session.ConfigDirEnv != "" && opts.RuntimeConfigDir != "" {
 		envVars[runtimeConfig.Session.ConfigDirEnv] = opts.RuntimeConfigDir
+	}
+
+	// Preflight validator — gate spawn on caller-supplied checks (quota status,
+	// token expiry, account availability). Runs after all config resolution but
+	// BEFORE NewSessionWithCommandAndEnv so a rejected spawn produces no tmux
+	// session, no PID file, no agent.instantiate telemetry.
+	if opts.PreflightValidator != nil {
+		if err := opts.PreflightValidator(); err != nil {
+			return fmt.Errorf("preflight validation: %w", err)
+		}
 	}
 
 	// Create session with command and env vars via -e flags so the initial
