@@ -11,7 +11,7 @@ import (
 
 	"github.com/steveyegge/gastown/internal/acp"
 	"github.com/steveyegge/gastown/internal/config"
-	"github.com/steveyegge/gastown/internal/constants"
+	"github.com/steveyegge/gastown/internal/quota"
 	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/templates"
 	"github.com/steveyegge/gastown/internal/tmux"
@@ -149,10 +149,9 @@ func (m *Manager) StartTMUX(agentOverride string) error {
 		return fmt.Errorf("creating mayor directory: %w", err)
 	}
 
-	// Resolve CLAUDE_CONFIG_DIR from accounts.json so the mayor session
-	// uses the correct account. Same pattern as crew startup (start.go).
-	accountsPath := constants.MayorAccountsPath(m.townRoot)
-	claudeConfigDir, _, _ := config.ResolveAccountConfigDir(accountsPath, "")
+	// Resolve CLAUDE_CONFIG_DIR via the LRU spawn picker so the mayor claims
+	// its own account rather than sharing the default with every other role.
+	claudeConfigDir, _, _ := quota.PickSpawnAccount(m.townRoot, "")
 	if claudeConfigDir == "" {
 		claudeConfigDir = os.Getenv("CLAUDE_CONFIG_DIR")
 	}

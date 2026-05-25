@@ -14,6 +14,7 @@ import (
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/constants"
+	"github.com/steveyegge/gastown/internal/quota"
 	"github.com/steveyegge/gastown/internal/rig"
 	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/tmux"
@@ -562,10 +563,10 @@ func (d *Daemon) getStartCommand(roleConfig *beads.RoleConfig, parsed *ParsedIde
 // setSessionEnvironment sets environment variables for the tmux session.
 // Uses centralized AgentEnv for consistency, plus custom env vars from role config if available.
 func (d *Daemon) setSessionEnvironment(sessionName string, roleConfig *beads.RoleConfig, parsed *ParsedIdentity) {
-	// Resolve CLAUDE_CONFIG_DIR from accounts.json so daemon-restarted sessions
-	// use the correct account. Mirrors the crew startup path (start.go).
-	accountsPath := constants.MayorAccountsPath(d.config.TownRoot)
-	runtimeConfigDir, _, _ := config.ResolveAccountConfigDir(accountsPath, "")
+	// Resolve CLAUDE_CONFIG_DIR via the LRU spawn picker so daemon-restarted
+	// sessions keep spreading across the account pool instead of collapsing
+	// back onto the default account on every restart.
+	runtimeConfigDir, _, _ := quota.PickSpawnAccount(d.config.TownRoot, "")
 	if runtimeConfigDir == "" {
 		runtimeConfigDir = os.Getenv("CLAUDE_CONFIG_DIR")
 	}

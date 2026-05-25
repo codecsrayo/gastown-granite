@@ -16,6 +16,7 @@ import (
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/deacon"
+	"github.com/steveyegge/gastown/internal/quota"
 	"github.com/steveyegge/gastown/internal/runtime"
 	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/style"
@@ -508,10 +509,9 @@ func startDeaconSession(t *tmux.Tmux, sessionName, agentOverride string) error {
 		return fmt.Errorf("creating deacon directory: %w", err)
 	}
 
-	// Resolve CLAUDE_CONFIG_DIR from accounts.json so deacon sessions
-	// use the correct account. Mirrors the daemon restart path (lifecycle.go).
-	accountsPath := constants.MayorAccountsPath(townRoot)
-	runtimeConfigDir, _, _ := config.ResolveAccountConfigDir(accountsPath, "")
+	// Resolve CLAUDE_CONFIG_DIR via the LRU spawn picker so deacon claims a
+	// different account than the other role sessions instead of defaulting.
+	runtimeConfigDir, _, _ := quota.PickSpawnAccount(townRoot, "")
 	if runtimeConfigDir == "" {
 		runtimeConfigDir = os.Getenv("CLAUDE_CONFIG_DIR")
 	}

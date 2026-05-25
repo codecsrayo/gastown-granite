@@ -17,6 +17,7 @@ import (
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/constants"
+	"github.com/steveyegge/gastown/internal/quota"
 	"github.com/steveyegge/gastown/internal/git"
 	"github.com/steveyegge/gastown/internal/nudge"
 	"github.com/steveyegge/gastown/internal/rig"
@@ -168,10 +169,9 @@ func (m *Manager) Start(foreground bool, agentOverride string) error {
 	// Settings are passed to Claude Code via --settings flag.
 	townRoot := filepath.Dir(m.rig.Path)
 
-	// Resolve CLAUDE_CONFIG_DIR from accounts.json so refinery sessions
-	// use the correct account. Mirrors the daemon restart path (lifecycle.go).
-	accountsPath := constants.MayorAccountsPath(townRoot)
-	runtimeConfigDir, _, _ := config.ResolveAccountConfigDir(accountsPath, "")
+	// Resolve CLAUDE_CONFIG_DIR via the LRU spawn picker so each refinery
+	// lands on a different account instead of all piling onto the default.
+	runtimeConfigDir, _, _ := quota.PickSpawnAccount(townRoot, "")
 	if runtimeConfigDir == "" {
 		runtimeConfigDir = os.Getenv("CLAUDE_CONFIG_DIR")
 	}
