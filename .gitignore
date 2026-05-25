@@ -199,3 +199,5 @@ docs/fork-info/
 # Town install runtime state (created by `gt install`)
 mayor/
 /rigs.json
+graphify-out/*
+.graphify*
