@@ -1,0 +1,80 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  SERVICE: gastown
+  CONTAINER_BIN_DIR: /app/gastown
+  BINARIES: gt gt-proxy-server gt-proxy-client
+
+tasks:
+  build:
+    desc: Build docker image
+    cmds:
+      - docker compose build {{.SERVICE}}
+
+  up:
+    desc: Start container detached
+    cmds:
+      - docker compose up -d {{.SERVICE}}
+
+  down:
+    desc: Stop and remove container
+    cmds:
+      - docker compose down
+
+  compile:
+    desc: Compile host binaries (gt, gt-proxy-server, gt-proxy-client)
+    cmds:
+      - make build
+
+  compile-nix:
+    desc: Compile binaries via nix develop (no host go needed)
+    cmds:
+      - nix develop -c make build
+
+  compile-in-container:
+    desc: Compile binaries inside container (writes to /app/gastown directly)
+    cmds:
+      - docker compose exec -T {{.SERVICE}} make -C /app/gastown build
+
+  copy:
+    desc: Copy compiled binaries into running container
+    deps: [compile]
+    cmds:
+      - for: { var: BINARIES }
+        cmd: docker compose cp ./{{.ITEM}} {{.SERVICE}}:{{.CONTAINER_BIN_DIR}}/{{.ITEM}}
+
+  restart:
+    desc: Restart container to apply changes
+    cmds:
+      - docker compose restart {{.SERVICE}}
+
+  deploy:
+    desc: Compile, copy binaries into container, restart
+    cmds:
+      - task: compile
+      - task: copy
+      - task: restart
+
+  deploy-in-container:
+    desc: Build inside container then restart (no host go required)
+    cmds:
+      - task: compile-in-container
+      - task: restart
+
+  rebuild:
+    desc: Full image rebuild and recreate container
+    cmds:
+      - task: build
+      - docker compose up -d --force-recreate {{.SERVICE}}
+
+  logs:
+    desc: Tail container logs
+    cmds:
+      - docker compose logs -f {{.SERVICE}}
+
+  shell:
+    desc: Exec zsh in container
+    cmds:
+      - docker compose exec {{.SERVICE}} zsh
