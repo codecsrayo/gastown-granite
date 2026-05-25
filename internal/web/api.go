@@ -1352,10 +1352,10 @@ func (h *APIHandler) handleIssueCreate(w http.ResponseWriter, r *http.Request) {
 	args = append(args, "--", req.Title)
 
 	// Run bd create
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
 
-	output, err := h.runBdCommand(ctx, 12*time.Second, args)
+	output, err := h.runBdCommand(ctx, 40*time.Second, args)
 
 	resp := IssueCreateResponse{}
 	if err != nil {
@@ -1796,7 +1796,7 @@ func (h *APIHandler) handleConvoyStatus(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	output, err := h.runGtCommand(r.Context(), 10*time.Second, []string{"convoy", "status", convoyID, "--json"})
+	output, err := h.runGtCommand(r.Context(), 30*time.Second, []string{"convoy", "status", convoyID, "--json"})
 	if err != nil {
 		h.sendError(w, "Failed to fetch convoy status: "+err.Error(), http.StatusInternalServerError)
 		return
