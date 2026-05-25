@@ -116,7 +116,7 @@ func (k *KeychainExecutor) Execute(_ context.Context, plan *quota.RotatePlan) []
 		}
 		for dir, sourceHandle := range swappedDirs {
 			quota.RecordRotation(state, sourceHandle, now)
-			quota.RecordSwap(state, dir, sourceHandle)
+			quota.RecordSwap(state, dir, sourceHandle, now)
 		}
 		return k.mgr.SaveUnlocked(state)
 	})

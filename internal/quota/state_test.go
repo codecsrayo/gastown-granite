@@ -356,8 +356,10 @@ func TestRecordSwap(t *testing.T) {
 		Accounts: make(map[string]config.AccountQuotaState),
 	}
 
+	t0 := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
+
 	// Record a swap
-	RecordSwap(state, "/home/user/.claude-accounts/clh", "dev1")
+	RecordSwap(state, "/home/user/.claude-accounts/clh", "dev1", t0)
 
 	if len(state.ActiveSwaps) != 1 {
 		t.Fatalf("expected 1 active swap, got %d", len(state.ActiveSwaps))
@@ -365,12 +367,52 @@ func TestRecordSwap(t *testing.T) {
 	if state.ActiveSwaps["/home/user/.claude-accounts/clh"] != "dev1" {
 		t.Errorf("expected dev1, got %s", state.ActiveSwaps["/home/user/.claude-accounts/clh"])
 	}
+	if got := state.ActiveSwapStarts["/home/user/.claude-accounts/clh"]; got != t0.Format(time.RFC3339) {
+		t.Errorf("expected start %s, got %s", t0.Format(time.RFC3339), got)
+	}
 
-	// Record another swap (overwrites)
-	RecordSwap(state, "/home/user/.claude-accounts/clh", "dev2")
+	// Re-record the same (target, source) pair later — start must NOT slide.
+	t1 := t0.Add(2 * time.Hour)
+	RecordSwap(state, "/home/user/.claude-accounts/clh", "dev1", t1)
+	if got := state.ActiveSwapStarts["/home/user/.claude-accounts/clh"]; got != t0.Format(time.RFC3339) {
+		t.Errorf("re-record same handle should preserve start, got %s want %s", got, t0.Format(time.RFC3339))
+	}
+
+	// Record a different source — start resets to the new time.
+	t2 := t0.Add(3 * time.Hour)
+	RecordSwap(state, "/home/user/.claude-accounts/clh", "dev2", t2)
 	if state.ActiveSwaps["/home/user/.claude-accounts/clh"] != "dev2" {
 		t.Errorf("expected dev2 after overwrite, got %s", state.ActiveSwaps["/home/user/.claude-accounts/clh"])
 	}
+	if got := state.ActiveSwapStarts["/home/user/.claude-accounts/clh"]; got != t2.Format(time.RFC3339) {
+		t.Errorf("handle-change should reset start to %s, got %s", t2.Format(time.RFC3339), got)
+	}
+}
+
+func TestClearSwap(t *testing.T) {
+	state := &config.QuotaState{Accounts: map[string]config.AccountQuotaState{}}
+	t0 := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
+
+	RecordSwap(state, "/cd/host", "src", t0)
+	RecordSwap(state, "/cd/other", "src2", t0)
+
+	ClearSwap(state, "/cd/host")
+	if _, ok := state.ActiveSwaps["/cd/host"]; ok {
+		t.Errorf("ActiveSwaps[/cd/host] should be gone")
+	}
+	if _, ok := state.ActiveSwapStarts["/cd/host"]; ok {
+		t.Errorf("ActiveSwapStarts[/cd/host] should be gone")
+	}
+	if state.ActiveSwaps["/cd/other"] != "src2" {
+		t.Errorf("unrelated swap entry should remain, got %q", state.ActiveSwaps["/cd/other"])
+	}
+
+	// Idempotent: clearing a missing entry must not panic or fail.
+	ClearSwap(state, "/cd/host")
+	ClearSwap(state, "/never-existed")
+
+	// nil-safe.
+	ClearSwap(nil, "/cd/host")
 }
 
 func TestResolveSwapSourceDirs(t *testing.T) {

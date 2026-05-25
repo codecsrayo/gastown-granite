@@ -1576,6 +1576,16 @@ type QuotaState struct {
 	// to propagate fresh tokens to all target keychain entries.
 	ActiveSwaps map[string]string `json:"active_swaps,omitempty"` // targetConfigDir -> sourceAccountHandle
 
+	// ActiveSwapStarts records the RFC3339 timestamp at which each swap in
+	// ActiveSwaps began. Keyed by the same target config dir. Used by the
+	// usage walker to partition transcript tokens: messages older than the
+	// swap start belong to the host account (the dir's owner), newer ones
+	// burn against the source account's quota. A missing entry means "swap
+	// start unknown" — the walker conservatively attributes everything to the
+	// source for that dir, since pre-swap history is unlikely to dominate a
+	// rolling 5h/7d window in practice.
+	ActiveSwapStarts map[string]string `json:"active_swap_starts,omitempty"` // targetConfigDir -> RFC3339
+
 	// LastBlockedAlertAt is the RFC3339 timestamp of the last "rotation blocked"
 	// escalation emission. Used by `gt quota watch` to throttle alerts so a
 	// stuck-rotation incident emits at most one escalation per cooldown window.

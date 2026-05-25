@@ -186,6 +186,160 @@ func AggregateUsage(
 	return report, nil
 }
 
+// WalkAccountUsage walks each registered account's CLAUDE_CONFIG_DIR/projects
+// tree directly and sums every assistant message's tokens that fall inside the
+// session (5h) and week (7d) windows. Mirrors what `claude /status` reports
+// from inside that config dir — independent of tmux state, so accounts with
+// no currently-attached sessions still surface their historical contribution.
+//
+// When state carries an active keychain swap for an account's config dir, the
+// transcripts physically written under that dir burn against the *source*
+// account's token, not the host's. Tokens whose message timestamp is at or
+// after state.ActiveSwapStarts[hostConfigDir] are re-attributed to the source
+// handle; earlier tokens stay on the host. A swap entry whose start time is
+// missing causes everything in that dir to flow to the source — pre-swap
+// history rarely dominates a rolling 5h/7d window, and "attribute to source"
+// matches the dashboard's prediction goal (which quota will block first).
+//
+// Pass a nil state to disable swap relabel and bucket strictly by config dir.
+func WalkAccountUsage(accounts *config.AccountsConfig, state *config.QuotaState, now time.Time) (*UsageReport, error) {
+	report := &UsageReport{
+		GeneratedAt: now.UTC().Format(time.RFC3339),
+		Accounts:    make(map[string]AccountUsage),
+	}
+	if accounts == nil {
+		return report, nil
+	}
+	sessionStart := now.Add(-UsageWindow)
+	weekStart := now.Add(-WeeklyUsageWindow)
+
+	swapSources, swapStarts := resolveSwapAttribution(accounts, state)
+
+	for handle, acct := range accounts.Accounts {
+		configDir := util.ExpandHome(acct.ConfigDir)
+		if configDir == "" {
+			continue
+		}
+		sourceHandle, hasSwap := swapSources[configDir]
+		var splitAt time.Time
+		if hasSwap {
+			splitAt = swapStarts[configDir] // zero ⇒ everything counts as post-split (i.e. source)
+		}
+
+		preSess, preWeek, postSess, postWeek, err := sumConfigDirPartitioned(configDir, sessionStart, weekStart, splitAt)
+		if err != nil {
+			continue
+		}
+
+		// Host attribution: tokens written before the swap (or all tokens when
+		// no swap is active on this dir).
+		hostSess, hostWeek := preSess, preWeek
+		if !hasSwap {
+			hostSess.Add(postSess)
+			hostWeek.Add(postWeek)
+		}
+		if hostWeek.Total() > 0 {
+			entry := report.Accounts[handle]
+			entry.Handle = handle
+			entry.WindowStart = sessionStart.UTC().Format(time.RFC3339)
+			entry.WeekWindowStart = weekStart.UTC().Format(time.RFC3339)
+			entry.Counts.Add(hostSess)
+			entry.WeekCounts.Add(hostWeek)
+			report.Accounts[handle] = entry
+		}
+
+		// Source attribution: tokens written under this dir while it hosts the
+		// source's borrowed token. Fold them onto the source's own entry so the
+		// source's bar reflects burn against its real quota.
+		if hasSwap && postWeek.Total() > 0 && sourceHandle != "" {
+			src := report.Accounts[sourceHandle]
+			src.Handle = sourceHandle
+			src.WindowStart = sessionStart.UTC().Format(time.RFC3339)
+			src.WeekWindowStart = weekStart.UTC().Format(time.RFC3339)
+			src.Counts.Add(postSess)
+			src.WeekCounts.Add(postWeek)
+			report.Accounts[sourceHandle] = src
+		}
+	}
+	return report, nil
+}
+
+// resolveSwapAttribution builds two maps keyed by expanded host config dir:
+//   - swapSources[dir] = source account handle (when a swap is active)
+//   - swapStarts[dir]  = parsed RFC3339 start time (zero if missing/unparsable)
+//
+// Both maps key on the expanded config dir of each registered host account so
+// the walker can look them up using its own expanded paths. Entries whose
+// target dir is not the config dir of any registered account are dropped —
+// they can't be attributed to a host handle anyway.
+func resolveSwapAttribution(accounts *config.AccountsConfig, state *config.QuotaState) (sources map[string]string, starts map[string]time.Time) {
+	sources = map[string]string{}
+	starts = map[string]time.Time{}
+	if state == nil || len(state.ActiveSwaps) == 0 || accounts == nil {
+		return sources, starts
+	}
+	knownDirs := map[string]bool{}
+	for _, acct := range accounts.Accounts {
+		knownDirs[util.ExpandHome(acct.ConfigDir)] = true
+	}
+	for rawDir, sourceHandle := range state.ActiveSwaps {
+		dir := util.ExpandHome(rawDir)
+		if !knownDirs[dir] {
+			continue
+		}
+		if _, ok := accounts.Accounts[sourceHandle]; !ok {
+			continue // stale swap entry pointing at an unknown source
+		}
+		sources[dir] = sourceHandle
+		if started := state.ActiveSwapStarts[rawDir]; started != "" {
+			if t, err := time.Parse(time.RFC3339, started); err == nil {
+				starts[dir] = t
+			}
+		}
+	}
+	return sources, starts
+}
+
+// sumConfigDirPartitioned walks configDir/projects/**.jsonl and sums tokens
+// into four buckets: pre-split session/week and post-split session/week.
+// A zero splitAt routes every in-window token to the post bucket (callers use
+// this when a swap is active but its start time is unknown). When the caller
+// is not interested in a split it can sum pre+post.
+func sumConfigDirPartitioned(configDir string, sessionStart, weekStart, splitAt time.Time) (preSess, preWeek, postSess, postWeek TokenCounts, err error) {
+	projectsRoot := filepath.Join(configDir, "projects")
+	werr := filepath.WalkDir(projectsRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
+				return fs.SkipDir
+			}
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(path, ".jsonl") {
+			return nil
+		}
+		info, statErr := d.Info()
+		if statErr != nil || info.ModTime().Before(weekStart) {
+			return nil
+		}
+		pSess, pWeek, qSess, qWeek, ferr := sumTranscriptPartitioned(path, sessionStart, weekStart, splitAt)
+		if ferr != nil {
+			return nil // best effort: skip an unreadable transcript
+		}
+		preSess.Add(pSess)
+		preWeek.Add(pWeek)
+		postSess.Add(qSess)
+		postWeek.Add(qWeek)
+		return nil
+	})
+	if werr != nil {
+		return TokenCounts{}, TokenCounts{}, TokenCounts{}, TokenCounts{}, werr
+	}
+	return preSess, preWeek, postSess, postWeek, nil
+}
+
 // resolveSessionAccount mirrors scan.go's lookup: prefer GT_QUOTA_ACCOUNT,
 // then match CLAUDE_CONFIG_DIR against the registered accounts. Returns the
 // account handle (empty if unresolved) plus the raw config dir for display.
@@ -306,6 +460,75 @@ func sumProjectWindows(claudeConfigRoot, workDir string, sessionStart, weekStart
 		return TokenCounts{}, TokenCounts{}, "", time.Time{}, werr
 	}
 	return session, week, newestPath, newestMod, nil
+}
+
+// sumTranscriptPartitioned parses a Claude Code transcript JSONL and produces
+// four token totals: tokens before splitAt (pre) and at-or-after splitAt
+// (post), each split again into the session (5h) and week (7d) windows.
+//
+// splitAt = zero time routes every in-window token into the post bucket, so
+// callers that only want raw windowed totals can sum pre+post — and callers
+// that intend a swap partition but lack a recorded start time conservatively
+// treat all in-window history as post-split.
+func sumTranscriptPartitioned(path string, sessionStart, weekStart, splitAt time.Time) (preSess, preWeek, postSess, postWeek TokenCounts, err error) {
+	f, ferr := os.Open(path) //nolint:gosec // G304: transcript path derived from local filesystem walk
+	if ferr != nil {
+		return preSess, preWeek, postSess, postWeek, ferr
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 0, 256*1024)
+	scanner.Buffer(buf, 4*1024*1024)
+
+	for scanner.Scan() {
+		raw := scanner.Bytes()
+		if len(raw) == 0 {
+			continue
+		}
+		var line struct {
+			Type      string `json:"type"`
+			Timestamp string `json:"timestamp"`
+			Message   struct {
+				Usage *struct {
+					InputTokens              int `json:"input_tokens"`
+					OutputTokens             int `json:"output_tokens"`
+					CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+				} `json:"usage,omitempty"`
+			} `json:"message,omitempty"`
+		}
+		if jerr := json.Unmarshal(raw, &line); jerr != nil {
+			continue
+		}
+		if line.Type != "assistant" || line.Message.Usage == nil {
+			continue
+		}
+		ts, terr := time.Parse(time.RFC3339, line.Timestamp)
+		if terr != nil || ts.Before(weekStart) {
+			continue
+		}
+		u := line.Message.Usage
+		c := TokenCounts{
+			InputTokens:         int64(u.InputTokens),
+			OutputTokens:        int64(u.OutputTokens),
+			CacheReadTokens:     int64(u.CacheReadInputTokens),
+			CacheCreationTokens: int64(u.CacheCreationInputTokens),
+		}
+		post := splitAt.IsZero() || !ts.Before(splitAt)
+		if post {
+			postWeek.Add(c)
+			if !ts.Before(sessionStart) {
+				postSess.Add(c)
+			}
+		} else {
+			preWeek.Add(c)
+			if !ts.Before(sessionStart) {
+				preSess.Add(c)
+			}
+		}
+	}
+	return preSess, preWeek, postSess, postWeek, scanner.Err()
 }
 
 // sumTranscriptWindows parses a Claude Code transcript JSONL file and sums the

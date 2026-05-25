@@ -253,6 +253,163 @@ func TestAggregateUsage_SplitsSessionAndWeekWindows(t *testing.T) {
 	}
 }
 
+func TestWalkAccountUsage_AttributesByConfigDir(t *testing.T) {
+	root := t.TempDir()
+	cdA := filepath.Join(root, "cd-a")
+	cdB := filepath.Join(root, "cd-b")
+
+	now := time.Now()
+	// Two transcripts under cdA across different projects — both contribute.
+	writeTranscript(t, cdA, "/proj1", "a.jsonl", []string{
+		asstLine(now.Add(-time.Minute), 100, 50, 0, 0),
+		asstLine(now.Add(-2*24*time.Hour), 1000, 500, 0, 0),
+	})
+	writeTranscript(t, cdA, "/proj2", "b.jsonl", []string{
+		asstLine(now.Add(-10*time.Minute), 200, 100, 0, 0),
+	})
+	// Touch mtimes inside the week window so the walker doesn't skip the files.
+	mt := now.Add(time.Minute)
+	for _, p := range []string{
+		filepath.Join(cdA, "projects", "-proj1", "a.jsonl"),
+		filepath.Join(cdA, "projects", "-proj2", "b.jsonl"),
+	} {
+		_ = os.Chtimes(p, mt, mt)
+	}
+	// cdB transcript completely outside the week window — must be dropped.
+	writeTranscript(t, cdB, "/proj3", "c.jsonl", []string{
+		asstLine(now.Add(-10*24*time.Hour), 9999, 9999, 0, 0),
+	})
+	old := now.Add(-10 * 24 * time.Hour)
+	_ = os.Chtimes(filepath.Join(cdB, "projects", "-proj3", "c.jsonl"), old, old)
+
+	accounts := &config.AccountsConfig{Accounts: map[string]config.Account{
+		"a": {ConfigDir: cdA},
+		"b": {ConfigDir: cdB},
+		"c": {ConfigDir: filepath.Join(root, "missing")}, // no projects/ at all
+	}}
+
+	report, err := WalkAccountUsage(accounts, nil, now)
+	if err != nil {
+		t.Fatalf("WalkAccountUsage: %v", err)
+	}
+	if _, ok := report.Accounts["b"]; ok {
+		t.Errorf("account b should be excluded (all transcripts outside week window)")
+	}
+	if _, ok := report.Accounts["c"]; ok {
+		t.Errorf("account c should be excluded (no projects/ dir)")
+	}
+	a, ok := report.Accounts["a"]
+	if !ok {
+		t.Fatalf("account a missing from report")
+	}
+	// Session window (5h): only the two recent turns under cdA contribute.
+	if a.Counts.InputTokens != 300 || a.Counts.OutputTokens != 150 {
+		t.Errorf("session counts = %+v, want input=300 output=150", a.Counts)
+	}
+	// Week window: all three cdA turns contribute.
+	if a.WeekCounts.InputTokens != 1300 || a.WeekCounts.OutputTokens != 650 {
+		t.Errorf("week counts = %+v, want input=1300 output=650", a.WeekCounts)
+	}
+}
+
+func TestWalkAccountUsage_SwapPartition(t *testing.T) {
+	root := t.TempDir()
+	cdHost := filepath.Join(root, "cd-host")     // a407 host of swap
+	cdSource := filepath.Join(root, "cd-source") // fsrb borrowed token
+	now := time.Now()
+	swapStart := now.Add(-2 * time.Hour)
+
+	// Host config dir holds transcripts straddling the swap boundary.
+	writeTranscript(t, cdHost, "/proj", "h.jsonl", []string{
+		asstLine(now.Add(-3*time.Hour), 1000, 500, 0, 0), // pre-swap → host
+		asstLine(now.Add(-1*time.Hour), 200, 100, 0, 0),  // post-swap → source
+		asstLine(now.Add(-30*time.Minute), 50, 25, 0, 0), // post-swap → source
+	})
+	hostJsonl := filepath.Join(cdHost, "projects", "-proj", "h.jsonl")
+	_ = os.Chtimes(hostJsonl, now, now)
+
+	// Source has its own pre-existing history under its own config dir.
+	writeTranscript(t, cdSource, "/proj2", "s.jsonl", []string{
+		asstLine(now.Add(-4*time.Hour), 11, 22, 0, 0), // older than 5h-ish but still in week
+	})
+	srcJsonl := filepath.Join(cdSource, "projects", "-proj2", "s.jsonl")
+	_ = os.Chtimes(srcJsonl, now, now)
+
+	accounts := &config.AccountsConfig{Accounts: map[string]config.Account{
+		"host":   {ConfigDir: cdHost},
+		"source": {ConfigDir: cdSource},
+	}}
+	state := &config.QuotaState{
+		Accounts: map[string]config.AccountQuotaState{
+			"host":   {Status: config.QuotaStatusAvailable},
+			"source": {Status: config.QuotaStatusAvailable},
+		},
+		ActiveSwaps:      map[string]string{cdHost: "source"},
+		ActiveSwapStarts: map[string]string{cdHost: swapStart.Format(time.RFC3339)},
+	}
+
+	report, err := WalkAccountUsage(accounts, state, now)
+	if err != nil {
+		t.Fatalf("WalkAccountUsage: %v", err)
+	}
+
+	// Host card: pre-swap turn only (1000 in / 500 out). The two post-swap
+	// turns must NOT show up on the host.
+	host := report.Accounts["host"]
+	if host.WeekCounts.InputTokens != 1000 || host.WeekCounts.OutputTokens != 500 {
+		t.Errorf("host week = %+v, want input=1000 output=500", host.WeekCounts)
+	}
+	// The 3h-old pre-swap message is outside the 5h session window only if 3h<5h
+	// → it IS inside session. So session pre-swap = (1000,500). Confirm.
+	if host.Counts.InputTokens != 1000 || host.Counts.OutputTokens != 500 {
+		t.Errorf("host session = %+v, want input=1000 output=500", host.Counts)
+	}
+
+	// Source card: own history (11/22) + relabeled post-swap from host (250/125).
+	src := report.Accounts["source"]
+	wantWeekIn := int64(11 + 200 + 50)
+	wantWeekOut := int64(22 + 100 + 25)
+	if src.WeekCounts.InputTokens != wantWeekIn || src.WeekCounts.OutputTokens != wantWeekOut {
+		t.Errorf("source week = %+v, want input=%d output=%d", src.WeekCounts, wantWeekIn, wantWeekOut)
+	}
+}
+
+func TestWalkAccountUsage_SwapWithoutStartAttributesAllToSource(t *testing.T) {
+	root := t.TempDir()
+	cdHost := filepath.Join(root, "cd-host")
+	cdSource := filepath.Join(root, "cd-source")
+	now := time.Now()
+
+	writeTranscript(t, cdHost, "/proj", "h.jsonl", []string{
+		asstLine(now.Add(-3*time.Hour), 100, 50, 0, 0),
+	})
+	_ = os.Chtimes(filepath.Join(cdHost, "projects", "-proj", "h.jsonl"), now, now)
+	// Source dir intentionally has no transcripts of its own.
+	_ = os.MkdirAll(filepath.Join(cdSource, "projects"), 0o755)
+
+	accounts := &config.AccountsConfig{Accounts: map[string]config.Account{
+		"host":   {ConfigDir: cdHost},
+		"source": {ConfigDir: cdSource},
+	}}
+	state := &config.QuotaState{
+		Accounts:    map[string]config.AccountQuotaState{"host": {}, "source": {}},
+		ActiveSwaps: map[string]string{cdHost: "source"},
+		// Note: ActiveSwapStarts intentionally omitted.
+	}
+
+	report, err := WalkAccountUsage(accounts, state, now)
+	if err != nil {
+		t.Fatalf("WalkAccountUsage: %v", err)
+	}
+	if _, ok := report.Accounts["host"]; ok {
+		t.Errorf("host should be empty (no pre-swap tokens), got %+v", report.Accounts["host"])
+	}
+	src := report.Accounts["source"]
+	if src.WeekCounts.InputTokens != 100 || src.WeekCounts.OutputTokens != 50 {
+		t.Errorf("source week = %+v, want input=100 output=50", src.WeekCounts)
+	}
+}
+
 func TestWindowStartFor_PrefersLastRotatedOverFallback(t *testing.T) {
 	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 	state := &config.QuotaState{Accounts: map[string]config.AccountQuotaState{

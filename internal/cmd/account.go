@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/constants"
+	"github.com/steveyegge/gastown/internal/quota"
 	"github.com/steveyegge/gastown/internal/style"
 	"github.com/steveyegge/gastown/internal/util"
 	"github.com/steveyegge/gastown/internal/workspace"
@@ -544,6 +545,24 @@ func runAccountLogin(cmd *cobra.Command, args []string) error {
 	fmt.Println(style.Dim.Render("Inside Claude, type /login and complete the browser flow, then exit (Ctrl-D)."))
 	fmt.Println(style.Dim.Render("On exit, run `gt quota status` to confirm the refreshed token."))
 	fmt.Println()
+
+	// Clear any active swap entry for this config dir before handing the TTY
+	// to claude. The user is about to write a fresh own-account token into
+	// this dir's keychain via /login, ending whatever borrow was in effect.
+	// Drop the swap record now so the usage walker stops attributing this
+	// dir's transcripts to the prior source as soon as the next snapshot
+	// runs — we never get a chance to run cleanup post-exec.
+	mgr := quota.NewManager(townRoot)
+	if werr := mgr.WithLock(func() error {
+		state, lerr := mgr.Load()
+		if lerr != nil {
+			return lerr
+		}
+		quota.ClearSwap(state, configDir)
+		return mgr.SaveUnlocked(state)
+	}); werr != nil {
+		fmt.Println(style.Warning.Render(fmt.Sprintf("warning: could not clear swap state: %v", werr)))
+	}
 
 	// execClaudeLogin (helpers_unix.go / helpers_windows.go) hands the TTY
 	// over to claude — on Unix via syscall.Exec, so gt is fully replaced and

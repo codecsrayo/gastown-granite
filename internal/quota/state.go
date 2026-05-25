@@ -187,12 +187,41 @@ func (m *Manager) EnsureAccountsTracked(state *config.QuotaState, accounts map[s
 // RecordSwap records a keychain swap mapping in quota state.
 // targetConfigDir is the config dir whose keychain entry was overwritten.
 // sourceHandle is the account handle whose token was swapped in.
+// `now` stamps ActiveSwapStarts so the usage walker can partition transcript
+// tokens written before vs after the swap. When the same (target, source)
+// pair is re-recorded the existing start time is preserved — re-runs of the
+// rotation executor should not shift the attribution boundary forward.
 // The caller must hold the quota lock or call this within WithLock.
-func RecordSwap(state *config.QuotaState, targetConfigDir, sourceHandle string) {
+func RecordSwap(state *config.QuotaState, targetConfigDir, sourceHandle string, now time.Time) {
 	if state.ActiveSwaps == nil {
 		state.ActiveSwaps = make(map[string]string)
 	}
+	prevHandle := state.ActiveSwaps[targetConfigDir]
 	state.ActiveSwaps[targetConfigDir] = sourceHandle
+
+	if state.ActiveSwapStarts == nil {
+		state.ActiveSwapStarts = make(map[string]string)
+	}
+	// Reset the start clock only on a handle change (or first swap) — the
+	// same swap re-recorded should not slide the partition forward.
+	if prevHandle != sourceHandle || state.ActiveSwapStarts[targetConfigDir] == "" {
+		state.ActiveSwapStarts[targetConfigDir] = now.UTC().Format(time.RFC3339)
+	}
+}
+
+// ClearSwap removes the swap mapping for targetConfigDir from both ActiveSwaps
+// and ActiveSwapStarts. Idempotent — a missing entry is a no-op. Use after a
+// keychain restore (e.g., user runs `gt account login <host>` to put the host
+// account's own token back into its own config dir) so the usage walker stops
+// relabeling that dir's transcripts to the previous swap source.
+//
+// Caller must hold the quota lock or invoke this within WithLock.
+func ClearSwap(state *config.QuotaState, targetConfigDir string) {
+	if state == nil {
+		return
+	}
+	delete(state.ActiveSwaps, targetConfigDir)
+	delete(state.ActiveSwapStarts, targetConfigDir)
 }
 
 // ResolveSwapSourceDirs resolves activeSwaps (targetConfigDir -> accountHandle)

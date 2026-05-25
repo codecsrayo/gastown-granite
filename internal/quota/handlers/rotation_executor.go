@@ -130,7 +130,7 @@ func (r *RotationExecutor) Execute(_ context.Context, plan *quota.RotatePlan) []
 			for _, f := range rotations {
 				quota.RecordRotation(state, f.newAccount, now)
 				if f.configDir != "" {
-					quota.RecordSwap(state, f.configDir, f.newAccount)
+					quota.RecordSwap(state, f.configDir, f.newAccount, now)
 				}
 				if f.oldAccount != "" && f.oldAccount != f.newAccount {
 					quota.MarkLimitedState(state, f.oldAccount, f.oldResetsAt, now)
