@@ -4145,11 +4145,11 @@
 
         /* ------------------------------------------------------------------
          * Quota stat bar + drawer (Mosaic grid)
-         * Surfaces /api/quota/summary as a collapsed counter in the summary
-         * banner; click expands a drawer with one card per account showing
-         * status, token expiry, rotation count, active sessions, and live
-         * token usage. Hydrated by dashboard.js; re-fetched on quota_* SSE
-         * events and after htmx swaps.
+         * Surfaces /api/quota/stream snapshots as a collapsed counter in the
+         * summary banner; click expands a drawer with one card per account
+         * showing status, token expiry, rotation count, active sessions, and
+         * live token usage. Hydrated by dashboard.js over SSE; the cached
+         * snapshot also re-renders on quota_* event signals.
          * ----------------------------------------------------------------*/
         .stat.clickable {
             cursor: pointer;

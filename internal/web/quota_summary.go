@@ -1,12 +1,17 @@
 package web
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/quota"
@@ -14,6 +19,17 @@ import (
 	"github.com/steveyegge/gastown/internal/util"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
+
+// quotaStreamTickInterval governs how often the stream re-aggregates token
+// usage. Transcripts grow without touching quota.json, so the periodic tick is
+// the only signal that catches in-flight token consumption. Snapshots whose
+// content matches the previously sent payload are suppressed by hash dedupe,
+// so an idle stream costs one map walk per tick, not one network frame.
+const quotaStreamTickInterval = 3 * time.Second
+
+// quotaStreamKeepaliveInterval is the comment-frame heartbeat used to keep
+// idle proxies (nginx, ALB) from reaping the SSE connection.
+const quotaStreamKeepaliveInterval = 15 * time.Second
 
 // QuotaSummaryAccount is the per-account view returned from /api/quota/summary.
 // It folds quota state, the most recent token-inspection result, and live
@@ -79,17 +95,11 @@ type QuotaSummaryResponse struct {
 	UsageError string `json:"usage_error,omitempty"`
 }
 
-// handleQuotaSummary returns a single JSON snapshot covering every dimension
-// the mosaic panel needs: per-account status + token expiry + rotation
-// counters + live token usage, plus the current LimitedSessions snapshot and
-// the most recent rotation plan.
-func (h *APIHandler) handleQuotaSummary(w http.ResponseWriter, r *http.Request) {
-	townRoot, err := workspace.FindFromCwdOrError()
-	if err != nil {
-		h.sendError(w, "town root not found: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
+// computeQuotaSnapshot bundles the work that turns the on-disk quota state
+// plus a fresh tmux/transcript walk into a single QuotaSummaryResponse. Split
+// out from the SSE handler so the streamer can call it on a ticker without
+// duplicating the load/refresh/aggregate plumbing.
+func computeQuotaSnapshot(townRoot string, now time.Time) (QuotaSummaryResponse, error) {
 	acctCfg, err := config.LoadAccountsConfig(constants.MayorAccountsPath(townRoot))
 	if err != nil {
 		acctCfg = &config.AccountsConfig{Accounts: map[string]config.Account{}}
@@ -98,43 +108,185 @@ func (h *APIHandler) handleQuotaSummary(w http.ResponseWriter, r *http.Request) 
 	mgr := quota.NewManager(townRoot)
 	state, err := mgr.Load()
 	if err != nil {
-		h.sendError(w, "loading quota state: "+err.Error(), http.StatusInternalServerError)
-		return
+		return QuotaSummaryResponse{}, fmt.Errorf("loading quota state: %w", err)
 	}
 	mgr.EnsureAccountsTracked(state, acctCfg.Accounts)
 
-	// Re-inspect each account's on-disk credentials so a fresh `gt account
-	// login` reflects in the next summary fetch without waiting for a
-	// scan/rotate cycle to update TokenExpiresAt. Persist only when
-	// something changed so we don't write quota.json on every poll.
 	if quota.RefreshTokenExpiries(state, acctCfg.Accounts) {
 		if perr := mgr.Save(state); perr != nil {
-			log.Printf("quota summary: persist refreshed token expiries: %v", perr)
+			log.Printf("quota stream: persist refreshed token expiries: %v", perr)
 		}
 	}
 
-	// Best-effort usage aggregation; failures degrade to "no usage data"
-	// rather than failing the whole response — the dashboard should still
-	// render status/expiry even if transcript walking trips. The error is
-	// surfaced to the client (as resp.UsageError) and logged so an operator
-	// looking at an empty bar can see why.
 	var usageReport *quota.UsageReport
 	var usageErr string
 	t := tmux.NewTmux()
-	if report, uerr := quota.AggregateUsage(t, state, acctCfg, "", time.Now()); uerr == nil {
+	if report, uerr := quota.AggregateUsage(t, state, acctCfg, "", now); uerr == nil {
 		usageReport = report
 	} else {
 		usageErr = uerr.Error()
-		log.Printf("quota summary: usage aggregation failed: %v", uerr)
+		log.Printf("quota stream: usage aggregation failed: %v", uerr)
 	}
 
-	resp := BuildQuotaSummary(state, acctCfg, usageReport, ResolveUsageCeilings(townRoot), time.Now())
+	// Overlay per-config-dir walk for authoritative totals. AggregateUsage is
+	// tmux-driven and misses transcripts whose owning session isn't currently
+	// attached, so its totals can read 0 even when the on-disk transcripts
+	// (what `claude /status` reports) carry significant usage. The walker
+	// scans every account's config dir directly; we keep the tmux walker's
+	// Sessions[] + OrphanSessions but override Counts/WeekCounts.
+	if walkReport, werr := quota.WalkAccountUsage(acctCfg, state, now); werr == nil && walkReport != nil {
+		if usageReport == nil {
+			usageReport = walkReport
+		} else {
+			for handle, walkEntry := range walkReport.Accounts {
+				existing, ok := usageReport.Accounts[handle]
+				if !ok {
+					usageReport.Accounts[handle] = walkEntry
+					continue
+				}
+				existing.Counts = walkEntry.Counts
+				existing.WeekCounts = walkEntry.WeekCounts
+				existing.WindowStart = walkEntry.WindowStart
+				existing.WeekWindowStart = walkEntry.WeekWindowStart
+				usageReport.Accounts[handle] = existing
+			}
+		}
+	} else if werr != nil {
+		log.Printf("quota stream: per-account walk failed: %v", werr)
+	}
+
+	resp := BuildQuotaSummary(state, acctCfg, usageReport, ResolveUsageCeilings(townRoot), now)
 	resp.UsageError = usageErr
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		// Header is already sent; just log.
-		// (sendError can't downgrade after WriteHeader.)
+	return resp, nil
+}
+
+// snapshotHash returns a content fingerprint of the snapshot that ignores
+// GeneratedAt — that field ticks every call and would defeat the dedupe.
+func snapshotHash(resp QuotaSummaryResponse) (string, []byte, error) {
+	resp.GeneratedAt = ""
+	buf, err := json.Marshal(resp)
+	if err != nil {
+		return "", nil, err
+	}
+	sum := sha256.Sum256(buf)
+	return hex.EncodeToString(sum[:]), buf, nil
+}
+
+// handleQuotaStream streams QuotaSummaryResponse snapshots to the dashboard
+// over Server-Sent Events. It emits one snapshot on connect, then re-emits on
+// either of two triggers:
+//
+//   - mayor/quota.json writes (fsnotify): rotation, status flips, swap
+//     bookkeeping — sub-second push.
+//   - quotaStreamTickInterval ticker: catches token consumption from
+//     transcripts that never touch quota.json.
+//
+// Snapshots are deduped by content hash so an idle stream stays quiet on the
+// wire. The connection ends when the client disconnects (ctx cancel).
+func (h *APIHandler) handleQuotaStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
 		return
+	}
+
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		h.sendError(w, "town root not found: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	fmt.Fprintf(w, "event: connected\ndata: ok\n\n")
+	flusher.Flush()
+
+	ctx := r.Context()
+	streamQuotaSnapshots(ctx, w, flusher, townRoot, quotaStreamTickInterval, quotaStreamKeepaliveInterval)
+}
+
+// streamQuotaSnapshots is the loop body of handleQuotaStream, split out so
+// tests can drive it with a synthetic town root and short intervals.
+func streamQuotaSnapshots(
+	ctx context.Context,
+	w http.ResponseWriter,
+	flusher http.Flusher,
+	townRoot string,
+	tickEvery, keepaliveEvery time.Duration,
+) {
+	var lastHash string
+
+	emit := func(reason string) {
+		resp, err := computeQuotaSnapshot(townRoot, time.Now())
+		if err != nil {
+			log.Printf("quota stream: snapshot (%s): %v", reason, err)
+			return
+		}
+		hash, buf, herr := snapshotHash(resp)
+		if herr != nil {
+			log.Printf("quota stream: hash: %v", herr)
+			return
+		}
+		if hash == lastHash {
+			return
+		}
+		lastHash = hash
+		// Re-marshal with the live GeneratedAt so the client sees the wall
+		// clock when the frame was sent (snapshotHash zeroed it for dedupe).
+		resp.GeneratedAt = time.Now().UTC().Format(time.RFC3339)
+		framed, ferr := json.Marshal(resp)
+		if ferr != nil {
+			// Fallback: send the deduped payload (still valid, just stale ts).
+			framed = buf
+		}
+		fmt.Fprintf(w, "event: quota-snapshot\ndata: %s\n\n", framed)
+		flusher.Flush()
+	}
+
+	emit("initial")
+
+	// fsnotify on quota.json. Optional: if it can't be installed (file missing,
+	// kernel limits), fall back to ticker-only — usage tick will still catch
+	// rotation writes within tickEvery.
+	var watcherEvents <-chan fsnotify.Event
+	if watcher, werr := fsnotify.NewWatcher(); werr == nil {
+		defer watcher.Close()
+		path := constants.MayorQuotaPath(townRoot)
+		if addErr := watcher.Add(path); addErr == nil {
+			watcherEvents = watcher.Events
+		} else {
+			log.Printf("quota stream: watch %s: %v — ticker-only mode", path, addErr)
+		}
+	} else {
+		log.Printf("quota stream: fsnotify watcher: %v — ticker-only mode", werr)
+	}
+
+	tick := time.NewTicker(tickEvery)
+	defer tick.Stop()
+	keepalive := time.NewTicker(keepaliveEvery)
+	defer keepalive.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-keepalive.C:
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		case <-tick.C:
+			emit("tick")
+		case ev, ok := <-watcherEvents:
+			if !ok {
+				watcherEvents = nil
+				continue
+			}
+			if ev.Op&(fsnotify.Write|fsnotify.Create) != 0 {
+				emit("quota.json")
+			}
+		}
 	}
 }
 

@@ -178,8 +178,8 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleSessionPreview(w, r)
 	case path == "/session/kill" && r.Method == http.MethodPost:
 		h.handleSessionKill(w, r)
-	case path == "/quota/summary" && r.Method == http.MethodGet:
-		h.handleQuotaSummary(w, r)
+	case path == "/quota/stream" && r.Method == http.MethodGet:
+		h.handleQuotaStream(w, r)
 	default:
 		http.Error(w, "Not found", http.StatusNotFound)
 	}

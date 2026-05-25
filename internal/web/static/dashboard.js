@@ -92,10 +92,11 @@
             polecat_checked:        ['#polecats-panel'],
             polecat_nudged:         ['#polecats-panel', '#activity-panel'],
             mass_death:             ['#polecats-panel', '#escalations-panel'],
-            // Account quota rotation — hydrated by loadQuotaSummary, not by
-            // re-fetching the full dashboard page. refreshPanel special-cases
-            // '#quota-drawer' to call window.refreshQuotaDrawer instead of
-            // htmx.ajax so the JSON-driven mosaic isn't blown away.
+            // Account quota rotation — hydrated by the /api/quota/stream SSE
+            // subscriber, not by re-fetching the full dashboard page.
+            // refreshPanel special-cases '#quota-drawer' to call
+            // window.refreshQuotaDrawer (re-paints from the cached snapshot)
+            // instead of htmx.ajax so the JSON-driven mosaic isn't blown away.
             quota_scanned:          ['#quota-drawer'],
             quota_rotated:          ['#quota-drawer'],
             quota_swap_failed:      ['#quota-drawer'],
@@ -4241,7 +4242,7 @@
     // ==========================================================================
     // QUOTA DRAWER (Mosaic grid)
     //
-    // Hydrated from /api/quota/summary (same shape as `gt quota status --json`).
+    // Hydrated from /api/quota/stream (SSE, same shape as `gt quota status --json`).
     // The collapsed `🎫 Quota` stat in the summary banner shows live counters
     // (available | limited | expired); clicking it toggles the drawer with a
     // mosaic of per-account cards: status, token expiry, rotation count,
@@ -4277,8 +4278,13 @@
     function toggleQuotaDrawer() {
         setQuotaDrawerState(!quotaDrawerIsOpen());
         applyQuotaDrawerVisibility();
-        // Refresh on open so the user sees current data immediately.
-        if (quotaDrawerIsOpen()) loadQuotaSummary();
+        // No fetch on open — the SSE stream already pushes snapshots whenever
+        // they change, and the last one is cached in lastQuotaSnapshot. Render
+        // it immediately so the drawer isn't empty until the next tick.
+        if (quotaDrawerIsOpen() && lastQuotaSnapshot) {
+            renderQuotaStatbar(lastQuotaSnapshot.counters);
+            renderQuotaMosaic(lastQuotaSnapshot);
+        }
     }
 
     function fmtRelative(rfc3339) {
@@ -4560,25 +4566,49 @@
         el.removeAttribute('hidden');
     }
 
-    var quotaLoadInflight = false;
-    function loadQuotaSummary() {
-        if (quotaLoadInflight) return;
-        quotaLoadInflight = true;
-        fetch('/api/quota/summary', { headers: { 'Accept': 'application/json' } })
-            .then(function(r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
-            .then(function(resp) {
-                renderQuotaStatbar(resp.counters);
-                renderQuotaMosaic(resp);
-            })
-            .catch(function(err) {
-                console.warn('quota summary load failed:', err);
+    // Last snapshot received over SSE — kept so the drawer can paint from
+    // cache on toggle without re-fetching, and so the post-swap reload
+    // pipeline (window.refreshQuotaDrawer) has something to render
+    // synchronously before the next stream frame arrives.
+    var lastQuotaSnapshot = null;
+
+    function applyQuotaSnapshot(resp) {
+        lastQuotaSnapshot = resp;
+        renderQuotaStatbar(resp.counters);
+        renderQuotaMosaic(resp);
+    }
+
+    var quotaStreamSource = null;
+    var quotaStreamRetryMs = 1000;
+    function openQuotaStream() {
+        if (quotaStreamSource) return;
+        try {
+            quotaStreamSource = new EventSource('/api/quota/stream');
+        } catch (e) {
+            console.warn('quota stream: EventSource unavailable:', e);
+            return;
+        }
+        quotaStreamSource.addEventListener('quota-snapshot', function(ev) {
+            try {
+                var resp = JSON.parse(ev.data);
+                applyQuotaSnapshot(resp);
+                quotaStreamRetryMs = 1000;
+            } catch (e) {
+                console.warn('quota stream: parse:', e);
+            }
+        });
+        quotaStreamSource.addEventListener('error', function() {
+            // EventSource retries automatically while readyState===CONNECTING.
+            // If the server is genuinely gone (readyState===CLOSED), tear down
+            // and back off — exponential up to 30s — so we don't hammer it.
+            if (quotaStreamSource && quotaStreamSource.readyState === 2 /* CLOSED */) {
+                quotaStreamSource = null;
                 var el = document.getElementById('quota-stat-summary');
                 if (el) el.textContent = '?';
-            })
-            .then(function() { quotaLoadInflight = false; });
+                setTimeout(openQuotaStream, quotaStreamRetryMs);
+                quotaStreamRetryMs = Math.min(quotaStreamRetryMs * 2, 30000);
+            }
+        });
     }
 
     function bindQuotaDrawerToggle() {
@@ -4603,34 +4633,30 @@
         }
     }
 
-    // Export for the post-swap reload pipeline above.
-    window.refreshQuotaDrawer = loadQuotaSummary;
+    // Post-swap reload pipeline expects this hook. Re-rendering from the
+    // cached snapshot is enough: the SSE stream pushes a new frame on the
+    // very next quota.json write (which a swap triggers), so we don't need
+    // to force a fetch here.
+    window.refreshQuotaDrawer = function() {
+        if (lastQuotaSnapshot) applyQuotaSnapshot(lastQuotaSnapshot);
+    };
     window.restoreQuotaDrawerState = function() {
         applyQuotaDrawerVisibility();
         bindQuotaDrawerToggle();
     };
 
-    // Initial wire-up: bind controls, restore prior state, fetch first snapshot.
+    // Initial wire-up: bind controls, restore prior state, subscribe to the
+    // SSE snapshot stream. The first 'quota-snapshot' frame the server emits
+    // on connect hydrates the mosaic; subsequent frames push every change.
     bindQuotaDrawerToggle();
     applyQuotaDrawerVisibility();
-    loadQuotaSummary();
+    openQuotaStream();
 
-    // Dedicated live poll for token usage. The dashboard's htmx morph (which
-    // also refreshes quota) only fires on `dashboard-update` SSE events, and
-    // those are driven by writes to .events.jsonl — token consumption never
-    // writes there, so the usage counts would otherwise go stale while an
-    // agent silently burns tokens. Poll the summary endpoint directly so the
-    // mosaic stays live independent of town event activity. Skip when the tab
-    // is hidden: each call walks tmux sessions + transcripts server-side, so
-    // there's no point paying that cost for a backgrounded dashboard.
-    var QUOTA_POLL_MS = 15000;
-    setInterval(function() {
-        if (document.hidden) return;
-        loadQuotaSummary();
-    }, QUOTA_POLL_MS);
-    // Catch up immediately when the tab regains focus after being hidden.
+    // When the tab regains focus after being hidden, EventSource keeps the
+    // connection alive transparently — no manual refresh needed. We only
+    // re-open if the server killed the stream while we were backgrounded.
     document.addEventListener('visibilitychange', function() {
-        if (!document.hidden) loadQuotaSummary();
+        if (!document.hidden && !quotaStreamSource) openQuotaStream();
     });
 
 })();
