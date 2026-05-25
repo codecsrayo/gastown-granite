@@ -4216,8 +4216,196 @@
 
         .quota-mosaic {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-            gap: 12px;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 10px;
+        }
+
+        /* Three-pool layout: pools sit side-by-side, each sized to its
+         * content so empty pools collapse and full ones expand. Wraps
+         * onto a new row when the viewport can't fit all three. */
+        .quota-pools {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+        .quota-pool {
+            min-width: 0;
+        }
+        /* Cards flow horizontally inside each pool row, wrapping when the
+         * viewport runs out of space. */
+        .quota-pool .quota-mosaic {
+            grid-template-columns: repeat(auto-fill, minmax(200px, 220px));
+            gap: 8px;
+            justify-content: start;
+        }
+        /* Empty pools keep their heading but shrink the mosaic to just
+         * the placeholder text width. */
+        .quota-pool .quota-card-empty {
+            white-space: nowrap;
+        }
+        .quota-pool-title {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin: 0 0 6px 0;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .quota-pool-count {
+            color: var(--text-secondary);
+            font-variant-numeric: tabular-nums;
+            background: var(--bg-card-hover);
+            border-radius: 8px;
+            padding: 0 6px;
+            font-size: 0.65rem;
+        }
+        .quota-pool-dot {
+            display: inline-block;
+            width: 8px; height: 8px;
+            border-radius: 50%;
+        }
+        .quota-pool-dot.dot-green  { background: var(--green); }
+        .quota-pool-dot.dot-yellow { background: var(--orange); }
+        .quota-pool-dot.dot-red    { background: var(--red); }
+
+        .quota-card-empty {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            padding: 8px 4px;
+        }
+
+        /* Compact variant — used inside pools. Trims meta block + week bar;
+         * everything moves to the modal on click. */
+        .quota-card-compact {
+            cursor: pointer;
+            gap: 6px;
+            padding: 8px 10px;
+            transition: background 0.15s ease, border-color 0.15s ease, transform 320ms cubic-bezier(0.2, 0.7, 0.2, 1);
+            will-change: transform;
+        }
+        .quota-card-compact:hover,
+        .quota-card-compact:focus-visible {
+            background: var(--bg-card-hover);
+            outline: none;
+        }
+        .quota-card-compact:focus-visible {
+            box-shadow: 0 0 0 2px var(--blue);
+        }
+        .quota-card-unlock {
+            font-size: 0.72rem;
+            color: var(--orange);
+            font-weight: 600;
+        }
+        .quota-card.pool-blocked .quota-card-unlock {
+            color: var(--orange);
+        }
+        .quota-card.status-expired .quota-card-unlock {
+            color: var(--red);
+        }
+        .quota-card-swap-chip {
+            font-size: 0.65rem;
+            color: var(--yellow);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: rgba(255, 180, 84, 0.10);
+            border-radius: 3px;
+            padding: 1px 6px;
+            align-self: flex-start;
+        }
+        .quota-card-swap-chip .swap-arrow { color: var(--text-muted); }
+        .quota-card-swap-chip .swap-tag {
+            font-size: 0.55rem;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-left: 2px;
+            letter-spacing: 0.5px;
+        }
+
+        /* Detail modal — opened by clicking a card. Body is rendered by
+         * the QuotaDetailFactory (one renderer per pool). */
+        .quota-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 200;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .quota-modal[hidden] { display: none; }
+        .quota-modal-backdrop {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.55);
+        }
+        .quota-modal-panel {
+            position: relative;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px 18px;
+            min-width: 320px;
+            max-width: 480px;
+            width: calc(100% - 40px);
+            max-height: 80vh;
+            overflow: auto;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .quota-modal-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .quota-modal-header h2 {
+            font-size: 0.95rem;
+            margin: 0;
+            color: var(--text-primary);
+            flex: 1;
+        }
+        .quota-modal-close {
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 0.85rem;
+            padding: 2px 8px;
+            line-height: 1;
+        }
+        .quota-modal-close:hover {
+            background: var(--bg-card-hover);
+            color: var(--text-primary);
+        }
+        .qd-section { margin-bottom: 10px; }
+        .qd-section:last-child { margin-bottom: 0; }
+        .qd-handle {
+            font-weight: 700;
+            font-size: 0.95rem;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .qd-handle .default-marker {
+            color: var(--green);
+            margin-right: 2px;
+        }
+        .qd-email {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+        .qd-section-sessions h4 {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin: 0 0 4px 0;
+            font-weight: 600;
         }
 
         .quota-card {

@@ -4333,65 +4333,66 @@
         el.innerHTML = parts.join('');
     }
 
+    // Three-pool taxonomy:
+    //   active   — usable now (status=available)
+    //   inactive — temporarily idle, auto-recovers on a timer (limited, cooldown)
+    //   blocked  — hard-stuck, needs manual intervention (expired tokens)
+    // Unknown statuses fall through to inactive so new soft-failure modes
+    // surface alongside known temporary blocks rather than as hard-stuck.
+    function quotaAccountPool(a) {
+        var s = a.status || '';
+        if (s === 'available') return 'active';
+        if (s === 'expired')   return 'blocked';
+        return 'inactive';
+    }
+
+    // Compact card — only handle/status/star/swap-arrow + the primary usage
+    // bar + session chips. Everything else (email, expires, week bar, faltan,
+    // relogin command) moves into the modal opened on click.
     function renderQuotaCard(a, limitedSessions, ceilings) {
         var statusKey = a.status || 'available';
-        var classes = 'quota-card status-' + statusKey;
-        var html = '<article class="' + classes + '">';
+        var pool = quotaAccountPool(a);
+        var classes = 'quota-card quota-card-compact status-' + statusKey + ' pool-' + pool;
+        var ariaLabel = a.handle + ' — ' + statusKey + ' — click for detail';
+        var html = '<article class="' + classes + '" data-handle="' + escapeHTML(a.handle) + '" data-pool="' + pool + '" tabindex="0" role="button" aria-label="' + escapeHTML(ariaLabel) + '">';
+
         html += '<div class="quota-card-head">';
         html += '<span class="quota-card-handle">';
-        if (a.is_default) html += '<span class="default-marker" title="Default account">' + '<svg class="icon icon-chevron-right" aria-hidden="true"><use href="#icon-chevron-right"/></svg>' + '</span>';
+        if (a.is_default) html += '<span class="default-marker" title="Default account">&gt;</span>';
         html += escapeHTML(a.handle);
         html += '</span>';
         html += '<span class="quota-card-status s-' + statusKey + '">' + escapeHTML(statusKey) + '</span>';
         html += '</div>';
 
-        if (a.email) {
-            html += '<div class="quota-card-email">' + escapeHTML(a.email) + '</div>';
-        }
-
-        // This config dir is currently borrowing another account's token via a
-        // quota rotation swap. Say so explicitly — otherwise the operator reads
-        // the borrowed login as this account's own and assumes it's signed in.
-        if (a.swapped_to) {
-            html += '<div class="quota-card-swap" title="Quota rotation swapped this account&#39;s credentials">running as <code>' + escapeHTML(a.swapped_to) + '</code></div>';
-        }
-
-        html += '<dl class="quota-card-meta">';
-        if (a.token_expires_at) {
-            var exp = Date.parse(a.token_expires_at);
-            var cls = '';
-            var elapsed = !isNaN(exp) && exp < Date.now();
-            if (!isNaN(exp)) {
-                if (elapsed) cls = 'bad';
-                else if (exp - Date.now() < 24 * 3600 * 1000) cls = 'warn';
+        if (pool === 'active') {
+            // Active pool: lead with the session usage bar — that's what tells
+            // the operator how much headroom is left before the next block.
+            var ceil = ceilings || {};
+            var sessionUsed = a.usage ? quotaTokenTotal(a.usage.counts) : 0;
+            html += renderUsageWindowBar('Session', sessionUsed, ceil.session_token_ceiling || 0, a.usage != null);
+        } else {
+            // Inactive/blocked pools: lead with the recovery hint so the
+            // operator can see at a glance when (or how) this account
+            // becomes usable again.
+            var unlockLabel = '';
+            if (pool === 'blocked') {
+                unlockLabel = 'needs relogin';
+            } else if (a.unlocks_at) {
+                unlockLabel = 'unlocks ' + fmtRelative(a.unlocks_at);
+            } else if (a.resets_at) {
+                unlockLabel = 'resets ' + a.resets_at;
             }
-            // Distinguish "expires in 3h" from "expired 16h ago" so the user
-            // never has to infer direction from the relative timestamp.
-            var label = elapsed ? 'expired' : 'expires';
-            html += '<dt>' + label + '</dt><dd class="' + cls + '">' + escapeHTML(fmtRelative(a.token_expires_at)) + '</dd>';
+            if (unlockLabel) {
+                html += '<div class="quota-card-unlock">' + escapeHTML(unlockLabel) + '</div>';
+            }
         }
-        // Unlock countdown: prefer the parsed RFC3339 (unlocks_at) so the user
-        // sees "unlocks in 2h 14m"; fall back to the raw "7pm" string when the
-        // server couldn't parse a future time.
-        if (a.unlocks_at) {
-            var raw = a.resets_at ? ' title="resets ' + escapeHTML(a.resets_at) + '"' : '';
-            html += '<dt>unlocks</dt><dd class="warn"' + raw + '>' + escapeHTML(fmtRelative(a.unlocks_at)) + '</dd>';
-        } else if (a.resets_at) {
-            html += '<dt>resets</dt><dd class="warn">' + escapeHTML(a.resets_at) + '</dd>';
-        }
-        if (a.rotation_count) {
-            var lr = a.last_rotated_at ? ' · ' + fmtRelative(a.last_rotated_at) : '';
-            html += '<dt>rotated</dt><dd>' + a.rotation_count + '×' + escapeHTML(lr) + '</dd>';
-        }
-        if (a.last_used && !a.rotation_count) {
-            html += '<dt>last use</dt><dd>' + escapeHTML(fmtRelative(a.last_used)) + '</dd>';
-        }
-        html += '</dl>';
 
-        // Expired tokens don't auto-unlock — they need a manual relogin. Show
-        // the exact command so the operator can copy it without thinking.
-        if (statusKey === 'expired') {
-            html += '<div class="quota-card-action">needs relogin: <code>gt account login ' + escapeHTML(a.handle) + '</code></div>';
+        // Swap arrow surfaces the rotation borrow in both pools — it changes
+        // which credentials this config dir is actually running under.
+        if (a.swapped_to) {
+            html += '<div class="quota-card-swap-chip" title="Quota rotation swapped this account&#39;s credentials">' +
+                    '<span class="swap-arrow">&#8592;</span> ' + escapeHTML(a.swapped_to) +
+                    '<span class="swap-tag">swap</span></div>';
         }
 
         if (a.active_sessions && a.active_sessions.length) {
@@ -4405,25 +4406,162 @@
             html += '</div>';
         }
 
-        // Two usage bars per account — session (5h) and week (7d) — each
-        // showing "remaining until block": ceiling − tokens used in window.
-        // The ceilings are operator-configured estimates (Anthropic's real
-        // limit is opaque), passed in via resp.usage_ceilings. Always render
-        // both bars even at 0 so the operator can tell "no transcript yet"
-        // apart from "the card itself is broken". Counts come from the
-        // assistant `usage` blocks in this account's Claude transcripts.
-        var ceil = ceilings || {};
-        var sessionUsed = a.usage ? quotaTokenTotal(a.usage.counts) : 0;
-        var weekUsed = a.usage ? quotaTokenTotal(a.usage.week_counts) : 0;
-        var sessCount = (a.usage && a.usage.sessions) ? a.usage.sessions.length : 0;
-        html += renderUsageWindowBar('Session (5h)', sessionUsed, ceil.session_token_ceiling || 0, a.usage != null);
-        html += renderUsageWindowBar('Week (7d)', weekUsed, ceil.weekly_token_ceiling || 0, a.usage != null);
-        if (sessCount > 1) {
-            html += '<div class="quota-card-usage-sess">' + sessCount + ' active sessions</div>';
-        }
-
         html += '</article>';
         return html;
+    }
+
+    // ----------------------------------------------------------------------
+    // Quota detail modal — abstract factory.
+    //
+    // Each card status has its own "detail renderer" producing the modal
+    // body. The factory picks the right renderer for an account, so the
+    // click handler doesn't need to know the status taxonomy. Add a new
+    // status by registering another renderer here.
+    // ----------------------------------------------------------------------
+    var QuotaDetailRenderers = {
+        // Shared block all renderers reuse — handle, email, swap line.
+        renderHeader: function(a) {
+            var html = '<section class="qd-section qd-section-header">';
+            html += '<div class="qd-handle">';
+            if (a.is_default) html += '<span class="default-marker" title="Default account">&gt;</span> ';
+            html += escapeHTML(a.handle);
+            html += '<span class="quota-card-status s-' + (a.status || 'available') + '">' + escapeHTML(a.status || 'available') + '</span>';
+            html += '</div>';
+            if (a.email) html += '<div class="qd-email">' + escapeHTML(a.email) + '</div>';
+            if (a.swapped_to) {
+                html += '<div class="quota-card-swap" title="Quota rotation swapped this account&#39;s credentials">running as <code>' + escapeHTML(a.swapped_to) + '</code></div>';
+            }
+            html += '</section>';
+            return html;
+        },
+        renderMeta: function(a) {
+            var html = '<dl class="quota-card-meta qd-meta">';
+            if (a.token_expires_at) {
+                var exp = Date.parse(a.token_expires_at);
+                var cls = '';
+                var elapsed = !isNaN(exp) && exp < Date.now();
+                if (!isNaN(exp)) {
+                    if (elapsed) cls = 'bad';
+                    else if (exp - Date.now() < 24 * 3600 * 1000) cls = 'warn';
+                }
+                var label = elapsed ? 'expired' : 'expires';
+                html += '<dt>' + label + '</dt><dd class="' + cls + '">' + escapeHTML(fmtRelative(a.token_expires_at)) + '</dd>';
+            }
+            if (a.unlocks_at) {
+                var raw = a.resets_at ? ' title="resets ' + escapeHTML(a.resets_at) + '"' : '';
+                html += '<dt>unlocks</dt><dd class="warn"' + raw + '>' + escapeHTML(fmtRelative(a.unlocks_at)) + '</dd>';
+            } else if (a.resets_at) {
+                html += '<dt>resets</dt><dd class="warn">' + escapeHTML(a.resets_at) + '</dd>';
+            }
+            if (a.rotation_count) {
+                var lr = a.last_rotated_at ? ' · ' + fmtRelative(a.last_rotated_at) : '';
+                html += '<dt>rotated</dt><dd>' + a.rotation_count + '×' + escapeHTML(lr) + '</dd>';
+            }
+            if (a.last_used && !a.rotation_count) {
+                html += '<dt>last use</dt><dd>' + escapeHTML(fmtRelative(a.last_used)) + '</dd>';
+            }
+            html += '</dl>';
+            return html;
+        },
+        renderBars: function(a, ceilings) {
+            var ceil = ceilings || {};
+            var sessionUsed = a.usage ? quotaTokenTotal(a.usage.counts) : 0;
+            var weekUsed = a.usage ? quotaTokenTotal(a.usage.week_counts) : 0;
+            var sessCount = (a.usage && a.usage.sessions) ? a.usage.sessions.length : 0;
+            var html = '<section class="qd-section qd-section-usage">';
+            html += renderUsageWindowBar('Session (5h)', sessionUsed, ceil.session_token_ceiling || 0, a.usage != null);
+            html += renderUsageWindowBar('Week (7d)', weekUsed, ceil.weekly_token_ceiling || 0, a.usage != null);
+            if (sessCount > 1) {
+                html += '<div class="quota-card-usage-sess">' + sessCount + ' active sessions</div>';
+            }
+            html += '</section>';
+            return html;
+        },
+        renderSessions: function(a, limitedSessions) {
+            if (!a.active_sessions || !a.active_sessions.length) return '';
+            var html = '<section class="qd-section qd-section-sessions"><h4>Active sessions</h4><div class="quota-card-sessions">';
+            for (var i = 0; i < a.active_sessions.length; i++) {
+                var sess = a.active_sessions[i];
+                var sessInfo = limitedSessions && limitedSessions[sess];
+                var sessCls = sessInfo && sessInfo.rate_limited ? 'quota-card-session rate-limited' : 'quota-card-session';
+                html += '<span class="' + sessCls + '" title="' + escapeHTML(sess) + '">' + escapeHTML(sess) + '</span>';
+            }
+            html += '</div></section>';
+            return html;
+        },
+    };
+
+    function ActiveDetailRenderer(account, limitedSessions, ceilings) {
+        return QuotaDetailRenderers.renderHeader(account) +
+               QuotaDetailRenderers.renderMeta(account) +
+               QuotaDetailRenderers.renderBars(account, ceilings) +
+               QuotaDetailRenderers.renderSessions(account, limitedSessions);
+    }
+
+    function InactiveDetailRenderer(account, limitedSessions, ceilings) {
+        return QuotaDetailRenderers.renderHeader(account) +
+               QuotaDetailRenderers.renderMeta(account) +
+               QuotaDetailRenderers.renderBars(account, ceilings) +
+               QuotaDetailRenderers.renderSessions(account, limitedSessions);
+    }
+
+    function BlockedDetailRenderer(account, limitedSessions, ceilings) {
+        var html = QuotaDetailRenderers.renderHeader(account);
+        html += QuotaDetailRenderers.renderMeta(account);
+        html += '<div class="quota-card-action">needs relogin: <code>gt account login ' + escapeHTML(account.handle) + '</code></div>';
+        html += QuotaDetailRenderers.renderBars(account, ceilings);
+        html += QuotaDetailRenderers.renderSessions(account, limitedSessions);
+        return html;
+    }
+
+    var QuotaDetailFactory = {
+        // Abstract factory: hand it an account, get the renderer that knows
+        // how to draw the modal for that account's current state. Three
+        // concrete renderers — one per pool — keep the pool taxonomy and
+        // the modal taxonomy in lockstep.
+        rendererFor: function(account) {
+            var p = quotaAccountPool(account);
+            if (p === 'active') return ActiveDetailRenderer;
+            if (p === 'inactive') return InactiveDetailRenderer;
+            return BlockedDetailRenderer;
+        },
+        render: function(account, limitedSessions, ceilings) {
+            return this.rendererFor(account)(account, limitedSessions, ceilings);
+        },
+    };
+
+    function openQuotaModal(handle) {
+        if (!lastQuotaSnapshot) return;
+        var accounts = lastQuotaSnapshot.accounts || [];
+        var account = null;
+        for (var i = 0; i < accounts.length; i++) {
+            if (accounts[i].handle === handle) { account = accounts[i]; break; }
+        }
+        if (!account) return;
+        var modal = document.getElementById('quota-modal');
+        var title = document.getElementById('quota-modal-title');
+        var body = document.getElementById('quota-modal-body');
+        if (!modal || !body) return;
+        if (title) title.textContent = account.handle;
+        body.innerHTML = QuotaDetailFactory.render(account, lastQuotaSnapshot.limited_sessions, lastQuotaSnapshot.usage_ceilings);
+        modal.removeAttribute('hidden');
+        modal.setAttribute('data-handle', handle);
+        var closeBtn = document.getElementById('quota-modal-close');
+        if (closeBtn) closeBtn.focus();
+    }
+
+    function closeQuotaModal() {
+        var modal = document.getElementById('quota-modal');
+        if (!modal) return;
+        modal.setAttribute('hidden', '');
+        modal.removeAttribute('data-handle');
+    }
+
+    function refreshOpenQuotaModal() {
+        var modal = document.getElementById('quota-modal');
+        if (!modal || modal.hasAttribute('hidden')) return;
+        var handle = modal.getAttribute('data-handle');
+        if (handle) openQuotaModal(handle);
     }
 
     // Sum input+output+cache from a usage `counts`/`week_counts` block.
@@ -4464,19 +4602,104 @@
         return html;
     }
 
-    function renderQuotaMosaic(resp) {
-        var mosaic = document.getElementById('quota-mosaic');
-        if (!mosaic) return;
-        var accounts = resp.accounts || [];
+    // Capture each card's pre-render bounding rect so we can animate the
+    // post-render position back to where it used to be — classic FLIP. We
+    // key by handle so a card moving between the active/blocked pools is
+    // recognized as the same node.
+    function captureQuotaCardRects() {
+        var rects = {};
+        var nodes = document.querySelectorAll('#quota-pools .quota-card[data-handle]');
+        for (var i = 0; i < nodes.length; i++) {
+            var h = nodes[i].getAttribute('data-handle');
+            if (h) rects[h] = nodes[i].getBoundingClientRect();
+        }
+        return rects;
+    }
+
+    // Apply FLIP transitions: for each card present before and after the
+    // render, translate it to its old position and then animate to 0. Skips
+    // when reduced-motion is on.
+    function playQuotaCardFlip(prevRects) {
+        if (!prevRects) return;
+        var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (reduce) return;
+        var nodes = document.querySelectorAll('#quota-pools .quota-card[data-handle]');
+        for (var i = 0; i < nodes.length; i++) {
+            var node = nodes[i];
+            var handle = node.getAttribute('data-handle');
+            var before = prevRects[handle];
+            if (!before) continue;
+            var after = node.getBoundingClientRect();
+            var dx = before.left - after.left;
+            var dy = before.top - after.top;
+            if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+            node.style.transition = 'none';
+            node.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+            // Force layout so the transform sticks before we transition it
+            // back to identity.
+            // eslint-disable-next-line no-unused-expressions
+            node.getBoundingClientRect();
+            node.style.transition = 'transform 320ms cubic-bezier(0.2, 0.7, 0.2, 1)';
+            node.style.transform = '';
+        }
+    }
+
+    function renderQuotaPool(poolName, accounts, resp) {
+        var mount = document.getElementById('quota-mosaic-' + poolName);
+        var count = document.getElementById('quota-pool-' + poolName + '-count');
+        if (count) count.textContent = String(accounts.length);
+        if (!mount) return;
         if (accounts.length === 0) {
-            mosaic.innerHTML = '<div class="quota-card-empty" style="color:var(--text-muted);font-size:0.8rem;padding:8px">No accounts registered. Run <code>gt account add &lt;handle&gt;</code>.</div>';
+            var empty;
+            if (poolName === 'active') empty = 'No accounts available right now.';
+            else if (poolName === 'inactive') empty = 'No accounts on cooldown.';
+            else empty = 'No accounts need relogin.';
+            mount.innerHTML = '<div class="quota-card-empty">' + empty + '</div>';
             return;
         }
         var html = '';
         for (var i = 0; i < accounts.length; i++) {
             html += renderQuotaCard(accounts[i], resp.limited_sessions, resp.usage_ceilings);
         }
-        mosaic.innerHTML = html;
+        mount.innerHTML = html;
+    }
+
+    function renderQuotaMosaic(resp) {
+        var pools = document.getElementById('quota-pools');
+        if (!pools) return;
+        var accounts = resp.accounts || [];
+
+        var prevRects = captureQuotaCardRects();
+
+        var active = [];
+        var inactive = [];
+        var blocked = [];
+        for (var i = 0; i < accounts.length; i++) {
+            var p = quotaAccountPool(accounts[i]);
+            if (p === 'active') active.push(accounts[i]);
+            else if (p === 'inactive') inactive.push(accounts[i]);
+            else blocked.push(accounts[i]);
+        }
+        // Default account first inside its pool, then alphabetical — keeps
+        // the operator's primary credentials anchored in the top-left card.
+        var byHandle = function(a, b) {
+            if (a.is_default && !b.is_default) return -1;
+            if (!a.is_default && b.is_default) return 1;
+            return String(a.handle).localeCompare(String(b.handle));
+        };
+        active.sort(byHandle);
+        inactive.sort(byHandle);
+        blocked.sort(byHandle);
+
+        if (accounts.length === 0) {
+            pools.innerHTML = '<div class="quota-card-empty" style="grid-column:1/-1">No accounts registered. Run <code>gt account add &lt;handle&gt;</code>.</div>';
+        } else {
+            renderQuotaPool('active', active, resp);
+            renderQuotaPool('inactive', inactive, resp);
+            renderQuotaPool('blocked', blocked, resp);
+        }
+
+        playQuotaCardFlip(prevRects);
 
         var meta = document.getElementById('quota-drawer-meta');
         if (meta) {
@@ -4487,6 +4710,7 @@
         renderQuotaWaiting(resp.limited_sessions);
         renderQuotaPlan(resp.last_plan);
         renderQuotaUsageNote(resp);
+        refreshOpenQuotaModal();
     }
 
     // Explain a column of empty bars: surfaces the server-side aggregation
@@ -4630,6 +4854,43 @@
                 applyQuotaDrawerVisibility();
             });
             close._quotaBound = true;
+        }
+        // Card → modal: delegate from the pools container so re-rendered
+        // cards inherit the handler without re-binding each frame.
+        var pools = document.getElementById('quota-pools');
+        if (pools && !pools._quotaBound) {
+            pools.addEventListener('click', function(ev) {
+                var card = ev.target.closest && ev.target.closest('.quota-card[data-handle]');
+                if (!card) return;
+                openQuotaModal(card.getAttribute('data-handle'));
+            });
+            pools.addEventListener('keydown', function(ev) {
+                if (ev.key !== 'Enter' && ev.key !== ' ') return;
+                var card = ev.target.closest && ev.target.closest('.quota-card[data-handle]');
+                if (!card) return;
+                ev.preventDefault();
+                openQuotaModal(card.getAttribute('data-handle'));
+            });
+            pools._quotaBound = true;
+        }
+        // Modal close — button, backdrop, and Escape.
+        var modalClose = document.getElementById('quota-modal-close');
+        if (modalClose && !modalClose._quotaBound) {
+            modalClose.addEventListener('click', closeQuotaModal);
+            modalClose._quotaBound = true;
+        }
+        var backdrop = document.getElementById('quota-modal-backdrop');
+        if (backdrop && !backdrop._quotaBound) {
+            backdrop.addEventListener('click', closeQuotaModal);
+            backdrop._quotaBound = true;
+        }
+        if (!document._quotaModalEscBound) {
+            document.addEventListener('keydown', function(ev) {
+                if (ev.key !== 'Escape') return;
+                var modal = document.getElementById('quota-modal');
+                if (modal && !modal.hasAttribute('hidden')) closeQuotaModal();
+            });
+            document._quotaModalEscBound = true;
         }
     }
 
