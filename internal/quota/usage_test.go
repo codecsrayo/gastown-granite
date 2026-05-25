@@ -1,6 +1,7 @@
 package quota
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,17 @@ import (
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/session"
 )
+
+// asstLine builds an assistant transcript line carrying a usage block stamped
+// at ts. Production transcripts always timestamp each turn, and the aggregator
+// uses that per-message timestamp to bucket tokens into the session/week
+// windows — so test fixtures must carry one too.
+func asstLine(ts time.Time, in, out, cacheRead, cacheCreate int) string {
+	return fmt.Sprintf(
+		`{"type":"assistant","timestamp":%q,"message":{"usage":{"input_tokens":%d,"output_tokens":%d,"cache_read_input_tokens":%d,"cache_creation_input_tokens":%d}}}`,
+		ts.UTC().Format(time.RFC3339), in, out, cacheRead, cacheCreate,
+	)
+}
 
 // registerGTPrefix wires the "gt-" prefix into the session registry so
 // IsKnownSession matches gt-prefixed names. The package-level registry is
@@ -67,19 +79,21 @@ func TestAggregateUsage_GroupsByAccount(t *testing.T) {
 	wd1 := "/wd1"
 	wd2 := "/wd2"
 
+	now := time.Now()
+	recent := now.Add(-time.Minute) // inside both the 5h session and 7d week windows
+
 	writeTranscript(t, root, wd1, "a.jsonl", []string{
 		`{"type":"user","message":{}}`,
-		`{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":10,"cache_creation_input_tokens":5}}}`,
-		`{"type":"assistant","message":{"usage":{"input_tokens":40,"output_tokens":20}}}`,
+		asstLine(recent, 100, 50, 10, 5),
+		asstLine(recent, 40, 20, 0, 0),
 		`{"not":"json`, // malformed line — should skip
 	})
 	writeTranscript(t, root, wd2, "b.jsonl", []string{
-		`{"type":"assistant","message":{"usage":{"input_tokens":7,"output_tokens":3}}}`,
+		asstLine(recent, 7, 3, 0, 0),
 	})
 
 	// Force mod times into the future so they survive the window cutoff
 	// regardless of when the test runs.
-	now := time.Now()
 	mt := now.Add(1 * time.Hour)
 	_ = os.Chtimes(filepath.Join(root, "projects", strings.ReplaceAll(wd1, "/", "-"), "a.jsonl"), mt, mt)
 	_ = os.Chtimes(filepath.Join(root, "projects", strings.ReplaceAll(wd2, "/", "-"), "b.jsonl"), mt, mt)
@@ -114,6 +128,11 @@ func TestAggregateUsage_GroupsByAccount(t *testing.T) {
 		work.Counts.CacheReadTokens != 10 || work.Counts.CacheCreationTokens != 5 {
 		t.Errorf("work counts = %+v", work.Counts)
 	}
+	// Both lines are recent, so the week window holds the same totals as the
+	// session window.
+	if work.WeekCounts.InputTokens != 140 || work.WeekCounts.OutputTokens != 70 {
+		t.Errorf("work week counts = %+v", work.WeekCounts)
+	}
 	if len(work.Sessions) != 1 || work.Sessions[0].Session != "gt-rig-claude" {
 		t.Errorf("work sessions = %+v", work.Sessions)
 	}
@@ -129,7 +148,7 @@ func TestAggregateUsage_OrphanWhenAccountUnknown(t *testing.T) {
 	root := t.TempDir()
 	wd := "/orphan"
 	writeTranscript(t, root, wd, "x.jsonl", []string{
-		`{"type":"assistant","message":{"usage":{"input_tokens":1,"output_tokens":1}}}`,
+		asstLine(time.Now().Add(-time.Minute), 1, 1, 0, 0),
 	})
 	mt := time.Now().Add(time.Hour)
 	_ = os.Chtimes(filepath.Join(root, "projects", strings.ReplaceAll(wd, "/", "-"), "x.jsonl"), mt, mt)
@@ -165,7 +184,7 @@ func TestAggregateUsage_PerSessionConfigDirRoot(t *testing.T) {
 	wd := "/work/rig"
 
 	writeTranscript(t, sessRoot, wd, "a.jsonl", []string{
-		`{"type":"assistant","message":{"usage":{"input_tokens":80,"output_tokens":20}}}`,
+		asstLine(time.Now().Add(-time.Minute), 80, 20, 0, 0),
 	})
 	mt := time.Now().Add(time.Hour)
 	_ = os.Chtimes(filepath.Join(sessRoot, "projects", strings.ReplaceAll(wd, "/", "-"), "a.jsonl"), mt, mt)
@@ -191,6 +210,46 @@ func TestAggregateUsage_PerSessionConfigDirRoot(t *testing.T) {
 	work := report.Accounts["work"]
 	if work.Counts.InputTokens != 80 || work.Counts.OutputTokens != 20 {
 		t.Errorf("work counts = %+v (transcript under session config dir not found)", work.Counts)
+	}
+}
+
+// TestAggregateUsage_SplitsSessionAndWeekWindows proves tokens are bucketed by
+// each message's own timestamp: a turn from 3 days ago lands in the week window
+// only, while a recent turn lands in both. This is the core of the "remaining
+// until block" bars mirroring the /status session vs week views.
+func TestAggregateUsage_SplitsSessionAndWeekWindows(t *testing.T) {
+	registerGTPrefix(t)
+	root := t.TempDir()
+	wd := "/wd"
+
+	now := time.Now()
+	writeTranscript(t, root, wd, "a.jsonl", []string{
+		asstLine(now.Add(-3*24*time.Hour), 1000, 500, 0, 0), // week only (older than 5h)
+		asstLine(now.Add(-time.Minute), 100, 50, 0, 0),       // session + week
+	})
+	mt := now.Add(time.Hour)
+	_ = os.Chtimes(filepath.Join(root, "projects", strings.ReplaceAll(wd, "/", "-"), "a.jsonl"), mt, mt)
+
+	provider := &fakeUsageProvider{
+		sessions: []string{"gt-rig-claude"},
+		env:      map[string]map[string]string{"gt-rig-claude": {"GT_QUOTA_ACCOUNT": "work"}},
+		workDirs: map[string]string{"gt-rig-claude": wd},
+	}
+	accounts := &config.AccountsConfig{Accounts: map[string]config.Account{"work": {ConfigDir: "/tmp/work"}}}
+	state := &config.QuotaState{Accounts: map[string]config.AccountQuotaState{"work": {Status: config.QuotaStatusAvailable}}}
+
+	report, err := AggregateUsage(provider, state, accounts, root, now)
+	if err != nil {
+		t.Fatalf("AggregateUsage: %v", err)
+	}
+	work := report.Accounts["work"]
+	// Session window: only the recent turn.
+	if work.Counts.InputTokens != 100 || work.Counts.OutputTokens != 50 {
+		t.Errorf("session counts = %+v, want input=100 output=50", work.Counts)
+	}
+	// Week window: both turns.
+	if work.WeekCounts.InputTokens != 1100 || work.WeekCounts.OutputTokens != 550 {
+		t.Errorf("week counts = %+v, want input=1100 output=550", work.WeekCounts)
 	}
 }
 

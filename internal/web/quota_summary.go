@@ -11,6 +11,7 @@ import (
 	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/quota"
 	"github.com/steveyegge/gastown/internal/tmux"
+	"github.com/steveyegge/gastown/internal/util"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
 
@@ -18,24 +19,30 @@ import (
 // It folds quota state, the most recent token-inspection result, and live
 // token-usage counts into a single record consumed by the dashboard mosaic.
 type QuotaSummaryAccount struct {
-	Handle           string  `json:"handle"`
-	Email            string  `json:"email,omitempty"`
-	IsDefault        bool    `json:"is_default,omitempty"`
-	Status           string  `json:"status"`
-	LimitedAt        string  `json:"limited_at,omitempty"`
-	ResetsAt         string  `json:"resets_at,omitempty"`
+	Handle    string `json:"handle"`
+	Email     string `json:"email,omitempty"`
+	IsDefault bool   `json:"is_default,omitempty"`
+	Status    string `json:"status"`
+	LimitedAt string `json:"limited_at,omitempty"`
+	ResetsAt  string `json:"resets_at,omitempty"`
 	// UnlocksAt is ResetsAt parsed into an RFC3339 instant (when available).
 	// Populated only for limited/cooldown accounts whose ResetsAt parses to a
 	// future time — lets the UI render a live countdown instead of the raw
 	// "7pm (America/Los_Angeles)" string.
-	UnlocksAt        string  `json:"unlocks_at,omitempty"`
-	LastUsed         string  `json:"last_used,omitempty"`
-	TokenExpiresAt   string  `json:"token_expires_at,omitempty"`
-	TokenLastChecked string  `json:"token_last_checked,omitempty"`
-	RotationCount    int     `json:"rotation_count,omitempty"`
-	LastRotatedAt    string  `json:"last_rotated_at,omitempty"`
-	ActiveSessions   []string `json:"active_sessions,omitempty"`
+	UnlocksAt        string              `json:"unlocks_at,omitempty"`
+	LastUsed         string              `json:"last_used,omitempty"`
+	TokenExpiresAt   string              `json:"token_expires_at,omitempty"`
+	TokenLastChecked string              `json:"token_last_checked,omitempty"`
+	RotationCount    int                 `json:"rotation_count,omitempty"`
+	LastRotatedAt    string              `json:"last_rotated_at,omitempty"`
+	ActiveSessions   []string            `json:"active_sessions,omitempty"`
 	Usage            *quota.AccountUsage `json:"usage,omitempty"`
+	// SwappedTo is the source account handle whose token currently occupies
+	// this account's config dir via a quota rotation swap. When set, the
+	// account is running another identity — TokenExpiresAt reflects this
+	// account's own last-known token, not the borrowed one. Lets the dashboard
+	// label the card "running as <source>" instead of implying a fresh login.
+	SwappedTo string `json:"swapped_to,omitempty"`
 }
 
 // QuotaSummaryCounters totals accounts by status so the dashboard's collapsed
@@ -47,19 +54,29 @@ type QuotaSummaryCounters struct {
 	Cooldown  int `json:"cooldown"`
 }
 
+// QuotaUsageCeilings carries the configured (estimated) token budgets the
+// dashboard uses to render "remaining until block" bars. These are NOT
+// Anthropic's enforced limit — that is opaque and weighted per model — but an
+// operator-tunable visual aid sourced from TownSettings.QuotaUsage.
+type QuotaUsageCeilings struct {
+	SessionTokenCeiling int64 `json:"session_token_ceiling"`
+	WeeklyTokenCeiling  int64 `json:"weekly_token_ceiling"`
+}
+
 // QuotaSummaryResponse is the body returned from GET /api/quota/summary.
 type QuotaSummaryResponse struct {
-	GeneratedAt        string                                 `json:"generated_at"`
-	Counters           QuotaSummaryCounters                   `json:"counters"`
-	Accounts           []QuotaSummaryAccount                  `json:"accounts"`
+	GeneratedAt        string                                `json:"generated_at"`
+	Counters           QuotaSummaryCounters                  `json:"counters"`
+	Accounts           []QuotaSummaryAccount                 `json:"accounts"`
+	UsageCeilings      QuotaUsageCeilings                    `json:"usage_ceilings"`
 	LimitedSessions    map[string]config.LimitedSessionState `json:"limited_sessions,omitempty"`
 	LastPlan           *config.RotationPlanSnapshot          `json:"last_plan,omitempty"`
-	LastBlockedAlertAt string                                 `json:"last_blocked_alert_at,omitempty"`
-	OrphanSessions     []quota.SessionUsage                   `json:"orphan_sessions,omitempty"`
+	LastBlockedAlertAt string                                `json:"last_blocked_alert_at,omitempty"`
+	OrphanSessions     []quota.SessionUsage                  `json:"orphan_sessions,omitempty"`
 	// UsageError carries the failure reason when usage aggregation
 	// couldn't walk transcripts (tmux down, claude config root missing,
 	// etc.). The dashboard surfaces this so an empty bar is explained.
-	UsageError         string                                 `json:"usage_error,omitempty"`
+	UsageError string `json:"usage_error,omitempty"`
 }
 
 // handleQuotaSummary returns a single JSON snapshot covering every dimension
@@ -111,7 +128,7 @@ func (h *APIHandler) handleQuotaSummary(w http.ResponseWriter, r *http.Request) 
 		log.Printf("quota summary: usage aggregation failed: %v", uerr)
 	}
 
-	resp := BuildQuotaSummary(state, acctCfg, usageReport, time.Now())
+	resp := BuildQuotaSummary(state, acctCfg, usageReport, ResolveUsageCeilings(townRoot), time.Now())
 	resp.UsageError = usageErr
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
@@ -128,10 +145,12 @@ func BuildQuotaSummary(
 	state *config.QuotaState,
 	acctCfg *config.AccountsConfig,
 	usageReport *quota.UsageReport,
+	ceilings QuotaUsageCeilings,
 	now time.Time,
 ) QuotaSummaryResponse {
 	resp := QuotaSummaryResponse{
 		GeneratedAt:        now.UTC().Format(time.RFC3339),
+		UsageCeilings:      ceilings,
 		LimitedSessions:    state.LimitedSessions,
 		LastPlan:           state.LastPlan,
 		LastBlockedAlertAt: state.LastBlockedAlertAt,
@@ -199,6 +218,16 @@ func BuildQuotaSummary(
 			ActiveSessions:   sessionsByAccount[handle],
 		}
 
+		// Flag accounts whose config dir is currently a quota-swap target so
+		// the dashboard shows "running as <source>" instead of attributing the
+		// borrowed login state to this account. ActiveSwaps keys are expanded
+		// config dirs (see quota.RecordSwap callers).
+		if len(state.ActiveSwaps) > 0 {
+			if src, ok := state.ActiveSwaps[util.ExpandHome(acct.ConfigDir)]; ok && src != handle {
+				entry.SwappedTo = src
+			}
+		}
+
 		// Parse the human-readable ResetsAt ("7pm", "3:30pm (America/...)") into
 		// an absolute instant so the UI can render a live countdown. Only emit
 		// when the parsed time is still ahead of `now` — a past parse means the
@@ -223,4 +252,27 @@ func BuildQuotaSummary(
 	}
 
 	return resp
+}
+
+// ResolveUsageCeilings loads the configured token ceilings from the town's
+// settings, falling back to compiled-in defaults for any unset (zero) value.
+// A missing or unreadable settings file degrades to all-defaults so the
+// dashboard always has a denominator for its usage bars.
+func ResolveUsageCeilings(townRoot string) QuotaUsageCeilings {
+	d := config.DefaultQuotaUsageConfig()
+	out := QuotaUsageCeilings{
+		SessionTokenCeiling: d.SessionTokenCeiling,
+		WeeklyTokenCeiling:  d.WeeklyTokenCeiling,
+	}
+	ts, err := config.LoadOrCreateTownSettings(config.TownSettingsPath(townRoot))
+	if err != nil || ts == nil || ts.QuotaUsage == nil {
+		return out
+	}
+	if ts.QuotaUsage.SessionTokenCeiling > 0 {
+		out.SessionTokenCeiling = ts.QuotaUsage.SessionTokenCeiling
+	}
+	if ts.QuotaUsage.WeeklyTokenCeiling > 0 {
+		out.WeeklyTokenCeiling = ts.QuotaUsage.WeeklyTokenCeiling
+	}
+	return out
 }

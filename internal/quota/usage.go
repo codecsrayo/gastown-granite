@@ -21,6 +21,10 @@ import (
 // account whose state has no other anchor (LimitedAt, LastRotatedAt).
 const UsageWindow = 5 * time.Hour
 
+// WeeklyUsageWindow is the rolling window for the dashboard's weekly usage bar,
+// mirroring the "Current week" view in the Claude Code /status Usage tab.
+const WeeklyUsageWindow = 7 * 24 * time.Hour
+
 // UsageProvider is the minimum tmux surface needed by the aggregator. The
 // scan.go TmuxClient already satisfies GetEnvironment; the extra methods are
 // needed to walk sessions and locate transcripts.
@@ -43,6 +47,14 @@ func (t TokenCounts) Total() int64 {
 	return t.InputTokens + t.OutputTokens + t.CacheReadTokens + t.CacheCreationTokens
 }
 
+// Add accumulates another TokenCounts into the receiver.
+func (t *TokenCounts) Add(o TokenCounts) {
+	t.InputTokens += o.InputTokens
+	t.OutputTokens += o.OutputTokens
+	t.CacheReadTokens += o.CacheReadTokens
+	t.CacheCreationTokens += o.CacheCreationTokens
+}
+
 // SessionUsage captures the per-session contribution to an account's totals.
 type SessionUsage struct {
 	Session     string      `json:"session"`
@@ -53,12 +65,17 @@ type SessionUsage struct {
 }
 
 // AccountUsage aggregates token consumption for a single account across all
-// of its currently attached sessions.
+// of its currently attached sessions. Counts cover the rolling session (5h)
+// window; WeekCounts cover the rolling 7-day window. Both are filtered by each
+// transcript message's own timestamp, not by file modtime, so a long-lived
+// transcript only contributes the tokens emitted inside each window.
 type AccountUsage struct {
-	Handle      string         `json:"handle"`
-	WindowStart string         `json:"window_start,omitempty"` // RFC3339
-	Sessions    []SessionUsage `json:"sessions,omitempty"`
-	Counts      TokenCounts    `json:"counts"`
+	Handle          string         `json:"handle"`
+	WindowStart     string         `json:"window_start,omitempty"`      // RFC3339, session window
+	WeekWindowStart string         `json:"week_window_start,omitempty"` // RFC3339, 7-day window
+	Sessions        []SessionUsage `json:"sessions,omitempty"`
+	Counts          TokenCounts    `json:"counts"`      // session (5h) window
+	WeekCounts      TokenCounts    `json:"week_counts"` // 7-day window
 }
 
 // UsageReport bundles per-account aggregates plus a snapshot of unmatched
@@ -109,7 +126,8 @@ func AggregateUsage(
 		}
 
 		handle, configDir := resolveSessionAccount(provider, sess, accounts)
-		windowStart := windowStartFor(handle, state, now)
+		sessionStart := windowStartFor(handle, state, now)
+		weekStart := now.Add(-WeeklyUsageWindow)
 
 		workDir, wderr := provider.GetPaneWorkDir(sess)
 		if wderr != nil || workDir == "" {
@@ -127,13 +145,11 @@ func AggregateUsage(
 			transcriptRoot = util.ExpandHome(configDir)
 		}
 
-		transcriptPath, modTime, transcriptErr := newestTranscript(transcriptRoot, workDir, windowStart)
-		if transcriptErr != nil || transcriptPath == "" {
-			continue
-		}
-
-		counts, parseErr := sumTranscriptUsage(transcriptPath)
-		if parseErr != nil || counts.Total() == 0 {
+		// Sum every transcript for this workdir touched within the weekly
+		// window, splitting tokens into the session (5h) and week (7d) buckets
+		// by each message's own timestamp.
+		sessionCounts, weekCounts, transcriptPath, modTime, scanErr := sumProjectWindows(transcriptRoot, workDir, sessionStart, weekStart)
+		if scanErr != nil || weekCounts.Total() == 0 {
 			continue
 		}
 
@@ -142,7 +158,7 @@ func AggregateUsage(
 			ConfigDir:   configDir,
 			Transcript:  transcriptPath,
 			LastModTime: modTime.UTC().Format(time.RFC3339),
-			Counts:      counts,
+			Counts:      sessionCounts,
 		}
 
 		if handle == "" {
@@ -152,12 +168,11 @@ func AggregateUsage(
 
 		entry := report.Accounts[handle]
 		entry.Handle = handle
-		entry.WindowStart = windowStart.UTC().Format(time.RFC3339)
+		entry.WindowStart = sessionStart.UTC().Format(time.RFC3339)
+		entry.WeekWindowStart = weekStart.UTC().Format(time.RFC3339)
 		entry.Sessions = append(entry.Sessions, su)
-		entry.Counts.InputTokens += counts.InputTokens
-		entry.Counts.OutputTokens += counts.OutputTokens
-		entry.Counts.CacheReadTokens += counts.CacheReadTokens
-		entry.Counts.CacheCreationTokens += counts.CacheCreationTokens
+		entry.Counts.Add(sessionCounts)
+		entry.WeekCounts.Add(weekCounts)
 		report.Accounts[handle] = entry
 	}
 
@@ -238,27 +253,30 @@ func windowStartFor(handle string, state *config.QuotaState, now time.Time) time
 	return best
 }
 
-// newestTranscript locates the most recently modified .jsonl transcript file
-// for a working directory's Claude project. Returns "" when no transcript
-// modified since `since` is found.
-func newestTranscript(claudeConfigRoot, workDir string, since time.Time) (string, time.Time, error) {
+// sumProjectWindows walks every .jsonl transcript for a working directory's
+// Claude project that was modified at or after weekStart, and sums the token
+// counts from assistant messages into two buckets keyed by each message's own
+// timestamp: tokens since sessionStart (the session window) and tokens since
+// weekStart (the 7-day window). Since sessionStart is always >= weekStart, the
+// session bucket is a subset of the week bucket. It also reports the newest
+// transcript path + modtime for display. Files last modified before weekStart
+// are skipped (their final append predates the window, so no message qualifies).
+func sumProjectWindows(claudeConfigRoot, workDir string, sessionStart, weekStart time.Time) (session, week TokenCounts, newestPath string, newestMod time.Time, err error) {
 	projectName := strings.ReplaceAll(workDir, "/", "-")
 	projectName = strings.ReplaceAll(projectName, "_", "-")
 	projectDir := filepath.Join(claudeConfigRoot, "projects", projectName)
 
-	var latestPath string
-	var latestTime time.Time
-	werr := filepath.WalkDir(projectDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
+	werr := filepath.WalkDir(projectDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
 				return fs.SkipDir
 			}
-			return err
-		}
-		if d.IsDir() && path != projectDir {
-			return fs.SkipDir
+			return walkErr
 		}
 		if d.IsDir() {
+			if path != projectDir {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		if !strings.HasSuffix(path, ".jsonl") {
@@ -269,28 +287,36 @@ func newestTranscript(claudeConfigRoot, workDir string, since time.Time) (string
 			return nil
 		}
 		mt := info.ModTime()
-		if mt.Before(since) {
+		if mt.Before(weekStart) {
 			return nil
 		}
-		if mt.After(latestTime) {
-			latestTime = mt
-			latestPath = path
+		if mt.After(newestMod) {
+			newestMod = mt
+			newestPath = path
 		}
+		sessC, weekC, ferr := sumTranscriptWindows(path, sessionStart, weekStart)
+		if ferr != nil {
+			return nil // best effort: skip an unreadable transcript
+		}
+		session.Add(sessC)
+		week.Add(weekC)
 		return nil
 	})
 	if werr != nil {
-		return "", time.Time{}, werr
+		return TokenCounts{}, TokenCounts{}, "", time.Time{}, werr
 	}
-	return latestPath, latestTime, nil
+	return session, week, newestPath, newestMod, nil
 }
 
-// sumTranscriptUsage parses a Claude Code transcript JSONL file and sums the
-// token counts from every assistant message that carried a usage block.
-func sumTranscriptUsage(path string) (TokenCounts, error) {
-	var counts TokenCounts
-	f, err := os.Open(path) //nolint:gosec // G304: transcript path derived from local filesystem walk
-	if err != nil {
-		return counts, err
+// sumTranscriptWindows parses a Claude Code transcript JSONL file and sums the
+// token counts from assistant messages into two timestamp-bucketed totals: the
+// session window (>= sessionStart) and the week window (>= weekStart). Messages
+// without a parseable RFC3339 timestamp are skipped — they can't be attributed
+// to a window.
+func sumTranscriptWindows(path string, sessionStart, weekStart time.Time) (session, week TokenCounts, err error) {
+	f, ferr := os.Open(path) //nolint:gosec // G304: transcript path derived from local filesystem walk
+	if ferr != nil {
+		return session, week, ferr
 	}
 	defer func() { _ = f.Close() }()
 
@@ -307,8 +333,9 @@ func sumTranscriptUsage(path string) (TokenCounts, error) {
 		// reuses the pointed-to struct, which would let cache token fields
 		// from the previous line bleed into a turn that omitted them.
 		var line struct {
-			Type    string `json:"type"`
-			Message struct {
+			Type      string `json:"type"`
+			Timestamp string `json:"timestamp"`
+			Message   struct {
 				Usage *struct {
 					InputTokens              int `json:"input_tokens"`
 					OutputTokens             int `json:"output_tokens"`
@@ -323,11 +350,21 @@ func sumTranscriptUsage(path string) (TokenCounts, error) {
 		if line.Type != "assistant" || line.Message.Usage == nil {
 			continue
 		}
+		ts, terr := time.Parse(time.RFC3339, line.Timestamp)
+		if terr != nil || ts.Before(weekStart) {
+			continue
+		}
 		u := line.Message.Usage
-		counts.InputTokens += int64(u.InputTokens)
-		counts.OutputTokens += int64(u.OutputTokens)
-		counts.CacheReadTokens += int64(u.CacheReadInputTokens)
-		counts.CacheCreationTokens += int64(u.CacheCreationInputTokens)
+		c := TokenCounts{
+			InputTokens:         int64(u.InputTokens),
+			OutputTokens:        int64(u.OutputTokens),
+			CacheReadTokens:     int64(u.CacheReadInputTokens),
+			CacheCreationTokens: int64(u.CacheCreationInputTokens),
+		}
+		week.Add(c)
+		if !ts.Before(sessionStart) {
+			session.Add(c)
+		}
 	}
-	return counts, scanner.Err()
+	return session, week, scanner.Err()
 }

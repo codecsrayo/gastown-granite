@@ -82,6 +82,12 @@ type TownSettings struct {
 	// WebTimeouts configures command execution timeouts for the web dashboard.
 	WebTimeouts *WebTimeoutsConfig `json:"web_timeouts,omitempty"`
 
+	// QuotaUsage configures the token ceilings used to render "remaining until
+	// block" bars on the dashboard. Anthropic's real subscription limit is
+	// opaque and weighted, so these are operator-tunable estimates, not the
+	// enforced limit.
+	QuotaUsage *QuotaUsageConfig `json:"quota_usage,omitempty"`
+
 	// WorkerStatus configures activity-age thresholds for worker status classification.
 	WorkerStatus *WorkerStatusConfig `json:"worker_status,omitempty"`
 
@@ -162,6 +168,33 @@ func DefaultWebTimeoutsConfig() *WebTimeoutsConfig {
 		FetchTimeout:      "8s",
 		DefaultRunTimeout: "30s",
 		MaxRunTimeout:     "120s",
+	}
+}
+
+// QuotaUsageConfig configures the per-account token ceilings used to compute
+// the "remaining until block" bars on the dashboard quota mosaic. Both windows
+// mirror the Claude Code /status Usage tab: a rolling session window and a
+// rolling weekly window. Values are token counts (input+output+cache summed).
+//
+// These are estimates: Anthropic does not expose the true remaining-tokens
+// limit, and the enforced limit is weighted per model, so a flat token ceiling
+// is a visual aid, not the actual quota.
+type QuotaUsageConfig struct {
+	// SessionTokenCeiling is the assumed token budget for the rolling session
+	// (5h) window. Default: 8000000.
+	SessionTokenCeiling int64 `json:"session_token_ceiling,omitempty"`
+	// WeeklyTokenCeiling is the assumed token budget for the rolling 7-day
+	// window. Default: 40000000.
+	WeeklyTokenCeiling int64 `json:"weekly_token_ceiling,omitempty"`
+}
+
+// DefaultQuotaUsageConfig returns a QuotaUsageConfig with sensible defaults.
+// The session default matches the dashboard's historical soft ceiling so the
+// session bar's behavior is unchanged when no override is set.
+func DefaultQuotaUsageConfig() *QuotaUsageConfig {
+	return &QuotaUsageConfig{
+		SessionTokenCeiling: 8_000_000,
+		WeeklyTokenCeiling:  40_000_000,
 	}
 }
 
@@ -1600,7 +1633,14 @@ type AccountQuotaState struct {
 	Status    AccountQuotaStatus `json:"status"`               // current status
 	LimitedAt string             `json:"limited_at,omitempty"` // RFC3339 when limit was detected
 	ResetsAt  string             `json:"resets_at,omitempty"`  // Human-readable reset time from provider (e.g. "7pm (America/Los_Angeles)")
-	LastUsed  string             `json:"last_used,omitempty"`  // RFC3339 when account was last assigned to a session
+	// UnlocksAt is ResetsAt resolved to an absolute RFC3339 instant, anchored
+	// to LimitedAt (the detection moment) with next-day rollover so an evening
+	// detection of "12:40am" resolves to the following morning rather than the
+	// past. Refreshed on every scan while the account stays limited so a
+	// provider-pushed reset is tracked. Empty when ResetsAt is unparseable.
+	// Cooldown clear and the prober's due-window read this, not the raw string.
+	UnlocksAt string             `json:"unlocks_at,omitempty"`
+	LastUsed  string             `json:"last_used,omitempty"` // RFC3339 when account was last assigned to a session
 
 	// TokenExpiresAt is the RFC3339 expiry parsed from the OAuth token
 	// (JSON expires_at field or JWT exp claim). Empty when the token is

@@ -112,7 +112,7 @@ func runQuotaStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	if quotaJSON {
-		return printQuotaStatusJSON(acctCfg, state)
+		return printQuotaStatusJSON(acctCfg, state, townRoot)
 	}
 	return printQuotaStatusText(acctCfg, state)
 }
@@ -122,12 +122,12 @@ func runQuotaStatus(cmd *cobra.Command, args []string) error {
 // source of truth. Token usage is aggregated best-effort; if the tmux walk
 // trips, the snapshot still carries status, token expiry, rotation counts, the
 // waiting limited sessions, and the last rotation plan.
-func printQuotaStatusJSON(acctCfg *config.AccountsConfig, state *config.QuotaState) error {
+func printQuotaStatusJSON(acctCfg *config.AccountsConfig, state *config.QuotaState, townRoot string) error {
 	var usageReport *quota.UsageReport
 	if report, err := quota.AggregateUsage(ttmux.NewTmux(), state, acctCfg, "", time.Now()); err == nil {
 		usageReport = report
 	}
-	resp := web.BuildQuotaSummary(state, acctCfg, usageReport, time.Now())
+	resp := web.BuildQuotaSummary(state, acctCfg, usageReport, web.ResolveUsageCeilings(townRoot), time.Now())
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(resp)
@@ -292,14 +292,13 @@ func updateQuotaState(townRoot string, results []quota.ScanResult, acctCfg *conf
 		}
 		mgr.EnsureAccountsTracked(state, acctCfg.Accounts)
 
-		now := time.Now().UTC().Format(time.RFC3339)
+		nowT := time.Now()
+		now := nowT.UTC().Format(time.RFC3339)
 		for _, r := range results {
 			if r.RateLimited && r.AccountHandle != "" {
-				existing := state.Accounts[r.AccountHandle]
-				existing.Status = config.QuotaStatusLimited
-				existing.LimitedAt = now
-				existing.ResetsAt = r.ResetsAt
-				state.Accounts[r.AccountHandle] = existing
+				// MarkLimitedState stamps LimitedAt only on the transition and
+				// resolves UnlocksAt (absolute, rollover-aware) anchored to it.
+				quota.MarkLimitedState(state, r.AccountHandle, r.ResetsAt, nowT)
 			}
 		}
 		recordScanSnapshot(state, results, now)

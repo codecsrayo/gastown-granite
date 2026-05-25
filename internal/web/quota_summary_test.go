@@ -31,7 +31,7 @@ func TestBuildQuotaSummary_CountsByStatusAndDetectsExpiredViaToken(t *testing.T)
 		"gt-a": {Account: "personal", RateLimited: true, ResetsAt: "7pm"},
 	}
 
-	resp := BuildQuotaSummary(state, acctCfg, nil, now)
+	resp := BuildQuotaSummary(state, acctCfg, nil, QuotaUsageCeilings{SessionTokenCeiling: 8_000_000, WeeklyTokenCeiling: 40_000_000}, now)
 
 	if resp.Counters.Available != 2 {
 		t.Errorf("available = %d, want 2", resp.Counters.Available)
@@ -81,7 +81,7 @@ func TestBuildQuotaSummary_PopulatesUnlocksAtFromResetsAt(t *testing.T) {
 		"past": {Status: config.QuotaStatusLimited, ResetsAt: "8am"},
 	}}
 
-	resp := BuildQuotaSummary(state, acctCfg, nil, now)
+	resp := BuildQuotaSummary(state, acctCfg, nil, QuotaUsageCeilings{SessionTokenCeiling: 8_000_000, WeeklyTokenCeiling: 40_000_000}, now)
 
 	byHandle := map[string]QuotaSummaryAccount{}
 	for _, a := range resp.Accounts {
@@ -113,14 +113,21 @@ func TestBuildQuotaSummary_FoldsUsageWhenAvailable(t *testing.T) {
 		"work": {Status: config.QuotaStatusAvailable},
 	}}
 	usage := &quota.UsageReport{Accounts: map[string]quota.AccountUsage{
-		"work": {Handle: "work", Counts: quota.TokenCounts{InputTokens: 42}},
+		"work": {Handle: "work", Counts: quota.TokenCounts{InputTokens: 42}, WeekCounts: quota.TokenCounts{InputTokens: 99}},
 	}}
 
-	resp := BuildQuotaSummary(state, acctCfg, usage, now)
+	ceilings := QuotaUsageCeilings{SessionTokenCeiling: 8_000_000, WeeklyTokenCeiling: 40_000_000}
+	resp := BuildQuotaSummary(state, acctCfg, usage, ceilings, now)
 	if len(resp.Accounts) != 1 {
 		t.Fatalf("accounts = %d", len(resp.Accounts))
 	}
 	if resp.Accounts[0].Usage == nil || resp.Accounts[0].Usage.Counts.InputTokens != 42 {
 		t.Errorf("usage not folded: %+v", resp.Accounts[0].Usage)
+	}
+	if resp.Accounts[0].Usage.WeekCounts.InputTokens != 99 {
+		t.Errorf("week counts not folded: %+v", resp.Accounts[0].Usage)
+	}
+	if resp.UsageCeilings.WeeklyTokenCeiling != 40_000_000 {
+		t.Errorf("ceilings not propagated: %+v", resp.UsageCeilings)
 	}
 }
