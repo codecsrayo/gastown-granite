@@ -1670,6 +1670,13 @@ type AccountQuotaState struct {
 	// LastRotatedAt is the RFC3339 timestamp of the most recent rotation
 	// that used this account as the source.
 	LastRotatedAt string `json:"last_rotated_at,omitempty"`
+
+	// WindowResetAt is the RFC3339 timestamp of the most recent transition
+	// back to available (cooldown clear, manual clear, or probe-confirmed
+	// reset). Anchors the dashboard's "session window" so prior over-budget
+	// usage doesn't keep the bar red after the provider gave us a fresh 5h
+	// budget. Preferred over LimitedAt/LastRotatedAt in windowStartFor.
+	WindowResetAt string `json:"window_reset_at,omitempty"`
 }
 
 // CurrentQuotaVersion is the current schema version for QuotaState.

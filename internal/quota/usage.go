@@ -374,9 +374,12 @@ func resolveSessionAccount(provider UsageProvider, sess string, accounts *config
 }
 
 // windowStartFor returns the earliest time we count tokens against an account
-// for "current window" reporting. Anchored to (in priority): LimitedAt (the
-// limit started counting from here), LastRotatedAt (we picked this token at
-// rotation), or now - UsageWindow as fallback.
+// for "current window" reporting. Anchored to (in priority): WindowResetAt
+// (we just got a fresh budget from the provider — pre-clear tokens are
+// irrelevant), LimitedAt (the limit started counting from here),
+// LastRotatedAt (we picked this token at rotation), or now - UsageWindow as
+// fallback. windowStartFor picks the most recent candidate so a clear that
+// fired one minute ago wins over a stale LastRotatedAt from days ago.
 func windowStartFor(handle string, state *config.QuotaState, now time.Time) time.Time {
 	fallback := now.Add(-UsageWindow)
 	if handle == "" || state == nil {
@@ -387,7 +390,7 @@ func windowStartFor(handle string, state *config.QuotaState, now time.Time) time
 		return fallback
 	}
 
-	candidates := []string{acct.LimitedAt, acct.LastRotatedAt}
+	candidates := []string{acct.WindowResetAt, acct.LimitedAt, acct.LastRotatedAt}
 	var best time.Time
 	for _, c := range candidates {
 		if c == "" {

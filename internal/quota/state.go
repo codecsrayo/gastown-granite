@@ -126,8 +126,9 @@ func (m *Manager) MarkAvailable(handle string) error {
 
 	existing := state.Accounts[handle]
 	state.Accounts[handle] = config.AccountQuotaState{
-		Status:   config.QuotaStatusAvailable,
-		LastUsed: existing.LastUsed,
+		Status:        config.QuotaStatusAvailable,
+		LastUsed:      existing.LastUsed,
+		WindowResetAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
 	return atomicfile.EnsureDirAndWriteJSON(m.statePath(), state)
@@ -265,6 +266,7 @@ func clearExpiredAt(_ *Manager, state *config.QuotaState, now time.Time) []strin
 				TokenLastChecked: acctState.TokenLastChecked,
 				RotationCount:    acctState.RotationCount,
 				LastRotatedAt:    acctState.LastRotatedAt,
+				WindowResetAt:    now.UTC().Format(time.RFC3339),
 			}
 			state.Accounts[handle] = preserved
 			cleared = append(cleared, handle)

@@ -161,8 +161,9 @@ func (p *ProbeExecutor) markAvailable(handle string) error {
 		}
 		existing := state.Accounts[handle]
 		state.Accounts[handle] = config.AccountQuotaState{
-			Status:   config.QuotaStatusAvailable,
-			LastUsed: existing.LastUsed,
+			Status:        config.QuotaStatusAvailable,
+			LastUsed:      existing.LastUsed,
+			WindowResetAt: time.Now().UTC().Format(time.RFC3339),
 		}
 		return p.mgr.SaveUnlocked(state)
 	})
