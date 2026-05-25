@@ -53,7 +53,7 @@ func TestLinuxReadWriteKeychainToken(t *testing.T) {
 	}
 }
 
-func TestLinuxSwapAndRestoreKeychainCredential(t *testing.T) {
+func TestLinuxSwapKeychainCredential(t *testing.T) {
 	targetDir := t.TempDir()
 	sourceDir := t.TempDir()
 
@@ -78,17 +78,9 @@ func TestLinuxSwapAndRestoreKeychainCredential(t *testing.T) {
 	if src := readFile(t, filepath.Join(sourceDir, ".credentials.json")); src != sourceToken {
 		t.Fatalf("source mutated unexpectedly: %q", src)
 	}
-
-	if err := RestoreKeychainToken(backup); err != nil {
-		t.Fatalf("restore: %v", err)
-	}
-	got = readFile(t, filepath.Join(targetDir, ".credentials.json"))
-	if got != targetToken {
-		t.Fatalf("restore did not revert: %q", got)
-	}
 }
 
-func TestLinuxSwapOAuthAccountRoundTrip(t *testing.T) {
+func TestLinuxSwapOAuthAccount(t *testing.T) {
 	targetDir := t.TempDir()
 	sourceDir := t.TempDir()
 
@@ -119,14 +111,6 @@ func TestLinuxSwapOAuthAccountRoundTrip(t *testing.T) {
 	}
 	if !strings.Contains(postSwap, "preserve-me") {
 		t.Fatalf("post-swap dropped unrelated field: %s", postSwap)
-	}
-
-	if err := RestoreOAuthAccount(targetDir, backup); err != nil {
-		t.Fatalf("restore: %v", err)
-	}
-	postRestore := readFile(t, filepath.Join(targetDir, ".claude.json"))
-	if !strings.Contains(postRestore, "target-uuid") {
-		t.Fatalf("post-restore missing original uuid: %s", postRestore)
 	}
 }
 

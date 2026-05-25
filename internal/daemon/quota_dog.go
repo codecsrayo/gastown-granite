@@ -1,10 +1,16 @@
 package daemon
 
 import (
-	"bytes"
 	"context"
-	"os/exec"
+	"fmt"
 	"time"
+
+	agentconfig "github.com/steveyegge/gastown/internal/config"
+	"github.com/steveyegge/gastown/internal/constants"
+	"github.com/steveyegge/gastown/internal/quota"
+	"github.com/steveyegge/gastown/internal/quota/handlers"
+	"github.com/steveyegge/gastown/internal/quota/orchestrator"
+	"github.com/steveyegge/gastown/internal/tmux"
 )
 
 const (
@@ -34,12 +40,10 @@ func quotaDogInterval(config *DaemonPatrolConfig) time.Duration {
 	return defaultQuotaDogInterval
 }
 
-// runQuotaDog executes a quota rotation cycle by shelling out to `gt quota rotate`.
-// The daemon is a thin ticker — `gt quota rotate` handles scanning for rate-limited
-// sessions, planning account assignments, and executing keychain swaps + session restarts.
-//
-// This follows the daemon's "dumb scheduler" principle: the daemon schedules,
-// existing commands do the work. No LLM or molecule needed — pure mechanical rotation.
+// runQuotaDog executes a quota rotation cycle entirely in-process via the
+// quota orchestrator: scan → snapshot → cooldown clear → plan → keychain
+// swap → respawn → state persist → audit. No shell-out. All steps run on
+// the daemon goroutine inside a bounded context.
 func (d *Daemon) runQuotaDog() {
 	if !d.isPatrolActive("quota_dog") {
 		return
@@ -50,29 +54,51 @@ func (d *Daemon) runQuotaDog() {
 	ctx, cancel := context.WithTimeout(d.ctx, quotaDogTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, d.gtPath, "quota", "rotate", "--json") //nolint:gosec // G204: gtPath resolved at daemon init
-	cmd.Dir = d.config.TownRoot
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		// Non-fatal: rotation failure shouldn't crash the daemon.
-		// Common expected failures: <2 accounts, no rate-limited sessions.
-		stderrStr := stderr.String()
-		if stderrStr != "" {
-			d.logger.Printf("quota_dog: rotation failed (non-fatal): %v: %s", err, stderrStr)
-		} else {
-			d.logger.Printf("quota_dog: rotation failed (non-fatal): %v", err)
-		}
+	summary, err := d.tickQuotaOrchestrator(ctx)
+	if err != nil {
+		d.logger.Printf("quota_dog: tick failed (non-fatal): %v", err)
 		return
 	}
+	d.logger.Printf("quota_dog: scan summary total=%d limited=%d near=%d available=%d",
+		summary.Total, summary.Limited, summary.NearLimit, summary.Available)
+}
 
-	outStr := stdout.String()
-	if outStr != "" && outStr != "[]\n" && outStr != "[]" {
-		d.logger.Printf("quota_dog: rotation result: %s", outStr)
-	} else {
-		d.logger.Printf("quota_dog: no rate-limited sessions detected")
+// tickQuotaOrchestrator builds the quota orchestrator (bus + chain + full
+// RotationExecutor) and runs a single Tick. Construction is per-call so
+// account/config reloads are picked up without a daemon restart; the cost
+// is dominated by the tmux walk in ScanAll, not the wiring.
+func (d *Daemon) tickQuotaOrchestrator(ctx context.Context) (orchestrator.Summary, error) {
+	acctCfg, err := agentconfig.LoadAccountsConfig(constants.MayorAccountsPath(d.config.TownRoot))
+	if err != nil {
+		return orchestrator.Summary{}, fmt.Errorf("loading accounts config: %w", err)
 	}
+
+	t := tmux.NewTmux()
+	scanner, err := quota.NewScanner(t, nil, acctCfg)
+	if err != nil {
+		return orchestrator.Summary{}, fmt.Errorf("building scanner: %w", err)
+	}
+	if err := scanner.WithWarningPatterns(nil); err != nil {
+		return orchestrator.Summary{}, fmt.Errorf("enabling near-limit patterns: %w", err)
+	}
+
+	mgr := quota.NewManager(d.config.TownRoot)
+	executor := handlers.NewRotationExecutor(handlers.RotationExecutorConfig{
+		Tmux:     t,
+		Manager:  mgr,
+		Accounts: acctCfg,
+	})
+
+	orch, err := orchestrator.New(orchestrator.Config{
+		Scanner:   scanner,
+		Manager:   mgr,
+		Accounts:  acctCfg,
+		Logger:    d.logger,
+		Executor:  executor,
+		Dismisser: t, // *tmux.Tmux satisfies MenuDismisser
+	})
+	if err != nil {
+		return orchestrator.Summary{}, fmt.Errorf("building orchestrator: %w", err)
+	}
+	return orch.Tick(ctx)
 }

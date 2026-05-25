@@ -88,47 +88,6 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 }
 
-func TestMarkLimited(t *testing.T) {
-	townRoot := setupTestTown(t)
-	mgr := NewManager(townRoot)
-
-	// Save initial state
-	state := &config.QuotaState{
-		Version: config.CurrentQuotaVersion,
-		Accounts: map[string]config.AccountQuotaState{
-			"work": {Status: config.QuotaStatusAvailable, LastUsed: "2025-01-01T00:00:00Z"},
-		},
-	}
-	if err := mgr.Save(state); err != nil {
-		t.Fatalf("Save() error: %v", err)
-	}
-
-	// Mark as limited
-	if err := mgr.MarkLimited("work", "7:00 PM PST"); err != nil {
-		t.Fatalf("MarkLimited() error: %v", err)
-	}
-
-	loaded, err := mgr.Load()
-	if err != nil {
-		t.Fatalf("Load() error: %v", err)
-	}
-
-	acct := loaded.Accounts["work"]
-	if acct.Status != config.QuotaStatusLimited {
-		t.Errorf("expected status limited, got %s", acct.Status)
-	}
-	if acct.LimitedAt == "" {
-		t.Error("expected LimitedAt to be set")
-	}
-	if acct.ResetsAt != "7:00 PM PST" {
-		t.Errorf("expected ResetsAt '7:00 PM PST', got %q", acct.ResetsAt)
-	}
-	// LastUsed should be preserved
-	if acct.LastUsed != "2025-01-01T00:00:00Z" {
-		t.Errorf("expected LastUsed preserved, got %q", acct.LastUsed)
-	}
-}
-
 func TestMarkAvailable(t *testing.T) {
 	townRoot := setupTestTown(t)
 	mgr := NewManager(townRoot)
@@ -411,25 +370,6 @@ func TestRecordSwap(t *testing.T) {
 	RecordSwap(state, "/home/user/.claude-accounts/clh", "dev2")
 	if state.ActiveSwaps["/home/user/.claude-accounts/clh"] != "dev2" {
 		t.Errorf("expected dev2 after overwrite, got %s", state.ActiveSwaps["/home/user/.claude-accounts/clh"])
-	}
-}
-
-func TestClearSwap(t *testing.T) {
-	state := &config.QuotaState{
-		Accounts: make(map[string]config.AccountQuotaState),
-		ActiveSwaps: map[string]string{
-			"/home/user/.claude-accounts/clh": "dev1",
-			"/home/user/.claude-accounts/xyz": "dev2",
-		},
-	}
-
-	ClearSwap(state, "/home/user/.claude-accounts/clh")
-
-	if len(state.ActiveSwaps) != 1 {
-		t.Fatalf("expected 1 active swap after clear, got %d", len(state.ActiveSwaps))
-	}
-	if _, ok := state.ActiveSwaps["/home/user/.claude-accounts/clh"]; ok {
-		t.Error("expected clh swap to be cleared")
 	}
 }
 

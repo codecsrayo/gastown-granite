@@ -123,6 +123,22 @@ func PlanRotation(scanner *Scanner, mgr *Manager, acctCfg *config.AccountsConfig
 	// The caller persists confirmed rate-limit state after execution.
 	available := mgr.AvailableAccounts(state)
 
+	// Exclude accounts that are the live active account of a hard rate-limited
+	// session in THIS scan. resolveAccountHandle is GT_QUOTA_ACCOUNT-aware, so
+	// r.AccountHandle names the account whose token is actually limited right
+	// now. Persisted status stays "available" (we never persist scan-detected
+	// limits — see above), so without this the planner would keep assigning
+	// other sessions ONTO a currently-limited account, respawn them straight
+	// into the rate-limit menu, and thrash. This exclusion is transient (per
+	// scan), so it can't poison the pool across cycles the way a persisted
+	// status flip would.
+	liveLimited := make(map[string]bool)
+	for _, r := range results {
+		if r.RateLimited && r.AccountHandle != "" {
+			liveLimited[r.AccountHandle] = true
+		}
+	}
+
 	// Inspect every registered account's token so callers can persist the
 	// expiry on the dashboard, then validate the candidate pool — skip
 	// accounts whose tokens are known expired so we don't swap a bad token
@@ -140,6 +156,13 @@ func PlanRotation(scanner *Scanner, mgr *Manager, acctCfg *config.AccountsConfig
 	for _, handle := range available {
 		if handle == opts.FromAccount {
 			continue // rotating away from this account, not a candidate
+		}
+		if liveLimited[handle] {
+			// Active account of a currently rate-limited session — not a
+			// safe rotation target even though its persisted status says
+			// available.
+			skipped[handle] = "currently rate-limited (live scan)"
+			continue
 		}
 		acct, ok := acctCfg.Accounts[handle]
 		if !ok {

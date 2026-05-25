@@ -811,3 +811,87 @@ func TestPlanRotation_MixedHardAndNearLimit(t *testing.T) {
 		t.Fatalf("expected 2 assignments, got %d", len(plan.Assignments))
 	}
 }
+
+// TestPlanRotation_ExcludesLiveLimitedAccounts verifies the planner never
+// rotates a session ONTO an account that another session is currently
+// hard rate-limited on, even when that account's persisted status is still
+// "available". Without this, sessions thrash by respawning straight into the
+// rate-limit menu (see hq-boot wedge investigation).
+func TestPlanRotation_ExcludesLiveLimitedAccounts(t *testing.T) {
+	setupTestRegistry(t)
+
+	// Two sessions, each hard-limited on a different account (alpha, beta).
+	// Only gamma is genuinely free. The planner must assign exclusively to
+	// gamma — never alpha or beta, which are live-limited right now.
+	tmux := &mockTmux{
+		sessions: []string{"gt-crew-bear", "gt-crew-wolf"},
+		paneContent: map[string]string{
+			"gt-crew-bear": "Stop and wait for limit to reset",
+			"gt-crew-wolf": "You've hit your limit · resets 8pm",
+		},
+		envVars: map[string]map[string]string{
+			"gt-crew-bear": {"CLAUDE_CONFIG_DIR": "/home/user/.claude-accounts/alpha"},
+			"gt-crew-wolf": {"CLAUDE_CONFIG_DIR": "/home/user/.claude-accounts/beta"},
+		},
+	}
+
+	accounts := &config.AccountsConfig{
+		Accounts: map[string]config.Account{
+			"alpha": {ConfigDir: "/home/user/.claude-accounts/alpha"},
+			"beta":  {ConfigDir: "/home/user/.claude-accounts/beta"},
+			"gamma": {ConfigDir: "/home/user/.claude-accounts/gamma"},
+		},
+	}
+
+	scanner, err := NewScanner(tmux, nil, accounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	townRoot := setupTestTown(t)
+	mgr := NewManager(townRoot)
+	// All three accounts persisted as available — alpha/beta are limited only
+	// in the live scan, not in state.
+	state := &config.QuotaState{
+		Version: config.CurrentQuotaVersion,
+		Accounts: map[string]config.AccountQuotaState{
+			"alpha": {Status: config.QuotaStatusAvailable, LastUsed: "2025-01-01T01:00:00Z"},
+			"beta":  {Status: config.QuotaStatusAvailable, LastUsed: "2025-01-01T02:00:00Z"},
+			"gamma": {Status: config.QuotaStatusAvailable, LastUsed: "2025-01-01T03:00:00Z"},
+		},
+	}
+	if err := mgr.Save(state); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanRotation(scanner, mgr, accounts, PlanOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Every assignment must target gamma; alpha and beta are live-limited.
+	for session, target := range plan.Assignments {
+		if target == "alpha" || target == "beta" {
+			t.Errorf("session %s assigned to live-limited account %q", session, target)
+		}
+	}
+
+	// alpha and beta should be reported as skipped with the live-limit reason.
+	if reason := plan.SkippedAccounts["alpha"]; reason == "" {
+		t.Error("expected alpha to be skipped (live rate-limited)")
+	}
+	if reason := plan.SkippedAccounts["beta"]; reason == "" {
+		t.Error("expected beta to be skipped (live rate-limited)")
+	}
+
+	// gamma must remain a valid candidate.
+	foundGamma := false
+	for _, h := range plan.AvailableAccounts {
+		if h == "gamma" {
+			foundGamma = true
+		}
+	}
+	if !foundGamma {
+		t.Errorf("expected gamma in available pool, got %v", plan.AvailableAccounts)
+	}
+}

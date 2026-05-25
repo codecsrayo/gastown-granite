@@ -111,30 +111,6 @@ func (m *Manager) SaveUnlocked(state *config.QuotaState) error {
 	return atomicfile.EnsureDirAndWriteJSON(m.statePath(), state)
 }
 
-// MarkLimited marks an account as rate-limited with an optional reset time.
-func (m *Manager) MarkLimited(handle string, resetsAt string) error {
-	unlock, err := m.lock()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-
-	state, err := m.Load()
-	if err != nil {
-		return err
-	}
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	state.Accounts[handle] = config.AccountQuotaState{
-		Status:    config.QuotaStatusLimited,
-		LimitedAt: now,
-		ResetsAt:  resetsAt,
-		LastUsed:  state.Accounts[handle].LastUsed,
-	}
-
-	return atomicfile.EnsureDirAndWriteJSON(m.statePath(), state)
-}
-
 // MarkAvailable marks an account as available (not rate-limited).
 func (m *Manager) MarkAvailable(handle string) error {
 	unlock, err := m.lock()
@@ -217,12 +193,6 @@ func RecordSwap(state *config.QuotaState, targetConfigDir, sourceHandle string) 
 		state.ActiveSwaps = make(map[string]string)
 	}
 	state.ActiveSwaps[targetConfigDir] = sourceHandle
-}
-
-// ClearSwap removes a swap mapping when the config dir is no longer swapped.
-// The caller must hold the quota lock or call this within WithLock.
-func ClearSwap(state *config.QuotaState, targetConfigDir string) {
-	delete(state.ActiveSwaps, targetConfigDir)
 }
 
 // ResolveSwapSourceDirs resolves activeSwaps (targetConfigDir -> accountHandle)

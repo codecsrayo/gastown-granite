@@ -82,15 +82,6 @@ func SwapKeychainCredential(targetConfigDir, sourceConfigDir string) (*KeychainC
 	}, nil
 }
 
-// RestoreKeychainToken writes the backup credentials back, undoing a prior
-// SwapKeychainCredential.
-func RestoreKeychainToken(backup *KeychainCredential) error {
-	if backup == nil {
-		return nil
-	}
-	return WriteKeychainToken(backup.ServiceName, "claude-code", backup.Token)
-}
-
 // SwapOAuthAccount copies the oauthAccount field from the source config dir's
 // .claude.json into the target's. Mirrors the Darwin implementation so that
 // Claude Code reports the correct accountUuid/organizationUuid after rotation.
@@ -138,28 +129,6 @@ func SwapOAuthAccount(targetConfigDir, sourceConfigDir string) (json.RawMessage,
 		return nil, fmt.Errorf("writing target .claude.json: %w", err)
 	}
 	return backup, nil
-}
-
-// RestoreOAuthAccount writes the backup oauthAccount back to the target.
-func RestoreOAuthAccount(targetConfigDir string, backup json.RawMessage) error {
-	if backup == nil {
-		return nil
-	}
-	targetPath := filepath.Join(expandTilde(targetConfigDir), ".claude.json")
-	data, err := os.ReadFile(targetPath)
-	if err != nil {
-		return fmt.Errorf("reading target .claude.json: %w", err)
-	}
-	var doc map[string]json.RawMessage
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return fmt.Errorf("parsing target .claude.json: %w", err)
-	}
-	doc["oauthAccount"] = backup
-	out, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshaling target .claude.json: %w", err)
-	}
-	return os.WriteFile(targetPath, out, 0600)
 }
 
 // InspectKeychainToken parses the stored credentials and returns the expiry

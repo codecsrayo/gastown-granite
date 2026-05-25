@@ -1,10 +1,15 @@
 package daemon
 
 import (
-	"bytes"
 	"context"
-	"os/exec"
+	"fmt"
 	"time"
+
+	agentconfig "github.com/steveyegge/gastown/internal/config"
+	"github.com/steveyegge/gastown/internal/constants"
+	"github.com/steveyegge/gastown/internal/events"
+	"github.com/steveyegge/gastown/internal/quota"
+	"github.com/steveyegge/gastown/internal/quota/handlers"
 )
 
 const (
@@ -17,6 +22,11 @@ const (
 	// quotaProberTimeout bounds a single probe cycle. Each account probe has its
 	// own inner timeout; this caps the whole batch.
 	quotaProberTimeout = 3 * time.Minute
+
+	// quotaProberLead is the look-ahead window: an account is probed when its
+	// ResetsAt is within this duration of now. Mirrors the historical
+	// `gt quota probe --lead 5m` default.
+	quotaProberLead = 5 * time.Minute
 )
 
 // QuotaProberConfig holds configuration for the quota_prober patrol.
@@ -40,14 +50,11 @@ func quotaProberInterval(config *DaemonPatrolConfig) time.Duration {
 	return defaultQuotaProberInterval
 }
 
-// runQuotaProber probes limited accounts by shelling out to `gt quota probe`.
-// The provider's shown reset time is imprecise, so instead of trusting it the
-// prober actively tests each due account and, on a clean probe, marks it
-// available and emits a quota_reactivated event.
-//
-// Like quota_dog, this follows the daemon's "dumb scheduler" principle: the
-// daemon schedules, `gt quota probe` does the work (gating, probing, state
-// update, event emission).
+// runQuotaProber probes limited accounts in-process via handlers.ProbeExecutor.
+// The provider's shown reset time is imprecise, so the prober actively tests
+// each due account; clean probes mark the account available and emit
+// quota_reactivated events. No shell-out — same execution path as the
+// `gt quota probe` CLI.
 func (d *Daemon) runQuotaProber() {
 	if !d.isPatrolActive("quota_prober") {
 		return
@@ -58,29 +65,51 @@ func (d *Daemon) runQuotaProber() {
 	ctx, cancel := context.WithTimeout(d.ctx, quotaProberTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, d.gtPath, "quota", "probe", "--json") //nolint:gosec // G204: gtPath resolved at daemon init
-	cmd.Dir = d.config.TownRoot
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		// Non-fatal: probe failure shouldn't crash the daemon.
-		// Common expected failures: no accounts configured, claude not in PATH.
-		stderrStr := stderr.String()
-		if stderrStr != "" {
-			d.logger.Printf("quota_prober: probe failed (non-fatal): %v: %s", err, stderrStr)
-		} else {
-			d.logger.Printf("quota_prober: probe failed (non-fatal): %v", err)
-		}
+	reports, err := d.probeAccounts(ctx)
+	if err != nil {
+		d.logger.Printf("quota_prober: probe failed (non-fatal): %v", err)
 		return
 	}
 
-	outStr := stdout.String()
-	if outStr != "" && outStr != "[]\n" && outStr != "[]" {
-		d.logger.Printf("quota_prober: probe result: %s", outStr)
-	} else {
-		d.logger.Printf("quota_prober: no limited accounts due for probing")
+	reactivated, stillLimited := 0, 0
+	for _, r := range reports {
+		switch {
+		case r.Reactivated:
+			reactivated++
+		case r.StillLimited:
+			stillLimited++
+		}
 	}
+	if reactivated == 0 && stillLimited == 0 {
+		d.logger.Printf("quota_prober: no limited accounts due for probing")
+		return
+	}
+	d.logger.Printf("quota_prober: probed %d (reactivated=%d still_limited=%d)",
+		reactivated+stillLimited, reactivated, stillLimited)
+}
+
+func (d *Daemon) probeAccounts(ctx context.Context) ([]handlers.ProbeReport, error) {
+	acctCfg, err := agentconfig.LoadAccountsConfig(constants.MayorAccountsPath(d.config.TownRoot))
+	if err != nil {
+		return nil, fmt.Errorf("loading accounts config: %w", err)
+	}
+
+	claudePath, err := handlers.ResolveClaudeBinary()
+	if err != nil {
+		return nil, fmt.Errorf("claude binary not in PATH: %w", err)
+	}
+	runner := quota.NewClaudeProbeRunner(claudePath, "", quota.DefaultProbePrompt, quota.DefaultProbeTimeout)
+
+	mgr := quota.NewManager(d.config.TownRoot)
+	exec := handlers.NewProbeExecutor(handlers.ProbeExecutorConfig{
+		Manager:  mgr,
+		Accounts: acctCfg,
+		Runner:   runner,
+		Lead:     quotaProberLead,
+		Emit: func(handle, prevResetsAt string) {
+			_ = events.LogFeed(events.TypeQuotaReactivated, "quota",
+				events.QuotaReactivatedPayload(handle, prevResetsAt))
+		},
+	})
+	return exec.Probe(ctx, nil)
 }

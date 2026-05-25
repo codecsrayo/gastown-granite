@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -18,9 +19,10 @@ import (
 	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/events"
 	"github.com/steveyegge/gastown/internal/quota"
+	"github.com/steveyegge/gastown/internal/quota/handlers"
+	qe "github.com/steveyegge/gastown/internal/quota/quotaevents"
 	"github.com/steveyegge/gastown/internal/style"
 	ttmux "github.com/steveyegge/gastown/internal/tmux"
-	"github.com/steveyegge/gastown/internal/util"
 	"github.com/steveyegge/gastown/internal/web"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
@@ -134,6 +136,19 @@ func printQuotaStatusJSON(acctCfg *config.AccountsConfig, state *config.QuotaSta
 func printQuotaStatusText(acctCfg *config.AccountsConfig, state *config.QuotaState) error {
 	available := 0
 	limited := 0
+	inUse := 0
+
+	// Aggregate live usage so we can mark which accounts have active sessions
+	// right now. Best-effort: if the tmux walk fails, sessionsByAccount stays
+	// empty and we simply omit the in-use markers.
+	sessionsByAccount := make(map[string]int)
+	if report, err := quota.AggregateUsage(ttmux.NewTmux(), state, acctCfg, "", time.Now()); err == nil && report != nil {
+		for handle, usage := range report.Accounts {
+			if n := len(usage.Sessions); n > 0 {
+				sessionsByAccount[handle] = n
+			}
+		}
+	}
 
 	fmt.Println(style.Bold.Render("Account Quota Status"))
 	fmt.Println()
@@ -146,9 +161,16 @@ func printQuotaStatusText(acctCfg *config.AccountsConfig, state *config.QuotaSta
 			status = config.QuotaStatusAvailable
 		}
 
-		// Handle marker and default indicator
+		// Left marker: ▸ if the account currently has active sessions,
+		// otherwise * for the default account, else blank. In-use takes
+		// precedence because it's the more actionable signal.
+		sessionCount := sessionsByAccount[handle]
 		marker := " "
-		if handle == acctCfg.Default {
+		switch {
+		case sessionCount > 0:
+			marker = style.Success.Render("▸")
+			inUse++
+		case handle == acctCfg.Default:
 			marker = "*"
 		}
 
@@ -176,12 +198,25 @@ func printQuotaStatusText(acctCfg *config.AccountsConfig, state *config.QuotaSta
 			email = style.Dim.Render(" <" + acct.Email + ">")
 		}
 
-		fmt.Printf(" %s %-12s %s%s\n", marker, handle, badge, email)
+		// In-use tag: session count, plus the default tag when applicable.
+		var tags string
+		if sessionCount > 0 {
+			noun := "session"
+			if sessionCount > 1 {
+				noun = "sessions"
+			}
+			tags += style.Info.Render(fmt.Sprintf("  in use · %d %s", sessionCount, noun))
+		}
+		if handle == acctCfg.Default {
+			tags += style.Dim.Render("  (default)")
+		}
+
+		fmt.Printf(" %s %-12s %s%s%s\n", marker, handle, badge, email, tags)
 	}
 
 	fmt.Println()
-	fmt.Printf(" %s %d available, %d limited\n",
-		style.Info.Render("Summary:"), available, limited)
+	fmt.Printf(" %s %d available, %d limited, %d in use\n",
+		style.Info.Render("Summary:"), available, limited, inUse)
 
 	return nil
 }
@@ -330,35 +365,6 @@ func persistPlanArtifacts(mgr *quota.Manager, plan *quota.RotatePlan) error {
 		quota.RecordLastPlan(state, planSnapshotFrom(plan))
 		return mgr.SaveUnlocked(state)
 	})
-}
-
-// resetsBySession maps each rate-limited session to its parsed reset time so
-// the rotate path can stamp ResetsAt on the account it rotates away from.
-func resetsBySession(limited []quota.ScanResult) map[string]string {
-	m := make(map[string]string, len(limited))
-	for _, r := range limited {
-		if r.ResetsAt != "" {
-			m[r.Session] = r.ResetsAt
-		}
-	}
-	return m
-}
-
-// oldAccountBySession maps each rate-limited session to the account handle the
-// scanner resolved as *active* (GT_QUOTA_ACCOUNT-aware). The execute path must
-// mark this account limited — not the one inferred from CLAUDE_CONFIG_DIR. After
-// a keychain swap the config dir still maps to the original account while the
-// active token belongs to a different one, so resolving by config dir alone
-// marks the wrong account and leaves the truly-limited account "available"
-// (hence eligible for the next rotation).
-func oldAccountBySession(limited []quota.ScanResult) map[string]string {
-	m := make(map[string]string, len(limited))
-	for _, r := range limited {
-		if r.AccountHandle != "" {
-			m[r.Session] = r.AccountHandle
-		}
-	}
-	return m
 }
 
 // planSnapshotFrom freezes a plan into the persistence schema.
@@ -724,35 +730,55 @@ func runQuotaRotate(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Execute rotation with keychain swap deduplication.
-	// Track which config dirs have already been swapped so we only do
-	// one keychain operation per config dir, not per session.
+	// Execute rotation in-process via the shared RotationExecutor. Same
+	// code path the daemon's quota_dog uses — keychain swap, respawn, and
+	// state persist all run on this goroutine, with audit events emitted
+	// per result so the dashboard sees the same signal regardless of who
+	// drove the rotation.
 	if !quotaJSON {
 		fmt.Println()
 	}
-	swappedConfigDirs := make(map[string]*quota.KeychainCredential)
-	resetsBySession := resetsBySession(plan.LimitedSessions)
-	oldAccountBySession := oldAccountBySession(plan.LimitedSessions)
-	var results []quota.RotateResult
-	for _, session := range sortedSessions {
-		newAccount := plan.Assignments[session]
-		result := executeKeychainRotation(t, mgr, acctCfg, session, newAccount, oldAccountBySession[session], resetsBySession[session], swappedConfigDirs)
-		results = append(results, result)
-		emitRotationOutcome(result)
+	executor := handlers.NewRotationExecutor(handlers.RotationExecutorConfig{
+		Tmux:     t,
+		Manager:  mgr,
+		Accounts: acctCfg,
+	})
+	results := executor.Execute(cmd.Context(), plan)
+	audit := handlers.AuditEmitter{}
+	for _, result := range results {
+		nowUTC := time.Now().UTC()
+		if result.Rotated {
+			audit.Emit(qe.SessionRespawned{
+				Session:      result.Session,
+				FromAccount:  result.OldAccount,
+				ToAccount:    result.NewAccount,
+				Resumed:      result.ResumedSession != "",
+				KeychainSwap: result.KeychainSwap,
+				At:           nowUTC,
+			})
+		} else if result.Error != "" {
+			audit.Emit(qe.RotationFailed{
+				Session:   result.Session,
+				ToAccount: result.NewAccount,
+				Reason:    result.Error,
+				At:        nowUTC,
+			})
+		}
 
-		if !quotaJSON {
-			if result.Rotated {
-				suffix := ""
-				if result.ResumedSession != "" {
-					suffix = style.Dim.Render(" (resumed)")
-				}
-				if result.KeychainSwap {
-					suffix += style.Dim.Render(" [keychain]")
-				}
-				fmt.Printf(" %s %s → %s%s\n", style.SuccessPrefix, result.Session, result.NewAccount, suffix)
-			} else if result.Error != "" {
-				fmt.Printf(" %s %s: %s\n", style.ErrorPrefix, result.Session, result.Error)
+		if quotaJSON {
+			continue
+		}
+		if result.Rotated {
+			suffix := ""
+			if result.ResumedSession != "" {
+				suffix = style.Dim.Render(" (resumed)")
 			}
+			if result.KeychainSwap {
+				suffix += style.Dim.Render(" [keychain]")
+			}
+			fmt.Printf(" %s %s → %s%s\n", style.SuccessPrefix, result.Session, result.NewAccount, suffix)
+		} else if result.Error != "" {
+			fmt.Printf(" %s %s: %s\n", style.ErrorPrefix, result.Session, result.Error)
 		}
 	}
 
@@ -848,16 +874,6 @@ Examples:
 	RunE: runQuotaProbe,
 }
 
-// probeReport is the per-account outcome of a probe pass.
-type probeReport struct {
-	Handle       string `json:"handle"`
-	ConfigDir    string `json:"config_dir,omitempty"`
-	Reactivated  bool   `json:"reactivated"`
-	StillLimited bool   `json:"still_limited"`
-	Skipped      bool   `json:"skipped,omitempty"`
-	Reason       string `json:"reason,omitempty"`
-}
-
 func runQuotaProbe(cmd *cobra.Command, args []string) error {
 	townRoot, err := workspace.FindFromCwd()
 	if err != nil {
@@ -869,78 +885,29 @@ func runQuotaProbe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading accounts config: %w", err)
 	}
 
-	mgr := quota.NewManager(townRoot)
-	state, err := mgr.Load()
-	if err != nil {
-		return fmt.Errorf("loading quota state: %w", err)
-	}
-
-	claudePath, err := exec.LookPath("claude")
+	claudePath, err := handlers.ResolveClaudeBinary()
 	if err != nil {
 		return fmt.Errorf("claude binary not found in PATH (required for probing): %w", err)
 	}
 
-	// Resolve the set of handles to probe. Explicit args bypass the due-window
-	// gate (the operator asked for it); a bare invocation probes limited accounts.
-	explicit := len(args) > 0
-	targets := args
-	if !explicit {
-		for handle, acctState := range state.Accounts {
-			if acctState.Status == config.QuotaStatusLimited {
-				targets = append(targets, handle)
-			}
-		}
-		sort.Strings(targets)
-	}
-
+	mgr := quota.NewManager(townRoot)
 	runner := quota.NewClaudeProbeRunner(claudePath, probeModel, quota.DefaultProbePrompt, quota.DefaultProbeTimeout)
-	now := time.Now()
-	reports := make([]probeReport, 0, len(targets))
 
-	for _, handle := range targets {
-		acctState := state.Accounts[handle]
-		rep := probeReport{Handle: handle}
-
-		if acctState.Status != config.QuotaStatusLimited {
-			rep.Skipped = true
-			rep.Reason = "not limited"
-			reports = append(reports, rep)
-			continue
-		}
-
-		if !explicit && !probeAll && !quota.ShouldProbe(acctState, now, probeLead) {
-			rep.Skipped = true
-			rep.Reason = "not due (before reset window)"
-			reports = append(reports, rep)
-			continue
-		}
-
-		acct := acctCfg.GetAccount(handle)
-		if acct == nil || acct.ConfigDir == "" {
-			rep.Skipped = true
-			rep.Reason = "no config dir registered"
-			reports = append(reports, rep)
-			continue
-		}
-		rep.ConfigDir = acct.ConfigDir
-
-		output, runErr := runner(cmd.Context(), acct.ConfigDir)
-		outcome := quota.ClassifyProbe(output, runErr)
-
-		if outcome.Enabled {
-			if err := mgr.MarkAvailable(handle); err != nil {
-				return fmt.Errorf("marking %s available: %w", handle, err)
-			}
+	executor := handlers.NewProbeExecutor(handlers.ProbeExecutorConfig{
+		Manager:  mgr,
+		Accounts: acctCfg,
+		Runner:   runner,
+		Lead:     probeLead,
+		All:      probeAll,
+		Emit: func(handle, prevResetsAt string) {
 			_ = events.LogFeed(events.TypeQuotaReactivated, "quota",
-				events.QuotaReactivatedPayload(handle, acctState.ResetsAt))
-			rep.Reactivated = true
-		} else {
-			rep.StillLimited = true
-			if outcome.Err != nil && !outcome.RateLimited {
-				rep.Reason = "probe failed: " + outcome.Err.Error()
-			}
-		}
-		reports = append(reports, rep)
+				events.QuotaReactivatedPayload(handle, prevResetsAt))
+		},
+	})
+
+	reports, err := executor.Probe(cmd.Context(), args)
+	if err != nil {
+		return err
 	}
 
 	if quotaJSON {
@@ -951,7 +918,7 @@ func runQuotaProbe(cmd *cobra.Command, args []string) error {
 	return printProbeText(reports)
 }
 
-func printProbeText(reports []probeReport) error {
+func printProbeText(reports []handlers.ProbeReport) error {
 	reactivated := 0
 	probed := 0
 	for _, r := range reports {
@@ -989,181 +956,6 @@ func accountHandles(acctCfg *config.AccountsConfig) []string {
 	slices.Sort(handles)
 	return handles
 }
-
-// executeKeychainRotation performs context-preserving rotation for a single session.
-// Instead of changing CLAUDE_CONFIG_DIR (which destroys context), it swaps the
-// macOS Keychain OAuth token from an available account into the rate-limited
-// account's keychain entry, then respawns with the SAME config dir so /resume works.
-//
-// swappedConfigDirs tracks which config dirs have already been swapped in this
-// rotation batch — multiple sessions sharing a config dir only need one swap.
-func executeKeychainRotation(
-	t *ttmux.Tmux,
-	mgr *quota.Manager,
-	acctCfg *config.AccountsConfig,
-	session, newAccount, oldAccount, oldResetsAt string,
-	swappedConfigDirs map[string]*quota.KeychainCredential,
-) quota.RotateResult {
-	result := quota.RotateResult{
-		Session:    session,
-		NewAccount: newAccount,
-	}
-
-	// Read the session's current CLAUDE_CONFIG_DIR, falling back to ~/.claude
-	currentConfigDir, err := t.GetEnvironment(session, "CLAUDE_CONFIG_DIR")
-	if err != nil || strings.TrimSpace(currentConfigDir) == "" {
-		home, homeErr := os.UserHomeDir()
-		if homeErr != nil {
-			result.Error = fmt.Sprintf("reading CLAUDE_CONFIG_DIR: %v", err)
-			return result
-		}
-		currentConfigDir = home + "/.claude"
-	}
-
-	// Resolve old account handle. Prefer the scanner-resolved active account
-	// (threaded in via oldAccount) — it is GT_QUOTA_ACCOUNT-aware, so it names
-	// the account whose token is actually live after any prior keychain swap.
-	// Fall back to matching CLAUDE_CONFIG_DIR only when the scanner could not
-	// resolve a handle (e.g. an unregistered config dir).
-	result.OldAccount = oldAccount
-	if result.OldAccount == "" {
-		for handle, acct := range acctCfg.Accounts {
-			if acct.ConfigDir == currentConfigDir || util.ExpandHome(acct.ConfigDir) == currentConfigDir {
-				result.OldAccount = handle
-				break
-			}
-		}
-	}
-
-	// Get the source (new account) config dir — this is where the fresh token lives
-	newAcct, ok := acctCfg.Accounts[newAccount]
-	if !ok {
-		result.Error = fmt.Sprintf("account %q not found in config", newAccount)
-		return result
-	}
-	sourceConfigDir := util.ExpandHome(newAcct.ConfigDir)
-
-	// Swap keychain credential AND oauthAccount identity (deduplicated per config dir)
-	if _, alreadySwapped := swappedConfigDirs[currentConfigDir]; !alreadySwapped {
-		backup, err := quota.SwapKeychainCredential(currentConfigDir, sourceConfigDir)
-		if err != nil {
-			result.Error = fmt.Sprintf("keychain swap failed: %v", err)
-			return result
-		}
-		swappedConfigDirs[currentConfigDir] = backup
-
-		// Also swap the oauthAccount in .claude.json so Claude Code identifies
-		// as the new account (correct accountUuid/organizationUuid for rate limits).
-		if _, err := quota.SwapOAuthAccount(currentConfigDir, sourceConfigDir); err != nil {
-			style.PrintWarning("could not swap oauthAccount for %s: %v", session, err)
-		}
-
-		result.KeychainSwap = true
-	}
-
-	// Build restart command with --continue to resume previous conversation.
-	// ContinueSession omits the beacon prompt and adds --continue, so the
-	// agent silently resumes where it left off without a fresh handoff cycle.
-	restartCmd, err := buildRestartCommandWithOpts(session, buildRestartCommandOpts{
-		ContinueSession: true,
-	})
-	if err != nil {
-		// Session types that can't be restarted (e.g., hq-boot/deacon) still
-		// benefit from the keychain swap above — mark as rotated without restart.
-		result.Rotated = true
-		result.Error = fmt.Sprintf("keychain swapped but could not restart: %v", err)
-		return result
-	}
-
-	// Keep the SAME config dir — this is what makes /resume work.
-	// The keychain swap already replaced the auth token in this dir's keychain entry.
-	// Set GT_QUOTA_ACCOUNT so the scanner knows which account's token is actually active
-	// (the config dir still maps to the old account).
-	restartCmd = config.PrependEnv(restartCmd, map[string]string{
-		"CLAUDE_CONFIG_DIR": currentConfigDir,
-		"GT_QUOTA_ACCOUNT":  newAccount,
-	})
-
-	// Get target pane
-	pane, err := t.GetPaneID(session)
-	if err != nil {
-		result.Error = fmt.Sprintf("getting pane: %v", err)
-		return result
-	}
-
-	// Set remain-on-exit to prevent pane destruction during restart
-	if err := t.SetRemainOnExit(pane, true); err != nil {
-		style.PrintWarning("could not set remain-on-exit for %s: %v", session, err)
-	}
-
-	// Kill existing processes
-	if err := t.KillPaneProcesses(pane); err != nil {
-		style.PrintWarning("could not kill pane processes for %s: %v", session, err)
-	}
-
-	// Clear scrollback
-	if err := t.ClearHistory(pane); err != nil {
-		style.PrintWarning("could not clear history for %s: %v", session, err)
-	}
-
-	// Respawn with same config dir (fresh token already in keychain)
-	if err := t.RespawnPane(pane, restartCmd); err != nil {
-		result.Error = fmt.Sprintf("respawning pane: %v", err)
-		return result
-	}
-
-	// Set GT_QUOTA_ACCOUNT in the tmux session environment so the scanner
-	// can resolve the active account. The shell export in restartCmd only
-	// affects the process env; this sets it where GetEnvironment reads it.
-	if err := t.SetEnvironment(session, "GT_QUOTA_ACCOUNT", newAccount); err != nil {
-		style.PrintWarning("could not set GT_QUOTA_ACCOUNT for %s: %v", session, err)
-	}
-
-	// Context recovery is handled by --continue in the restart command.
-	result.ResumedSession = "continue"
-
-	// Update quota state: mark account as used, bump rotation counter, and
-	// record the swap mapping so SyncSwappedTokens can later propagate fresh
-	// tokens if the source account re-authenticates.
-	if err := mgr.WithLock(func() error {
-		state, loadErr := mgr.Load()
-		if loadErr != nil {
-			return loadErr
-		}
-		now := time.Now()
-		quota.RecordRotation(state, newAccount, now)
-		quota.RecordSwap(state, currentConfigDir, newAccount)
-		// Record the account we rotated *off* as limited so the dashboard
-		// shows it blocked (with its unlock countdown). Skip when the old
-		// account is unknown or identical to the incoming one.
-		if result.OldAccount != "" && result.OldAccount != newAccount {
-			quota.MarkLimitedState(state, result.OldAccount, oldResetsAt, now)
-		}
-		return mgr.SaveUnlocked(state)
-	}); err != nil {
-		style.PrintWarning("could not update quota state for %s: %v", newAccount, err)
-	}
-
-	result.Rotated = true
-	return result
-}
-
-// emitRotationOutcome fires quota_rotated for a successful rotation or
-// quota_swap_failed when the result carries an error. Best-effort.
-func emitRotationOutcome(r quota.RotateResult) {
-	if r.Rotated {
-		_ = events.LogFeed(events.TypeQuotaRotated, "quota",
-			events.QuotaRotatedPayload(r.Session, r.OldAccount, r.NewAccount,
-				r.ResumedSession != "", r.KeychainSwap))
-		return
-	}
-	if r.Error != "" {
-		_ = events.LogFeed(events.TypeQuotaSwapFailed, "quota",
-			events.QuotaSwapFailedPayload(r.Session, r.NewAccount, r.Error))
-	}
-}
-
-
 
 // Watch command flags
 var (
@@ -1325,21 +1117,37 @@ func runWatchCycle(townRoot string, acctCfg *config.AccountsConfig) {
 		return
 	}
 
-	// Execute rotation
-	swappedConfigDirs := make(map[string]*quota.KeychainCredential)
-	resetsBySession := resetsBySession(plan.LimitedSessions)
-	oldAccountBySession := oldAccountBySession(plan.LimitedSessions)
-	for _, session := range slices.Sorted(maps.Keys(plan.Assignments)) {
-		newAccount := plan.Assignments[session]
-		result := executeKeychainRotation(t, mgr, acctCfg, session, newAccount, oldAccountBySession[session], resetsBySession[session], swappedConfigDirs)
-		emitRotationOutcome(result)
+	// Execute rotation via the shared in-process executor.
+	executor := handlers.NewRotationExecutor(handlers.RotationExecutorConfig{
+		Tmux:     t,
+		Manager:  mgr,
+		Accounts: acctCfg,
+	})
+	results := executor.Execute(context.Background(), plan)
+	audit := handlers.AuditEmitter{}
+	for _, result := range results {
+		nowUTC := time.Now().UTC()
 		if result.Rotated {
+			audit.Emit(qe.SessionRespawned{
+				Session:      result.Session,
+				FromAccount:  result.OldAccount,
+				ToAccount:    result.NewAccount,
+				Resumed:      result.ResumedSession != "",
+				KeychainSwap: result.KeychainSwap,
+				At:           nowUTC,
+			})
 			fmt.Printf(" [%s] %s %s → %s\n",
 				style.Dim.Render(now),
 				style.SuccessPrefix,
 				result.Session,
 				style.Success.Render(result.NewAccount))
 		} else if result.Error != "" {
+			audit.Emit(qe.RotationFailed{
+				Session:   result.Session,
+				ToAccount: result.NewAccount,
+				Reason:    result.Error,
+				At:        nowUTC,
+			})
 			fmt.Printf(" [%s] %s %s: %s\n",
 				style.Dim.Render(now),
 				style.ErrorPrefix,
