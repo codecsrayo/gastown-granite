@@ -267,6 +267,14 @@ func RefreshTokenExpiries(state *config.QuotaState, accounts map[string]config.A
 			continue
 		}
 		configDir := util.ExpandHome(acct.ConfigDir)
+		// Skip accounts whose config dir currently holds a *borrowed* token
+		// from a quota rotation swap. The on-disk .credentials.json belongs to
+		// the swap source, not this account — reading it would make every
+		// swapped account mirror the source's login/expiry state. Preserve this
+		// account's own last-known TokenExpiresAt instead.
+		if _, swapped := state.ActiveSwaps[configDir]; swapped {
+			continue
+		}
 		exp, err := InspectKeychainToken(configDir)
 		if err != nil {
 			// Inspection failed — keep the existing TokenExpiresAt.
