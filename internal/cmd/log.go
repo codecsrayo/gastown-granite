@@ -1,10 +1,18 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -16,12 +24,14 @@ import (
 
 // Log command flags
 var (
-	logTail   int
-	logType   string
-	logAgent  string
-	logSince  string
-	logFollow bool
-	logAcp    bool
+	logTail    int
+	logType    string
+	logAgent   string
+	logSince   string
+	logFollow  bool
+	logAcp     bool
+	logOnline  bool
+	logBacklog int
 
 	// log crash flags
 	crashAgent    string
@@ -31,6 +41,7 @@ var (
 
 var logCmd = &cobra.Command{
 	Use:     "log",
+	Aliases: []string{"logs"},
 	GroupID: GroupDiag,
 	Short:   "View town activity log",
 	Long: `View the centralized log of Gas Town agent lifecycle events.
@@ -50,7 +61,9 @@ Examples:
   gt log --type spawn        # Show only spawn events
   gt log --agent greenplace/    # Show events for gastown rig
   gt log --since 1h          # Show events from last hour
-  gt log -f                  # Follow log (like tail -f)`,
+  gt log -f                  # Follow log (like tail -f)
+  gt log --online            # Live-listen to ALL streams (town, events, daemon, acp)
+  gt logs --online           # Same (logs is an alias for log)`,
 	RunE: runLog,
 }
 
@@ -78,6 +91,8 @@ func init() {
 	logCmd.Flags().StringVar(&logSince, "since", "", "Show events since duration (e.g., 1h, 30m, 24h)")
 	logCmd.Flags().BoolVarP(&logFollow, "follow", "f", false, "Follow log output (like tail -f)")
 	logCmd.Flags().BoolVar(&logAcp, "acp", false, "View ACP debug logs (requires GT_ACP_DEBUG=1)")
+	logCmd.Flags().BoolVar(&logOnline, "online", false, "Live-listen to ALL log streams (town, events, daemon, acp) merged with source prefix")
+	logCmd.Flags().IntVar(&logBacklog, "backlog", 20, "When --online: lines of recent history per source to print before going live")
 
 	// crash subcommand flags
 	logCrashCmd.Flags().StringVar(&crashAgent, "agent", "", "Agent ID (e.g., greenplace/Toast)")
@@ -93,6 +108,11 @@ func runLog(cmd *cobra.Command, args []string) error {
 	townRoot, err := workspace.FindFromCwdOrError()
 	if err != nil {
 		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+
+	// Online mode = live-listen to ALL streams concurrently.
+	if logOnline {
+		return runOnlineMode(townRoot, logBacklog)
 	}
 
 	// Handle --acp flag to view ACP debug logs
@@ -496,4 +516,310 @@ func LogCrash(townRoot, agent, reason string) error {
 // LogKill logs a kill event.
 func LogKill(townRoot, agent, reason string) error {
 	return LogEventWithRoot(townRoot, townlog.EventKill, agent, reason)
+}
+
+// --- Online mode: merged live tail across all Gas Town log streams ---
+
+// onlineSource describes one log file we tail in online mode.
+type onlineSource struct {
+	tag    string                       // short label shown in output
+	path   string                       // file path to tail
+	style  func(string) string          // optional color wrapper for the tag
+	format func(line string) string     // optional per-line formatter (e.g. JSONL decode)
+}
+
+// runOnlineMode tails every known Gas Town log stream concurrently
+// and merges their output to stdout, prefixed by source tag.
+// Exits cleanly on SIGINT / SIGTERM.
+func runOnlineMode(townRoot string, backlog int) error {
+	sources := []onlineSource{
+		{
+			tag:   "town",
+			path:  filepath.Join(townRoot, "logs", "town.log"),
+			style: func(s string) string { return style.Bold.Render(s) },
+		},
+		{
+			tag:    "event",
+			path:   filepath.Join(townRoot, events.EventsFile),
+			style:  func(s string) string { return style.Success.Render(s) },
+			format: formatEventJSONLine,
+		},
+		{
+			tag:   "dolt",
+			path:  filepath.Join(townRoot, "daemon", "dolt.log"),
+			style: func(s string) string { return style.Dim.Render(s) },
+		},
+		{
+			tag:   "acp",
+			path:  filepath.Join(townRoot, "logs", "acp.log"),
+			style: func(s string) string { return style.Warning.Render(s) },
+		},
+	}
+
+	// Announce what we're listening to.
+	fmt.Printf("%s Online mode — listening on:\n", style.Bold.Render("●"))
+	for _, s := range sources {
+		state := "ready"
+		if _, err := os.Stat(s.path); os.IsNotExist(err) {
+			state = "missing (will appear when created)"
+		}
+		fmt.Printf("  %s %s  (%s)\n", s.style(fmt.Sprintf("[%s]", s.tag)), s.path, style.Dim.Render(state))
+	}
+	fmt.Printf("%s\n\n", style.Dim.Render("Ctrl+C to stop"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Signal handling — cancel context on Ctrl+C / SIGTERM.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	go func() {
+		<-sigCh
+		cancel()
+	}()
+
+	// Print recent backlog from each source first, time-ordered when possible.
+	if backlog > 0 {
+		printOnlineBacklog(sources, backlog)
+	}
+
+	// Merge channel — every source writes formatted lines here.
+	out := make(chan string, 256)
+
+	for _, s := range sources {
+		go tailOnlineSource(ctx, s, out)
+	}
+
+	// Drain. Loop until context cancelled AND channel idle.
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Printf("\n%s Online mode stopped.\n", style.Dim.Render("○"))
+			return nil
+		case line := <-out:
+			fmt.Println(line)
+		}
+	}
+}
+
+// tailOnlineSource follows a single file from end-of-file, emitting
+// each new line on out. Handles missing files (waits for creation) and
+// truncation (re-opens from start). Stops when ctx is cancelled.
+//
+// Uses raw os.File reads (not bufio.Reader) because bufio caches the
+// io.EOF result and won't re-read the underlying file when new bytes
+// arrive — which is exactly the wrong behavior for a live tail.
+func tailOnlineSource(ctx context.Context, src onlineSource, out chan<- string) {
+	prefix := src.style(fmt.Sprintf("[%s]", src.tag))
+
+	var (
+		f      *os.File
+		offset int64
+		pend   []byte // partial-line buffer (bytes seen since last '\n')
+	)
+
+	openAtEnd := func() bool {
+		fh, err := os.Open(src.path) //nolint:gosec // operator-controlled path
+		if err != nil {
+			return false
+		}
+		end, err := fh.Seek(0, io.SeekEnd)
+		if err != nil {
+			_ = fh.Close()
+			return false
+		}
+		f = fh
+		offset = end
+		pend = pend[:0]
+		return true
+	}
+
+	closeF := func() {
+		if f != nil {
+			_ = f.Close()
+			f = nil
+		}
+		pend = pend[:0]
+	}
+	defer closeF()
+
+	emit := func(line string) bool {
+		if src.format != nil {
+			line = src.format(line)
+		}
+		if line == "" {
+			return true
+		}
+		select {
+		case out <- fmt.Sprintf("%s %s", prefix, line):
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	buf := make([]byte, 64*1024)
+
+	// Open immediately so we capture the seek-to-end offset before any
+	// new appends arrive — otherwise the first tick would lose any lines
+	// written between goroutine start and the first 250ms ticker fire.
+	openAtEnd()
+
+	for {
+		if f == nil {
+			if !openAtEnd() {
+				// Wait one tick before retrying (file may not exist yet).
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					continue
+				}
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		// Detect truncation / rotation: file shrank.
+		info, err := os.Stat(src.path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				closeF()
+			}
+			continue
+		}
+		if info.Size() < offset {
+			closeF()
+			fh, oerr := os.Open(src.path) //nolint:gosec // operator-controlled path
+			if oerr != nil {
+				continue
+			}
+			f = fh
+			offset = 0
+		}
+
+		// Read everything new from offset onwards.
+		for {
+			n, rerr := f.Read(buf)
+			if n > 0 {
+				offset += int64(n)
+				chunk := buf[:n]
+				for {
+					i := bytes.IndexByte(chunk, '\n')
+					if i < 0 {
+						pend = append(pend, chunk...)
+						break
+					}
+					pend = append(pend, chunk[:i]...)
+					if !emit(string(pend)) {
+						return
+					}
+					pend = pend[:0]
+					chunk = chunk[i+1:]
+				}
+			}
+			if rerr != nil {
+				// EOF or transient — stop reading; will retry next tick.
+				break
+			}
+			if n == 0 {
+				break
+			}
+		}
+	}
+}
+
+// formatEventJSONLine decodes one JSONL event from .events.jsonl into
+// a compact human-readable line. Falls back to the raw line on parse error.
+func formatEventJSONLine(line string) string {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return ""
+	}
+	var ev events.Event
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		return line
+	}
+	ts := ev.Timestamp
+	if t, err := time.Parse(time.RFC3339, ev.Timestamp); err == nil {
+		ts = t.Local().Format("2006-01-02 15:04:05")
+	}
+	parts := []string{
+		style.Dim.Render(ts),
+		fmt.Sprintf("%s", ev.Type),
+	}
+	if ev.Actor != "" {
+		parts = append(parts, ev.Actor)
+	}
+	if len(ev.Payload) > 0 {
+		parts = append(parts, style.Dim.Render(compactPayload(ev.Payload)))
+	}
+	return strings.Join(parts, " ")
+}
+
+// compactPayload renders a payload map as `k=v k=v` for inline display.
+// Keys are sorted for deterministic output.
+func compactPayload(p map[string]interface{}) string {
+	keys := make([]string, 0, len(p))
+	for k := range p {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "%s=%v", k, p[k])
+	}
+	return b.String()
+}
+
+// printOnlineBacklog prints up to `n` recent lines from each source,
+// each prefixed with its tag, so users see context before live tail begins.
+// Best-effort; missing files are skipped.
+func printOnlineBacklog(sources []onlineSource, n int) {
+	for _, s := range sources {
+		lines, err := tailFileLines(s.path, n)
+		if err != nil || len(lines) == 0 {
+			continue
+		}
+		prefix := s.style(fmt.Sprintf("[%s]", s.tag))
+		fmt.Printf("%s %s\n", style.Dim.Render("---"), style.Dim.Render(fmt.Sprintf("backlog: %s", s.tag)))
+		for _, ln := range lines {
+			out := ln
+			if s.format != nil {
+				out = s.format(ln)
+			}
+			if out == "" {
+				continue
+			}
+			fmt.Printf("%s %s\n", prefix, out)
+		}
+	}
+	fmt.Printf("%s %s\n\n", style.Dim.Render("---"), style.Dim.Render("live"))
+}
+
+// tailFileLines reads the last n lines of a file. Returns nil if missing.
+func tailFileLines(path string, n int) ([]string, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // operator-controlled path
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines, nil
 }
