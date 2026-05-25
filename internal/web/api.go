@@ -111,7 +111,43 @@ func NewAPIHandler(csrfToken string) *APIHandler {
 		gitWatcherCtx: context.Background(),
 	}
 	h.gitWatcher = newGitWatcher(workDir, h.gtPath)
+	h.preflightBdMode()
 	return h
+}
+
+// preflightBdMode warns loudly when bd is not pointed at the Dolt TCP server.
+// In embedded mode each request cold-starts Dolt, and an empty embedded DB
+// triggers auto-import of issues.jsonl, which routinely exceeds the per-request
+// timeout (see /api/issues/close 12s budget). Fix on the host:
+//   bd config set dolt_mode server
+//   bd config set dolt_server_host 127.0.0.1
+//   bd config set dolt_server_port 3307
+func (h *APIHandler) preflightBdMode() {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bd", "config", "show")
+	if h.workDir != "" {
+		cmd.Dir = h.workDir
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		log.Printf("WARNING: bd preflight failed (%v); /api/issues/* calls may time out", err)
+		return
+	}
+	if !bytes.Contains(out, []byte("dolt_mode")) || !bytes.Contains(out, []byte("server")) {
+		log.Printf("WARNING: bd not in server mode in %s — each request will cold-start embedded Dolt and may time out. Run: bd config set dolt_mode server", h.workDir)
+		return
+	}
+	// Verify the dolt_mode row itself is server (cheap line scan).
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		if !bytes.HasPrefix(bytes.TrimSpace(line), []byte("dolt_mode")) {
+			continue
+		}
+		if !bytes.Contains(line, []byte("server")) {
+			log.Printf("WARNING: bd dolt_mode != server in %s — /api/issues/* calls may time out. Run: bd config set dolt_mode server", h.workDir)
+		}
+		return
+	}
 }
 
 // ServeHTTP routes API requests to the appropriate handler.
