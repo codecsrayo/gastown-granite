@@ -147,11 +147,14 @@ func runMoleculeAwaitSignal(cmd *cobra.Command, args []string) error {
 
 	beadsDir := beads.ResolveBeadsDir(workDir)
 
-	// Read current idle cycles and backoff window from agent bead (if specified)
+	// Read current idle cycles and backoff window from agent bead (if specified).
+	// Stored as metadata fields (idle_cycles, backoff_until) for atomic per-key
+	// replacement — labels accumulated under race because read-modify-write of a
+	// shared label set is not atomic across bd invocations.
 	var idleCycles int
 	var backoffUntil time.Time // zero value means no active window
 	if awaitSignalAgentBead != "" {
-		labels, err := getAgentLabels(awaitSignalAgentBead, beadsDir)
+		metadata, err := getAgentMetadata(awaitSignalAgentBead, beadsDir)
 		if err != nil {
 			// Agent bead might not exist yet - that's OK, start at 0
 			if !awaitSignalQuiet {
@@ -159,12 +162,12 @@ func runMoleculeAwaitSignal(cmd *cobra.Command, args []string) error {
 					style.Dim.Render("⚠"), err)
 			}
 		} else {
-			if idleStr, ok := labels["idle"]; ok {
+			if idleStr, ok := metadata[agentMetaIdleCycles]; ok {
 				if n, err := parseIntSimple(idleStr); err == nil {
 					idleCycles = n
 				}
 			}
-			if untilStr, ok := labels["backoff-until"]; ok {
+			if untilStr, ok := metadata[agentMetaBackoffUntil]; ok {
 				if ts, err := parseIntSimple(untilStr); err == nil && ts > 0 {
 					backoffUntil = time.Unix(int64(ts), 0)
 				}
@@ -427,30 +430,54 @@ func parseIntSimple(s string) (int, error) {
 	return n, nil
 }
 
-// updateAgentHeartbeat records a heartbeat timestamp on an agent bead via a
-// heartbeat:EPOCH label. This proves the agent is alive during long idle periods.
-//
-// bd agent heartbeat was never shipped (steveyegge/beads#2828). We use the same
-// read-modify-write label pattern as setAgentIdleCycles instead.
-func updateAgentHeartbeat(agentBead, beadsDir string) error {
-	allLabels, err := getAllAgentLabels(agentBead, beadsDir)
+// Agent-bead metadata keys for await-signal state. Stored as bd metadata
+// (atomic per-key replace) instead of labels to avoid the read-modify-write
+// race that previously caused heartbeat/idle/backoff labels to accumulate.
+const (
+	agentMetaHeartbeat    = "last_heartbeat_at"
+	agentMetaIdleCycles   = "idle_cycles"
+	agentMetaBackoffUntil = "backoff_until"
+)
+
+// getAgentMetadata reads the agent bead's metadata map.
+func getAgentMetadata(agentBead, beadsDir string) (map[string]string, error) {
+	args := []string{"show", agentBead, "--json"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), bdCallTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "bd", args...) //nolint:gosec // G204: bd is a trusted internal tool
+	cmd.Env = append(os.Environ(), "BEADS_DIR="+beadsDir)
+
+	out, err := cmd.Output()
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("reading agent bead metadata: %w", err)
 	}
 
-	var newLabels []string
-	for _, label := range allLabels {
-		if len(label) > 10 && label[:10] == "heartbeat:" {
-			continue // Replace existing heartbeat label
+	var issues []struct {
+		Metadata map[string]interface{} `json:"metadata"`
+	}
+	if err := json.Unmarshal(out, &issues); err != nil {
+		return nil, fmt.Errorf("parsing agent bead metadata: %w", err)
+	}
+	if len(issues) == 0 {
+		return nil, fmt.Errorf("agent bead not found: %s", agentBead)
+	}
+
+	result := make(map[string]string, len(issues[0].Metadata))
+	for k, v := range issues[0].Metadata {
+		if s, ok := v.(string); ok {
+			result[k] = s
+		} else {
+			result[k] = fmt.Sprintf("%v", v)
 		}
-		newLabels = append(newLabels, label)
 	}
-	newLabels = append(newLabels, fmt.Sprintf("heartbeat:%d", time.Now().Unix()))
+	return result, nil
+}
 
-	args := []string{"update", agentBead}
-	for _, label := range newLabels {
-		args = append(args, "--set-labels="+label)
-	}
+// setAgentMetadataField writes a single metadata key=value atomically.
+func setAgentMetadataField(agentBead, beadsDir, key, value string) error {
+	args := []string{"update", agentBead, "--set-metadata", key + "=" + value}
 
 	ctx, cancel := context.WithTimeout(context.Background(), bdCallTimeout)
 	defer cancel()
@@ -460,119 +487,49 @@ func updateAgentHeartbeat(agentBead, beadsDir string) error {
 	return cmd.Run()
 }
 
-// setAgentIdleCycles sets the idle:N label on an agent bead.
-// Uses read-modify-write pattern to update only the idle label.
+// unsetAgentMetadataField removes a metadata key.
+func unsetAgentMetadataField(agentBead, beadsDir, key string) error {
+	args := []string{"update", agentBead, "--unset-metadata", key}
+
+	ctx, cancel := context.WithTimeout(context.Background(), bdCallTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "bd", args...) //nolint:gosec // G204: bd is a trusted internal tool
+	cmd.Env = append(os.Environ(), "BEADS_DIR="+beadsDir)
+	return cmd.Run()
+}
+
+// updateAgentHeartbeat records a heartbeat epoch timestamp as agent metadata.
+// Proves the agent is alive during long idle periods.
+func updateAgentHeartbeat(agentBead, beadsDir string) error {
+	return setAgentMetadataField(agentBead, beadsDir,
+		agentMetaHeartbeat, fmt.Sprintf("%d", time.Now().Unix()))
+}
+
+// setAgentIdleCycles writes the consecutive idle cycle count as agent metadata.
 func setAgentIdleCycles(agentBead, beadsDir string, cycles int) error {
-	// Read all current labels
-	allLabels, err := getAllAgentLabels(agentBead, beadsDir)
-	if err != nil {
-		return err
+	if err := setAgentMetadataField(agentBead, beadsDir,
+		agentMetaIdleCycles, fmt.Sprintf("%d", cycles)); err != nil {
+		return fmt.Errorf("setting idle cycles: %w", err)
 	}
-
-	// Build new label list: keep non-idle labels, add new idle value
-	var newLabels []string
-	for _, label := range allLabels {
-		// Skip any existing idle:* label
-		if len(label) > 5 && label[:5] == "idle:" {
-			continue
-		}
-		newLabels = append(newLabels, label)
-	}
-
-	// Add new idle value
-	newLabels = append(newLabels, fmt.Sprintf("idle:%d", cycles))
-
-	// Use bd update with --set-labels to replace all labels
-	args := []string{"update", agentBead}
-	for _, label := range newLabels {
-		args = append(args, "--set-labels="+label)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), bdCallTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "bd", args...) //nolint:gosec // G204: bd is a trusted internal tool
-	cmd.Env = append(os.Environ(), "BEADS_DIR="+beadsDir)
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("setting idle label: %w", err)
-	}
-
 	return nil
 }
 
-// setAgentBackoffUntil persists a backoff-until:TIMESTAMP label on the agent bead.
-// This allows interrupted await-signal invocations to resume with remaining time
-// instead of restarting the full backoff period.
+// setAgentBackoffUntil persists the backoff window end as agent metadata so
+// interrupted await-signal invocations can resume with the remaining time.
 func setAgentBackoffUntil(agentBead, beadsDir string, until time.Time) error {
-	allLabels, err := getAllAgentLabels(agentBead, beadsDir)
-	if err != nil {
-		return err
-	}
-
-	var newLabels []string
-	for _, label := range allLabels {
-		if len(label) > 14 && label[:14] == "backoff-until:" {
-			continue // Strip existing backoff-until
-		}
-		newLabels = append(newLabels, label)
-	}
-	newLabels = append(newLabels, fmt.Sprintf("backoff-until:%d", until.Unix()))
-
-	args := []string{"update", agentBead}
-	for _, label := range newLabels {
-		args = append(args, "--set-labels="+label)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), bdCallTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "bd", args...) //nolint:gosec // G204: bd is a trusted internal tool
-	cmd.Env = append(os.Environ(), "BEADS_DIR="+beadsDir)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("setting backoff-until label: %w", err)
+	if err := setAgentMetadataField(agentBead, beadsDir,
+		agentMetaBackoffUntil, fmt.Sprintf("%d", until.Unix())); err != nil {
+		return fmt.Errorf("setting backoff window: %w", err)
 	}
 	return nil
 }
 
-// clearAgentBackoffUntil removes the backoff-until label from the agent bead.
-// Called when await-signal completes normally (timeout or signal received).
+// clearAgentBackoffUntil removes the backoff window metadata. Called when
+// await-signal completes normally (timeout or signal received).
 func clearAgentBackoffUntil(agentBead, beadsDir string) error {
-	allLabels, err := getAllAgentLabels(agentBead, beadsDir)
-	if err != nil {
-		return err
-	}
-
-	var newLabels []string
-	found := false
-	for _, label := range allLabels {
-		if len(label) > 14 && label[:14] == "backoff-until:" {
-			found = true
-			continue // Strip backoff-until
-		}
-		newLabels = append(newLabels, label)
-	}
-
-	if !found {
-		return nil // Nothing to clear
-	}
-
-	args := []string{"update", agentBead}
-	if len(newLabels) == 0 {
-		args = append(args, "--set-labels=")
-	} else {
-		for _, label := range newLabels {
-			args = append(args, "--set-labels="+label)
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), bdCallTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "bd", args...) //nolint:gosec // G204: bd is a trusted internal tool
-	cmd.Env = append(os.Environ(), "BEADS_DIR="+beadsDir)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("clearing backoff-until label: %w", err)
+	if err := unsetAgentMetadataField(agentBead, beadsDir, agentMetaBackoffUntil); err != nil {
+		return fmt.Errorf("clearing backoff window: %w", err)
 	}
 	return nil
 }
