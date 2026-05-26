@@ -2071,27 +2071,37 @@ func (e *Engineer) checkAndCloseCompletedConvoys(townRoot, townBeads string) []c
 		})
 
 		// Send convoy completion notifications (owner + notify addresses).
-		// Pass labels so the notify function can short-circuit when this
-		// convoy was already notified by an earlier poll or by the CLI path.
-		e.notifyConvoyCompletion(townRoot, townBeads, convoy.ID, convoy.Title, convoy.Description, convoy.Labels)
+		// The notify function consults a filesystem marker under
+		// townRoot/.beads/notified-convoys/ to short-circuit when this convoy
+		// was already notified by an earlier poll or by the CLI path.
+		e.notifyConvoyCompletion(townRoot, convoy.ID, convoy.Title, convoy.Description)
 	}
 
 	return closed
 }
 
-// convoyNotifiedLabel marks a convoy whose completion notifications have
-// already been delivered. notifyConvoyCompletion skips re-sending when it
-// finds this label, preventing flooded notify addresses if an upstream bug
-// (split-brain reads, throttled bd writes) causes the same convoy to be
-// re-detected as complete on subsequent polls.
-const convoyNotifiedLabel = "gt:convoy-notified"
+// convoyNotifiedMarkerDir is the directory under townBeads where per-convoy
+// "already notified" markers live. A filesystem marker is used instead of a
+// bead label because in this environment bd writes can be invisible to the
+// next bd read (dual-backend embedded/server split-brain), which silently
+// defeated the original bead-label guard. The filesystem persists writes
+// independently of bd routing.
+const convoyNotifiedMarkerDir = "notified-convoys"
+
+// convoyNotifiedMarkerPath returns the marker file path for a convoy.
+// The marker lives at <townRoot>/.beads/notified-convoys/<convoyID> so the
+// CLI path and the refinery engineer can short-circuit on the same files.
+func convoyNotifiedMarkerPath(townRoot, convoyID string) string {
+	return filepath.Join(townRoot, ".beads", convoyNotifiedMarkerDir, convoyID)
+}
 
 // notifyConvoyCompletion sends notifications to convoy owner and notify addresses.
-// Skips if the convoy already carries convoyNotifiedLabel, and adds that label
+// Skips if a marker file already exists for this convoy, and writes the marker
 // after sending so future polls do not re-flood.
-func (e *Engineer) notifyConvoyCompletion(townRoot, townBeads, convoyID, title, description string, labels []string) {
-	// De-dupe: nothing to do if we've already notified for this convoy.
-	if refineryHasLabel(labels, convoyNotifiedLabel) {
+func (e *Engineer) notifyConvoyCompletion(townRoot, convoyID, title, description string) {
+	// De-dupe: skip if we've already notified for this convoy.
+	markerPath := convoyNotifiedMarkerPath(townRoot, convoyID)
+	if _, err := os.Stat(markerPath); err == nil {
 		return
 	}
 
@@ -2109,11 +2119,10 @@ func (e *Engineer) notifyConvoyCompletion(townRoot, townBeads, convoyID, title, 
 	}
 
 	// Mark convoy notified so future polls skip the notify path.
-	// Non-fatal: a failed label write only costs one extra notify next cycle.
-	townMutationEnv := beads.BuildMutationPinnedBDEnv(os.Environ(), townBeads)
-	markArgs := beads.MaybePrependAllowStaleWithEnv(townMutationEnv, []string{"update", convoyID, "--add-label", convoyNotifiedLabel})
-	markCmd := beads.Command(townBeads, townBeads, beads.MutationPinned, markArgs...)
-	if err := markCmd.Run(); err != nil {
+	// Non-fatal: a failed marker write only costs one extra notify next cycle.
+	if err := os.MkdirAll(filepath.Dir(markerPath), 0o755); err != nil {
+		_, _ = fmt.Fprintf(e.output, "[Engineer] Warning: could not create notified-marker dir for %s: %v\n", convoyID, err)
+	} else if err := os.WriteFile(markerPath, nil, 0o644); err != nil {
 		_, _ = fmt.Fprintf(e.output, "[Engineer] Warning: could not mark convoy %s as notified: %v\n", convoyID, err)
 	}
 }
