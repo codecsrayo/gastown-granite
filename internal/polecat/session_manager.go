@@ -989,6 +989,13 @@ func (m *SessionManager) hookIssue(issueID, agentID, workDir string) error {
 	cmd := exec.CommandContext(ctx, "bd", "update", issueID, "--status=hooked", "--assignee="+agentID) //nolint:gosec // G204: bd is a trusted internal tool
 	util.SetDetachedProcessGroup(cmd)
 	cmd.Dir = bdWorkDir
+	// Pin the bd subprocess to server mode for this beads dir. Without an
+	// explicit env, this raw exec inherits a bare environment and bd falls back
+	// to a local embedded dolt scratch — the hook write never reaches the Dolt
+	// server, so the bead reverts to open/NULL and the polecat sees no work on
+	// prime (gg-0nb). BuildMutationPinnedBDEnv injects BEADS_DOLT_SERVER_MODE=1
+	// (when metadata declares server) plus host/port/database.
+	cmd.Env = beads.BuildMutationPinnedBDEnv(os.Environ(), beads.ResolveBeadsDir(bdWorkDir))
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("bd update failed: %w", err)

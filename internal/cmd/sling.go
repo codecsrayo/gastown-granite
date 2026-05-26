@@ -808,8 +808,10 @@ func runSling(cmd *cobra.Command, args []string) (retErr error) {
 		}
 
 		// Unhook the bead from old owner (set status back to open)
+		unhookDir := beads.ResolveHookDir(townRoot, beadID, "")
 		unhookCmd := exec.Command("bd", "update", beadID, "--status=open", "--assignee=")
-		unhookCmd.Dir = beads.ResolveHookDir(townRoot, beadID, "")
+		unhookCmd.Dir = unhookDir
+		unhookCmd.Env = beads.BuildMutationPinnedBDEnv(os.Environ(), beads.ResolveBeadsDir(unhookDir))
 		if err := unhookCmd.Run(); err != nil {
 			fmt.Printf("%s Could not unhook bead from old owner: %v\n", style.Dim.Render("Warning:"), err)
 		}
@@ -1168,6 +1170,7 @@ func restorePinnedBead(townRoot, beadID, assignee string) {
 	cmd := exec.Command("bd", "update", beadID, "--status=pinned", "--assignee="+assignee)
 	if dir != "" {
 		cmd.Dir = dir
+		cmd.Env = beads.BuildMutationPinnedBDEnv(os.Environ(), beads.ResolveBeadsDir(dir))
 	}
 	if err := cmd.Run(); err != nil {
 		fmt.Printf("  %s Could not restore pinned state for bead %s: %v\n", style.Dim.Render("Warning:"), beadID, err)
@@ -1283,6 +1286,7 @@ func rollbackSlingArtifacts(spawnInfo *SpawnedPolecatInfo, beadID, hookWorkDir, 
 			unhookDir := beads.ResolveHookDir(townRoot, beadID, hookWorkDir)
 			unhookCmd := exec.Command("bd", "update", beadID, "--status=open", "--assignee=")
 			unhookCmd.Dir = unhookDir
+			unhookCmd.Env = beads.BuildMutationPinnedBDEnv(os.Environ(), beads.ResolveBeadsDir(unhookDir))
 			if err := unhookCmd.Run(); err != nil {
 				fmt.Printf("  %s Could not unhook bead %s: %v\n", style.Dim.Render("Warning:"), beadID, err)
 			} else {

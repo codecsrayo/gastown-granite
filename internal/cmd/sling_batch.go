@@ -372,6 +372,7 @@ func closeConvoy(convoyID, reason string) {
 	closeArgs := []string{"close", convoyID, "-r", reason}
 	closeCmd := exec.Command("bd", closeArgs...)
 	closeCmd.Dir = townBeads
+	closeCmd.Env = beads.BuildMutationPinnedBDEnv(os.Environ(), townBeads)
 	if err := closeCmd.Run(); err != nil {
 		fmt.Printf("  %s Could not close convoy %s: %v\n", style.Dim.Render("Warning:"), convoyID, err)
 	} else {
