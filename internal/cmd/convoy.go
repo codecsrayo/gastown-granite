@@ -1640,34 +1640,41 @@ func checkAndCloseCompletedConvoys(townBeads string, dryRun bool) ([]struct{ ID,
 	return closed, nil
 }
 
-// convoyNotifiedLabel marks a convoy whose completion notifications have
-// already been delivered. notifyConvoyCompletion skips re-sending when it
-// finds this label, which prevents flooding mayor/ when an upstream bug
-// (e.g. split-brain reads, throttled bd writes) causes a convoy to be
-// repeatedly re-detected as complete.
-const convoyNotifiedLabel = "gt:convoy-notified"
+// convoyNotifiedMarkerDir is the directory under townBeads where per-convoy
+// "already notified" markers live. A filesystem marker is used instead of a
+// bead label because in this environment bd writes can be invisible to the
+// next bd read (dual-backend embedded/server split-brain), which silently
+// defeated the original bead-label guard. The filesystem persists writes
+// independently of bd routing.
+const convoyNotifiedMarkerDir = "notified-convoys"
+
+// convoyNotifiedMarkerPath returns the marker file path for a convoy.
+// The marker lives at <townRoot>/.beads/notified-convoys/<convoyID> so the
+// CLI path and the refinery engineer can short-circuit on the same files.
+func convoyNotifiedMarkerPath(townRoot, convoyID string) string {
+	return filepath.Join(townRoot, ".beads", convoyNotifiedMarkerDir, convoyID)
+}
 
 // notifyConvoyCompletion sends notifications to owner, any notify addresses, and mayor/.
-// Sends each convoy completion at most once: a successful send adds the
-// convoyNotifiedLabel to the convoy bead so subsequent calls return early.
+// Sends each convoy completion at most once: a successful send writes a
+// marker file under convoyNotifiedMarkerDir so subsequent calls return early.
 func notifyConvoyCompletion(townBeads, convoyID, title string) {
+	// De-dupe guard: skip if we've already notified for this convoy.
+	markerPath := convoyNotifiedMarkerPath(townBeads, convoyID)
+	if _, err := os.Stat(markerPath); err == nil {
+		return
+	}
+
 	stdout, err := runBdJSON(townBeads, "show", convoyID, "--json")
 	if err != nil {
 		return
 	}
 
 	var convoys []struct {
-		Description string   `json:"description"`
-		CreatedAt   string   `json:"created_at"`
-		Labels      []string `json:"labels"`
+		Description string `json:"description"`
+		CreatedAt   string `json:"created_at"`
 	}
 	if err := json.Unmarshal(stdout, &convoys); err != nil || len(convoys) == 0 {
-		return
-	}
-
-	// De-dupe guard: if we've already notified for this convoy, do nothing.
-	// The label is added at the end of this function on a successful send.
-	if hasLabel(convoys[0].Labels, convoyNotifiedLabel) {
 		return
 	}
 
@@ -1734,11 +1741,12 @@ func notifyConvoyCompletion(townBeads, convoyID, title string) {
 	// Push notification to active Mayor session if configured.
 	notifyMayorSession(townBeads, convoyID, title)
 
-	// Mark this convoy as notified so future polls don't re-flood mayor/.
-	// Non-fatal: if the label write fails (e.g. throttled bd race) the only
-	// consequence is one extra notification on the next poll.
-	if err := BdCmd("update", convoyID, "--add-label", convoyNotifiedLabel).
-		Dir(townBeads).WithAutoCommit().Run(); err != nil {
+	// Mark this convoy as notified so future polls skip the notify path.
+	// Non-fatal: a failed marker write only costs one extra notification
+	// on the next poll.
+	if err := os.MkdirAll(filepath.Dir(markerPath), 0o755); err != nil {
+		style.PrintWarning("could not create notified-marker dir for %s: %v", convoyID, err)
+	} else if err := os.WriteFile(markerPath, nil, 0o644); err != nil {
 		style.PrintWarning("could not mark convoy %s as notified: %v", convoyID, err)
 	}
 }
