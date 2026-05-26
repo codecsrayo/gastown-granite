@@ -335,10 +335,11 @@ func runMoleculeStatus(cmd *cobra.Command, args []string) error {
 	var roleCtx RoleContext
 	validationRole := RoleUnknown
 
+	var callerCtx RoleContext
 	if len(args) > 0 {
 		// Explicit target provided
 		target = args[0]
-		callerCtx := detectRole(cwd, townRoot)
+		callerCtx = detectRole(cwd, townRoot)
 		validationRole = callerCtx.Role
 	} else {
 		// Use cwd-based detection for status display
@@ -356,6 +357,7 @@ func runMoleculeStatus(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("cannot determine agent identity (role: %s)", roleCtx.Role)
 		}
 		validationRole = roleCtx.Role
+		callerCtx = roleCtx
 	}
 	if err := ensureRoleWorktreeIntegrity(cwd, townRoot, validationRole); err != nil {
 		return err
@@ -396,6 +398,19 @@ func runMoleculeStatus(cmd *cobra.Command, args []string) error {
 	// lookupHookedWork performs the full multi-step hook lookup for target.
 	// Called in a retry loop for polecats to handle Dolt propagation lag.
 	lookupHookedWork := func() *beads.Issue {
+		// GT_HOOK_BEAD bypass (gg-0nb): sling pins the bead into session env
+		// at spawn so we can short-circuit the bd lookup that upstream's
+		// scratch auto-import can revert. Only honour the env hint when the
+		// caller is asking about *this* polecat (target == own agent ID),
+		// since gt hook <other-agent> from a coordinator must not be polluted
+		// by the coordinator's own GT_HOOK_BEAD.
+		if envHook := resolveEnvHookBead(townRoot, workDir); envHook != nil {
+			selfAgentID := getAgentIdentity(callerCtx)
+			if selfAgentID != "" && selfAgentID == target {
+				return envHook
+			}
+		}
+
 		// Resolve agent bead ID for display purposes only.
 		// Agent bead's hook_bead field is no longer maintained (updateAgentHookBead is
 		// a no-op since hq-l6mm5), so reading it returns stale data. See GH#2371.

@@ -502,6 +502,15 @@ func (m *SessionManager) Start(polecat string, opts SessionStartOptions) error {
 	if runtimeConfig.Session != nil && runtimeConfig.Session.ConfigDirEnv != "" && opts.RuntimeConfigDir != "" {
 		envVars[runtimeConfig.Session.ConfigDirEnv] = opts.RuntimeConfigDir
 	}
+	// GT_HOOK_BEAD bypasses the bd lookup path that the upstream bd 1.0.4
+	// scratch auto-import can revert (gg-0nb). When sling spawns a polecat
+	// with --issue, we pin the bead ID into the session env so gt prime, gt
+	// hook (status), and DetectAgentState can authoritatively see the hook
+	// without trusting a bd read that may flip status=hooked → open due to
+	// stale jsonl import.
+	if opts.Issue != "" {
+		envVars["GT_HOOK_BEAD"] = opts.Issue
+	}
 
 	// Preflight validator — gate spawn on caller-supplied checks (quota status,
 	// token expiry, account availability). Runs after all config resolution but

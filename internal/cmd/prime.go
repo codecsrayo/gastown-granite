@@ -798,6 +798,14 @@ var firePolecatHookUnresolvableEscalation = func(agentID, detail string) {
 // Returns (nil, ErrHookUnresolvable) when the agent bead points at a hook bead
 // that cannot be resolved — the polecat must fail fast rather than pontificate.
 func findAgentWorkOnce(ctx RoleContext, agentID string) (*beads.Issue, error) {
+	// GT_HOOK_BEAD bypass (gg-0nb): if sling pinned the bead via session env,
+	// trust it ahead of any bd lookup. The upstream bd scratch auto-import can
+	// flip status=hooked → open between the sling write and this read, hiding
+	// real work and sending the polecat to gt done → idle.
+	if envHook := resolveEnvHookBead(ctx.TownRoot, ctx.WorkDir); envHook != nil {
+		return envHook, nil
+	}
+
 	// Use rig root for beads queries instead of ctx.WorkDir. Polecat worktrees
 	// rely on .beads/redirect which can fail to resolve in edge cases, causing
 	// polecats to miss hooked work and exit immediately. The rig root directory

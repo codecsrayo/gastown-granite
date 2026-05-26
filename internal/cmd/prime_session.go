@@ -305,6 +305,17 @@ func detectSessionState(ctx RoleContext) SessionState {
 	}
 
 	// Check for hooked work (autonomous state).
+	// GT_HOOK_BEAD bypass (gg-0nb): when sling pinned the hook via session env,
+	// trust it ahead of any bd query. Upstream bd 1.0.4 still opens a scratch
+	// DB and auto-imports stale jsonl, which can flip status=hooked → open
+	// between sling and prime — the polecat would otherwise see no work and
+	// gt done itself into idle.
+	if envHook := resolveEnvHookBead(ctx.TownRoot, ctx.WorkDir); envHook != nil {
+		state.State = "autonomous"
+		state.HookedBead = envHook.ID
+		return state
+	}
+
 	// Primary: read hook_bead from the agent bead's DB column (same strategy as gt hook).
 	// Fallback: query hooked/in_progress beads by assignee.
 	agentID := getAgentIdentity(ctx)
