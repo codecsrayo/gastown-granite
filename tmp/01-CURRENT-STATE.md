@@ -51,12 +51,12 @@ critical input to gap analysis.
 ### 2.1 `internal/events/`
 
 - **Purpose:** Activity feed audit log.
-- **Backing store:** `~/gt/.events.jsonl` (one append-only file).
+- **Backing store:** `<townRoot>/.events.jsonl` (one append-only file).
 - **Schema:** `{ts, source, type, actor, payload, visibility}` —
   visibility ∈ {audit, feed, both}.
 - **Writers:** sling, hook, unhook, handoff commands. No bd mutations
   emit here today.
-- **Readers:** `internal/feed/` daemon (curates → `~/gt/.feed.jsonl`);
+- **Readers:** `internal/feed/` daemon (curates → `<townRoot>/.feed.jsonl`);
   `internal/tui/feed/` (TUI display).
 - **Concurrency:** uses `gofrs/flock` on the events file.
 - **Verdict:** USEFUL FOUNDATION. Schema is close to what we need.
@@ -77,7 +77,7 @@ critical input to gap analysis.
 ### 2.3 `internal/channelevents/`
 
 - **Purpose:** File-based event emission for named inter-agent channels.
-- **Backing store:** `~/gt/events/<channel>/*.event` files (one per event).
+- **Backing store:** `<townRoot>/events/<channel>/*.event` files (one per event).
 - **Writers:** witness handlers, sling helpers, molecule emit.
 - **Readers:** `bd await-event` subscribers (refinery watching for
   MERGE_READY, mayor watching for SLOT_OPEN/SLOT_BLOCKED, witness
@@ -89,8 +89,8 @@ critical input to gap analysis.
 
 ### 2.4 `internal/feed/`
 
-- Curator daemon. Reads `~/gt/.events.jsonl`, filters by visibility,
-  deduplicates, aggregates, writes `~/gt/.feed.jsonl`.
+- Curator daemon. Reads `<townRoot>/.events.jsonl`, filters by visibility,
+  deduplicates, aggregates, writes `<townRoot>/.feed.jsonl`.
 - Already implements the tail-and-process pattern. Materializer (which
   we'd need to build) is structurally similar.
 - **Verdict:** REUSABLE TEMPLATE for the materializer.
@@ -132,13 +132,20 @@ internal/beads.Beads.run() / runWithStdin() / runWithRouting()
 returns to caller
 ```
 
-Ad-hoc bypass: ~14 packages (mostly `internal/doctor/`, plus
-`internal/cli/`, etc.) call `exec.Command("bd", ...)` directly without
-going through `internal/beads/`. These bypass PR 1's flock entirely.
+Ad-hoc bypass: 12 packages outside `internal/beads/` call
+`exec.Command("bd", ...)` directly across 153 sites (notably
+`internal/cmd/` with 93 sites across 35 files, `internal/doctor/` with
+25 sites across 11 files). These bypass PR 1's flock entirely.
 
 A subprocess policy test (`bd_subprocess_policy_test.go`) prohibits this
 in `internal/deacon`, `internal/plugin`, `internal/refinery`,
 `internal/witness`. The other packages are not yet gated.
+
+**Status of PR 1's flock:** Not yet merged at time of writing.
+References to `forceExportJSONL` and `jsonlLock` below assume PR 1 has
+landed on the `refactor/bd-jsonl-lock-race` branch. The flock primitive
+referenced is `gofrs/flock`, already proven in
+`internal/beads/beads_agent.go` for the agent-claim flock pattern.
 
 ## 4. Concurrency model today
 
@@ -152,8 +159,9 @@ in `internal/deacon`, `internal/plugin`, `internal/refinery`,
 - **Polecats via TCP server:** Dolt server serializes internally (MVCC).
   But polecats and CLI use different DBs (embedded vs. server) so
   conflicts surface as jsonl import-time merges.
-- **Stale agent locks:** 24 of 26 `.locks/agent-*.lock` files are >48h
-  old. Nothing reaps them. Indicates the claim-via-file pattern is
+- **Stale agent locks:** 27 of 28 `<townRoot>/.beads/.locks/agent-*.lock`
+  files are >48h old as of 2026-05-26 (26 in `gastown-sandbox`, 2 in
+  `gastown` hq). Nothing reaps them. Claim-via-file pattern is
   un-self-cleaning.
 
 ## 5. Audit/observability today
@@ -162,7 +170,7 @@ in `internal/deacon`, `internal/plugin`, `internal/refinery`,
   Not structured for replay.
 - **bd event export:** `events-export: false` by default. Could be turned
   on but no consumer exists.
-- **gt activity audit:** `~/gt/.events.jsonl` via `internal/events/`.
+- **gt activity audit:** `<townRoot>/.events.jsonl` via `internal/events/`.
   Covers sling/hook/handoff — NOT bd mutations.
 - **telemetry:** `internal/telemetry/RecordBDCall` records every bd
   subprocess call with duration, args, stderr. Goes to OTEL backend.
@@ -191,7 +199,7 @@ in `internal/deacon`, `internal/plugin`, `internal/refinery`,
 | D1 | jsonl auto-export throttle race (mutating commands lose writes) | observed in hq-i7q/hq-wt8 close sequence; PR 1 patches |
 | D2 | Auto-import wipes embedded dolt every CLI invocation | observed in `bd close` logs; amplifies D1 |
 | D3 | Embedded vs TCP server split (no sync) | CLAUDE.md memory `project_bd_embedded_vs_server` |
-| D4 | 24/26 agent locks stale >48h, no reaper | observed in `/gt/.beads/.locks/` |
+| D4 | 27/28 agent locks stale >48h, no reaper | observed in `<townRoot>/.beads/.locks/` |
 | D5 | events.jsonl (bd's) writes have no lock when `events-export: true` | inspection of bd code |
 | D6 | `bd init --reinit-local` silently destroys data | CLAUDE.md memory `feedback_bd_reinit_destructive`; pre-existing `backups-pre-reinit/` dir |
 | D7 | Doctor doesn't catch 0-byte jsonl | observed in hq-i7q forensic; doctor only catches "bloat" not "empty" |

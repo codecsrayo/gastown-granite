@@ -9,12 +9,17 @@ it must do in the target arch, the migration steps, the risk.
 
 ## Counts at a glance
 
-- **Total Go packages in `internal/`:** ~70
-- **Packages that import `internal/beads`:** 15
-- **Packages with direct `exec.Command("bd", ...)`:** 11
-- **Total direct exec sites of bd:** 57
+Snapshot date 2026-05-26.
+
+- **Total Go packages in `internal/`:** ~80 (74 immediate subdirs)
+- **Packages that import `internal/beads`:** 16 (non-test files)
+- **Packages with direct `exec.Command("bd", ...)`:** 12 outside the
+  `internal/beads` wrapper (13 total including the wrapper)
+- **Total direct exec sites of bd outside `internal/beads`:** 153
 - **Packages that emit `internal/events`:** ~6 (sling, hook, handoff, etc.)
-- **Packages that emit `internal/channelevents`:** 3 (witness, sling_helpers, molecule)
+- **Channels in `internal/channelevents`:** 3 (`refinery`, `mayor`,
+  `witness`); emitters live in `internal/witness/handlers.go`,
+  `internal/cmd/sling_helpers.go`, `internal/cmd/molecule_emit_event.go`
 - **Packages affected by Phase 2 (polecat producer migration):** 1 + polecat session protocol consumers
 
 ## Risk legend
@@ -31,7 +36,7 @@ it must do in the target arch, the migration steps, the risk.
 |--------|-------|--------|
 | Purpose | Activity feed audit log | Activity feed + state events root |
 | API surface | `Event{}`, payload helpers | + `state.Producer` interface, `state.Event{}` |
-| Storage | `~/gt/.events.jsonl` | + `<townRoot>/.beads/state-events.jsonl` |
+| Storage | `<townRoot>/.events.jsonl` | + `<townRoot>/.beads/state-events.jsonl` |
 | Visibility | audit/feed/both | + `state` (mutates dolt) |
 
 **Changes:**
@@ -104,7 +109,9 @@ server in CI.
   - On success: return same shape as today (e.g. `*Issue`).
   - On failure: same error contract.
 - Read methods unchanged.
-- Remove `forceExportJSONL`, `jsonlLock` from PR 1 — no longer needed.
+- Once PR 1 lands: remove `forceExportJSONL`, `jsonlLock` — no longer
+  needed. (Verify PR 1 has merged before scheduling this step; not yet
+  on `main` at time of writing.)
 - Remove `runWithStdin` mutation branch — events do the writing.
 - Keep `runWithStdin` for read commands (sql SELECT etc.).
 - Update `IsMutating` classifier to also gate the new dispatch path.
@@ -125,12 +132,12 @@ produces different state via the two paths.
 
 ## B. CLI surface — high contact
 
-### B1. `internal/cmd/` (84 files, 35 direct bd exec sites)
+### B1. `internal/cmd/` (243 non-test files, 35 files with 93 direct bd exec sites)
 
 **Today:**
 - Implements every `gt` subcommand.
-- ~35 places call `exec.Command("bd", ...)` directly.
-- ~49 places call `internal/beads/` wrapper methods.
+- 93 direct `exec.Command("bd", ...)` call sites across 35 files.
+- Remaining files route through `internal/beads/` wrapper methods.
 
 **Target:**
 - All bd subprocess calls eliminated. CLI commands either:
@@ -140,7 +147,7 @@ produces different state via the two paths.
     config helper or shell out (unchanged for those).
 
 **Migration steps:**
-1. Audit each of 35 direct exec sites. Categorize:
+1. Audit each of the 93 direct exec sites. Categorize:
    - Mutation (`bd close`, `bd update`, ...) → migrate to `b.X()` method.
    - Read (`bd sql`, `bd show --json`) → migrate to read helper.
    - Config (`bd config get/set`) → use config helper.
@@ -199,9 +206,12 @@ sequence assertions (claim → hook → unhook → release expected order).
 ### C2. `internal/witness/`
 
 **Today:**
-- 1 file imports beads.
+- 3 non-test files import beads (`manager.go`, `protocol.go`,
+  `handlers.go` via transitive includes).
 - Emits `channelevents` for MERGE_READY, SLOT_OPEN, SLOT_BLOCKED.
 - Does patrol checks (mostly reads).
+- Gated by `bd_subprocess_policy_test.go` — no direct `exec.Command("bd",
+  ...)` allowed.
 
 **Target:**
 - Patrol reads unchanged.
@@ -260,16 +270,17 @@ Go internal package. It calls bd via shell. After migration:
 
 ## D. Doctor & diagnostics
 
-### D1. `internal/doctor/` (14 files use beads, 11 direct exec sites)
+### D1. `internal/doctor/` (17 files import beads; 11 files contain 25 direct bd exec sites)
 
 **Today:**
-- 72 check files.
-- 11 directly call `exec.Command("bd", ...)`.
+- 75 non-test check files.
+- 11 files contain 25 direct `exec.Command("bd", ...)` sites.
 - Fixes call `bd update`, `bd close`, `bd label`, `bd config set`.
 - Reads call `bd sql --csv`, `bd show --json`.
 
 **Target (immediate, PR 2 of original plan):**
-- Migrate 11 direct sites to `internal/beads/` wrapper. Closes D1 race.
+- Migrate all 25 direct exec sites to `internal/beads/` wrapper. Closes
+  D1 race for doctor.
 
 **Target (event-driven):**
 - All fix paths emit events.
@@ -502,22 +513,25 @@ directly via shell:
 
 ## Summary table
 
-| Module | Files touching bd | Direct exec | Phase | Risk |
-|--------|------------------:|------------:|-------|------|
-| internal/cmd | 84 | 35 | 1 | 🟡 |
-| internal/doctor | 14 | 11 | 1 (PR 2) | 🟢→🟡 |
-| internal/beads | 4 | 0 (wraps) | 0+1+4 | 🟡 |
-| internal/polecat | 2 | 1 | 2 | 🔴 |
-| internal/witness | 1 | 0 | 1 | 🟡 |
-| internal/refinery | 2 | 0 | 1 | 🟡 |
+Counts below: "Files importing beads" excludes `_test.go`; "Direct exec"
+is `exec.Command("bd", ...)` call sites (not files).
+
+| Module | Files importing beads | Direct exec sites | Phase | Risk |
+|--------|----------------------:|------------------:|-------|------|
+| internal/cmd | (many) | 93 | 1 | 🟡 |
+| internal/doctor | 17 | 25 | 1 (PR 2) | 🟢→🟡 |
+| internal/beads | (wrapper) | (wraps bd internally) | 0+1+4 | 🟡 |
+| internal/polecat | 2 | 2 (`session_manager.go:891,989`) | 2 | 🔴 |
+| internal/witness | 3 | 0 (gated) | 1 | 🟡 |
+| internal/refinery | 2 | 0 (gated) | 1 | 🟡 |
 | internal/deacon | (gated) | 0 | 1 | 🟡 |
-| internal/doltserver | 2 | 2 | E | 🟡 |
-| internal/web | 1 | 1 | 1 | 🟢 |
-| internal/mail | 3 | 1 | 1 | 🟢 |
-| internal/tui/feed | — | 3 | 1 | 🟢 |
-| internal/tui/convoy | — | 1 | 1 | 🟢 |
-| internal/convoy | 1 | 1 | 1 | 🟢 |
-| internal/rig | 2 | 1 | 1 | 🟢 |
+| internal/doltserver | 2 | 4 | E | 🟡 |
+| internal/web | 2 | 2 | 1 | 🟢 |
+| internal/mail | 5 | 2 | 1 | 🟢 |
+| internal/tui/feed | — | 1 | 1 | 🟢 |
+| internal/tui/convoy | 1 | 3 | 1 | 🟢 |
+| internal/convoy | 2 | 1 | 1 | 🟢 |
+| internal/rig | 2 | 1 (`manager.go`) | 1 | 🟢 |
 | internal/github | — | 0 | 3 | 🟡 |
 | internal/bitbucket | — | 0 | 3 | 🟡 |
 | NEW: materializer | — | — | 0 | 🔴 |

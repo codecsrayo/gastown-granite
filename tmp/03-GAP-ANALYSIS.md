@@ -9,7 +9,7 @@ resources.
 
 ## G1. State event log — backing store
 
-**Have:** `~/gt/.events.jsonl` (activity audit) via `internal/events/`.
+**Have:** `<townRoot>/.events.jsonl` (activity audit) via `internal/events/`.
 
 **Need:** `<townRoot>/.beads/state-events.jsonl` (mutation log,
 authoritative).
@@ -46,7 +46,7 @@ authoritative).
 **Gap:**
 - "Wait for ACK" semantics don't exist today.
 - No UNIX socket transport.
-- No spool directory pattern (though `~/gt/events/<channel>/` from
+- No spool directory pattern (though `<townRoot>/events/<channel>/` from
   channelevents is conceptually similar).
 
 **Fill:**
@@ -155,7 +155,9 @@ version, keep old handler).
 **Have:**
 - Polecat uses TCP server mode for dolt.
 - Polecat imports `internal/beads/` wrapper.
-- 1 direct `exec.Command("bd", "update", ...)` in `session_manager.go`.
+- 2 direct exec sites in `session_manager.go`: a `bd show ... --json`
+  read at line 891 and a `bd update ... --status=hooked` mutation at
+  line 989.
 
 **Need:**
 - Polecat lifecycle mutations (claim, hook, status change, release)
@@ -182,7 +184,8 @@ requires keeping dual-write infrastructure alive.
 ## G7. bd CLI upstream compatibility
 
 **Have:**
-- bd is upstream `steveyegge/beads@v1.0.4`.
+- bd is upstream `steveyegge/beads`. CLI binary is v1.0.4; the Go SDK
+  pinned in `go.mod` is v1.0.0 (currently lags binary by one minor).
 - bd users (humans typing `bd close X` directly in terminals) exist.
 - bd CLI is the documented interface in `AGENTS.md`.
 
