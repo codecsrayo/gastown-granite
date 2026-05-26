@@ -83,7 +83,11 @@ the authority.
 
 ### 3.2 Event types catalog (initial)
 
-Mirrors current `IsMutating` classifier in `internal/beads/beads_mutations.go`.
+Will mirror the mutation classification implicit in
+`internal/beads/database.go` (`BuildMutationPinnedBDEnv` /
+`BuildMutationRoutingBDEnv` are the current gating helpers). An explicit
+`IsMutating` classifier will need to be added during Phase 0 — none
+exists today.
 
 | Type | Payload | Notes |
 |------|---------|-------|

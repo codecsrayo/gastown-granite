@@ -48,8 +48,9 @@ reads to decide:
   signals — not a state event log.
 - To go event-driven for STATE, we need: (a) extend events package with
   mutation event types, (b) write a materializer daemon that applies events
-  to dolt, (c) producer API with sync/async semantics, (d) migrate
-  ~14 packages that touch bd directly today.
+  to dolt, (c) producer API with sync/async semantics, (d) migrate the 12
+  packages outside `internal/beads/` that touch bd directly today (153
+  call sites total).
 - Estimate: 7-9 engineer-weeks, plus operational supervision overhead for
   the new daemon, plus polecats team coordination for Phase 2.
 - Risk: Phase 2 (polecats migration) is the one-way door. Everything
