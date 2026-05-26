@@ -9,6 +9,7 @@ import (
 
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/constants"
+	"github.com/steveyegge/gastown/internal/quota"
 	"github.com/steveyegge/gastown/internal/runtime"
 	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/tmux"
@@ -122,14 +123,22 @@ func (m *Manager) Start(agentOverride string) error {
 		return fmt.Errorf("building startup command: %w", err)
 	}
 
+	// Resolve a pooled account config dir via the LRU spawn picker so the
+	// Deacon's token burn attributes to a registered account instead of
+	// orphaning on the default ~/.claude (which the quota dashboard can't map
+	// to any account in accounts.json). Empty result => no accounts configured;
+	// fall back to ambient CLAUDE_CONFIG_DIR, matching prior behaviour.
+	runtimeConfigDir, _, _ := quota.PickSpawnAccount(m.townRoot, "")
+
 	// Compute env vars BEFORE session creation so they reach Claude's
 	// subprocesses (e.g., bd) via tmux -e flags. SetEnvironment after creation
 	// only affects newly spawned panes, not the running pane's tree (gt-neycp).
 	envVars := config.AgentEnv(config.AgentEnvConfig{
-		Role:        "deacon",
-		TownRoot:    m.townRoot,
-		Agent:       agentOverride,
-		SessionName: sessionID,
+		Role:             "deacon",
+		TownRoot:         m.townRoot,
+		Agent:            agentOverride,
+		SessionName:      sessionID,
+		RuntimeConfigDir: runtimeConfigDir,
 	})
 	envVars = session.MergeRuntimeLivenessEnv(envVars, runtimeConfig)
 

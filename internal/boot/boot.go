@@ -14,6 +14,7 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/steveyegge/gastown/internal/config"
+	"github.com/steveyegge/gastown/internal/quota"
 	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/tmux"
 	"github.com/steveyegge/gastown/internal/util"
@@ -178,6 +179,13 @@ func (b *Boot) spawnTmux(agentOverride string) error {
 		return fmt.Errorf("ensuring boot dir: %w", err)
 	}
 
+	// Resolve a pooled account config dir via the LRU spawn picker so Boot's
+	// token burn attributes to a registered account instead of orphaning on the
+	// default ~/.claude (which the quota dashboard can't map to any account in
+	// accounts.json). Empty result => no accounts configured; StartSession then
+	// falls back to ambient CLAUDE_CONFIG_DIR, matching prior behaviour.
+	runtimeConfigDir, _, _ := quota.PickSpawnAccount(b.townRoot, "")
+
 	// Use unified session lifecycle for config → settings → command → create → env.
 	_, err := session.StartSession(b.tmux, session.SessionConfig{
 		SessionID: session.BootSessionName(),
@@ -189,8 +197,9 @@ func (b *Boot) spawnTmux(agentOverride string) error {
 			Sender:    "daemon",
 			Topic:     "triage",
 		},
-		Instructions:  "Run `" + cli.Name() + " boot triage` now.",
-		AgentOverride: agentOverride,
+		Instructions:     "Run `" + cli.Name() + " boot triage` now.",
+		AgentOverride:    agentOverride,
+		RuntimeConfigDir: runtimeConfigDir,
 	})
 	return err
 }
