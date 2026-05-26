@@ -35,8 +35,9 @@ type SpawnedPolecatInfo struct {
 	Branch      string // Git branch name (for cleanup on rollback)
 
 	// Internal fields for deferred session start
-	account string
-	agent   string
+	account  string
+	agent    string
+	hookBead string // bead ID to pin into the polecat session env (GT_HOOK_BEAD)
 }
 
 // AgentID returns the agent identifier (e.g., "gastown/polecats/Toast")
@@ -221,6 +222,7 @@ func SpawnPolecatForSling(rigName string, opts SlingSpawnOptions) (*SpawnedPolec
 				Branch:      polecatObj.Branch,
 				account:     opts.Account,
 				agent:       opts.Agent,
+				hookBead:    opts.HookBead,
 			}, nil
 		}
 	}
@@ -332,6 +334,7 @@ func SpawnPolecatForSling(rigName string, opts SlingSpawnOptions) (*SpawnedPolec
 		Branch:      polecatObj.Branch,
 		account:     opts.Account,
 		agent:       opts.Agent,
+		hookBead:    opts.HookBead,
 	}, nil
 }
 
@@ -379,6 +382,7 @@ func (s *SpawnedPolecatInfo) StartSession() (string, error) {
 	startOpts := polecat.SessionStartOptions{
 		RuntimeConfigDir:   claudeConfigDir,
 		Agent:              s.agent,
+		HookBead:           s.hookBead,
 		PreflightValidator: quotaPreflight(townRoot, resolvedHandle, polecatSessMgr.SessionName(s.PolecatName)),
 	}
 	if err := polecatSessMgr.Start(s.PolecatName, startOpts); err != nil {
