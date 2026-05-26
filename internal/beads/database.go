@@ -201,13 +201,23 @@ func doltTargetEnvFromBeadsDir(beadsDir string, includeDatabase bool) []string {
 		env = append(env, "BEADS_DOLT_SERVER_PORT="+meta.Port)
 		env = append(env, "BEADS_DOLT_PORT="+meta.Port)
 	}
+	// When metadata declares server mode, force BEADS_DOLT_SERVER_MODE=1 so bd
+	// connects to the Dolt sql-server instead of opening a local embedded
+	// scratch dir (e.g. .beads/dolt). Without this, bd that finds an empty
+	// embedded dir falls back to it, auto-imports stale JSONL, and silently
+	// diverges from the server — reverting hook/close/update writes (gg-0nb,
+	// gg-zr4). SERVER_MODE=1 is bd's highest-priority mode check.
+	if meta.ServerMode {
+		env = append(env, "BEADS_DOLT_SERVER_MODE=1")
+	}
 	return env
 }
 
 type doltMetadata struct {
-	Database string
-	Host     string
-	Port     string
+	Database   string
+	Host       string
+	Port       string
+	ServerMode bool
 }
 
 func readDoltMetadata(beadsDir string) doltMetadata {
@@ -223,6 +233,7 @@ func readDoltMetadata(beadsDir string) doltMetadata {
 		DoltDatabase   string `json:"dolt_database"`
 		DoltServerHost string `json:"dolt_server_host"`
 		DoltServerPort int    `json:"dolt_server_port"`
+		DoltMode       string `json:"dolt_mode"`
 	}
 	if json.Unmarshal(data, &raw) != nil {
 		return meta
@@ -232,6 +243,7 @@ func readDoltMetadata(beadsDir string) doltMetadata {
 	if meta.Port == "" && raw.DoltServerPort > 0 {
 		meta.Port = strconv.Itoa(raw.DoltServerPort)
 	}
+	meta.ServerMode = strings.EqualFold(strings.TrimSpace(raw.DoltMode), "server")
 	return meta
 }
 
