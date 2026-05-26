@@ -895,3 +895,145 @@ func TestPlanRotation_ExcludesLiveLimitedAccounts(t *testing.T) {
 		t.Errorf("expected gamma in available pool, got %v", plan.AvailableAccounts)
 	}
 }
+
+// TestPlanRotation_PreemptiveSpreadDistribution verifies that when multiple
+// sessions share the same config dir and multiple accounts are available,
+// preemptive --from rotation fans them out across different accounts instead
+// of piling all onto a single keychain-swap destination.
+func TestPlanRotation_PreemptiveSpreadDistribution(t *testing.T) {
+	setupTestRegistry(t)
+
+	// Three sessions on alpha (all share alpha's config dir), two other accounts free.
+	tmux := &mockTmux{
+		sessions: []string{"gt-crew-bear", "gt-crew-wolf", "gt-crew-fox"},
+		paneContent: map[string]string{
+			"gt-crew-bear": "working normally...",
+			"gt-crew-wolf": "working normally...",
+			"gt-crew-fox":  "working normally...",
+		},
+		envVars: map[string]map[string]string{
+			"gt-crew-bear": {"CLAUDE_CONFIG_DIR": "/home/user/.claude-accounts/alpha"},
+			"gt-crew-wolf": {"CLAUDE_CONFIG_DIR": "/home/user/.claude-accounts/alpha"},
+			"gt-crew-fox":  {"CLAUDE_CONFIG_DIR": "/home/user/.claude-accounts/alpha"},
+		},
+	}
+
+	accounts := &config.AccountsConfig{
+		Accounts: map[string]config.Account{
+			"alpha": {ConfigDir: "/home/user/.claude-accounts/alpha"},
+			"beta":  {ConfigDir: "/home/user/.claude-accounts/beta"},
+			"gamma": {ConfigDir: "/home/user/.claude-accounts/gamma"},
+		},
+	}
+
+	scanner, err := NewScanner(tmux, nil, accounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	townRoot := setupTestTown(t)
+	mgr := NewManager(townRoot)
+	state := &config.QuotaState{
+		Version: config.CurrentQuotaVersion,
+		Accounts: map[string]config.AccountQuotaState{
+			"alpha": {Status: config.QuotaStatusAvailable, LastUsed: "2025-01-01T03:00:00Z"},
+			"beta":  {Status: config.QuotaStatusAvailable, LastUsed: "2025-01-01T02:00:00Z"},
+			"gamma": {Status: config.QuotaStatusAvailable, LastUsed: "2025-01-01T01:00:00Z"},
+		},
+	}
+	if err := mgr.Save(state); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanRotation(scanner, mgr, accounts, PlanOpts{FromAccount: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(plan.LimitedSessions) != 3 {
+		t.Fatalf("expected 3 targeted sessions, got %d", len(plan.LimitedSessions))
+	}
+	if len(plan.Assignments) != 3 {
+		t.Fatalf("expected 3 assignments, got %d", len(plan.Assignments))
+	}
+
+	// Spread: at least 2 distinct target accounts (with 3 sessions and 2 available).
+	seen := make(map[string]bool)
+	for _, acct := range plan.Assignments {
+		seen[acct] = true
+		if acct == "alpha" {
+			t.Errorf("session assigned to source account %q", acct)
+		}
+	}
+	if len(seen) < 2 {
+		t.Errorf("expected spread across >=2 accounts, got %d distinct: %v", len(seen), plan.Assignments)
+	}
+
+	// SpreadConfigDirs must be populated for every assigned session.
+	if len(plan.SpreadConfigDirs) != 3 {
+		t.Errorf("expected 3 SpreadConfigDirs entries, got %d: %v", len(plan.SpreadConfigDirs), plan.SpreadConfigDirs)
+	}
+
+	// Each SpreadConfigDir must point to the target account's config dir.
+	for sess, newAcct := range plan.Assignments {
+		wantDir := "/home/user/.claude-accounts/" + newAcct
+		if plan.SpreadConfigDirs[sess] != wantDir {
+			t.Errorf("session %s: SpreadConfigDir=%q, want %q", sess, plan.SpreadConfigDirs[sess], wantDir)
+		}
+	}
+}
+
+// TestPlanRotation_PreemptiveNoSpreadSingleSession verifies that a single
+// preemptive session does NOT populate SpreadConfigDirs (falls through to
+// existing config-dir-swap path).
+func TestPlanRotation_PreemptiveNoSpreadSingleSession(t *testing.T) {
+	setupTestRegistry(t)
+
+	tmux := &mockTmux{
+		sessions: []string{"gt-crew-bear"},
+		paneContent: map[string]string{
+			"gt-crew-bear": "working normally...",
+		},
+		envVars: map[string]map[string]string{
+			"gt-crew-bear": {"CLAUDE_CONFIG_DIR": "/home/user/.claude-accounts/alpha"},
+		},
+	}
+
+	accounts := &config.AccountsConfig{
+		Accounts: map[string]config.Account{
+			"alpha": {ConfigDir: "/home/user/.claude-accounts/alpha"},
+			"beta":  {ConfigDir: "/home/user/.claude-accounts/beta"},
+		},
+	}
+
+	scanner, err := NewScanner(tmux, nil, accounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	townRoot := setupTestTown(t)
+	mgr := NewManager(townRoot)
+	state := &config.QuotaState{
+		Version: config.CurrentQuotaVersion,
+		Accounts: map[string]config.AccountQuotaState{
+			"alpha": {Status: config.QuotaStatusAvailable, LastUsed: "2025-01-01T02:00:00Z"},
+			"beta":  {Status: config.QuotaStatusAvailable, LastUsed: "2025-01-01T01:00:00Z"},
+		},
+	}
+	if err := mgr.Save(state); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanRotation(scanner, mgr, accounts, PlanOpts{FromAccount: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(plan.Assignments) != 1 {
+		t.Fatalf("expected 1 assignment, got %d", len(plan.Assignments))
+	}
+	// Single preemptive session: no spread needed.
+	if len(plan.SpreadConfigDirs) != 0 {
+		t.Errorf("single-session preemptive: expected no SpreadConfigDirs, got %v", plan.SpreadConfigDirs)
+	}
+}

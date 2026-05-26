@@ -168,16 +168,25 @@ func (r *RotationExecutor) executeOne(sessionName, newAccount string, plan *quot
 	}
 	sourceConfigDir := util.ExpandHome(newAcct.ConfigDir)
 
-	if _, alreadySwapped := swappedDirs[currentConfigDir]; !alreadySwapped {
-		if _, err := r.swapper.SwapKeychain(currentConfigDir, sourceConfigDir); err != nil {
-			res.Error = fmt.Sprintf("keychain swap failed: %v", err)
-			return res
+	// Spread rotation: session is being redirected to a different account's
+	// config dir (no keychain swap needed — target account's credentials are
+	// already in its own dir). Only triggered during preemptive --from spread.
+	targetConfigDir := currentConfigDir
+	if spreadDir, ok := plan.SpreadConfigDirs[sessionName]; ok && spreadDir != "" {
+		targetConfigDir = spreadDir
+	} else {
+		// Keychain-swap rotation: overwrite the token in the current config dir.
+		if _, alreadySwapped := swappedDirs[currentConfigDir]; !alreadySwapped {
+			if _, err := r.swapper.SwapKeychain(currentConfigDir, sourceConfigDir); err != nil {
+				res.Error = fmt.Sprintf("keychain swap failed: %v", err)
+				return res
+			}
+			// oauthAccount swap is best-effort — keychain token alone is enough
+			// for quota purposes. Warn via a side log but do not fail the rotation.
+			_ = r.swapper.SwapOAuth(currentConfigDir, sourceConfigDir)
+			swappedDirs[currentConfigDir] = newAccount
+			res.KeychainSwap = true
 		}
-		// oauthAccount swap is best-effort — keychain token alone is enough
-		// for quota purposes. Warn via a side log but do not fail the rotation.
-		_ = r.swapper.SwapOAuth(currentConfigDir, sourceConfigDir)
-		swappedDirs[currentConfigDir] = newAccount
-		res.KeychainSwap = true
 	}
 
 	restartCmd, err := r.builder(sessionName, sessionrestart.Options{ContinueSession: true})
@@ -191,7 +200,7 @@ func (r *RotationExecutor) executeOne(sessionName, newAccount string, plan *quot
 	}
 
 	restartCmd = config.PrependEnv(restartCmd, map[string]string{
-		"CLAUDE_CONFIG_DIR": currentConfigDir,
+		"CLAUDE_CONFIG_DIR": targetConfigDir,
 		"GT_QUOTA_ACCOUNT":  newAccount,
 	})
 

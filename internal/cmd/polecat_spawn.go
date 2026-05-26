@@ -16,6 +16,7 @@ import (
 	"github.com/steveyegge/gastown/internal/events"
 	"github.com/steveyegge/gastown/internal/git"
 	"github.com/steveyegge/gastown/internal/polecat"
+	"github.com/steveyegge/gastown/internal/quota"
 	"github.com/steveyegge/gastown/internal/rig"
 	"github.com/steveyegge/gastown/internal/style"
 	"github.com/steveyegge/gastown/internal/tmux"
@@ -362,9 +363,10 @@ func (s *SpawnedPolecatInfo) StartSession() (string, error) {
 		return "", fmt.Errorf("rig '%s' not found", s.RigName)
 	}
 
-	// Resolve account
-	accountsPath := constants.MayorAccountsPath(townRoot)
-	claudeConfigDir, _, err := config.ResolveAccountConfigDir(accountsPath, s.account)
+	// Resolve account using quota-aware LRU selection so consecutive spawns
+	// without an explicit --account flag fan out across the pool instead of
+	// piling onto the default account.
+	claudeConfigDir, resolvedHandle, err := quota.PickSpawnAccount(townRoot, s.account)
 	if err != nil {
 		return "", fmt.Errorf("resolving account: %w", err)
 	}
@@ -377,7 +379,7 @@ func (s *SpawnedPolecatInfo) StartSession() (string, error) {
 	startOpts := polecat.SessionStartOptions{
 		RuntimeConfigDir:   claudeConfigDir,
 		Agent:              s.agent,
-		PreflightValidator: quotaPreflight(townRoot, s.account, polecatSessMgr.SessionName(s.PolecatName)),
+		PreflightValidator: quotaPreflight(townRoot, resolvedHandle, polecatSessMgr.SessionName(s.PolecatName)),
 	}
 	if err := polecatSessMgr.Start(s.PolecatName, startOpts); err != nil {
 		return "", fmt.Errorf("starting session: %w", err)

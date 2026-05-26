@@ -39,6 +39,14 @@ type RotatePlan struct {
 	// All sessions sharing a config dir get the same assignment.
 	ConfigDirSwaps map[string]string
 
+	// SpreadConfigDirs maps session -> new CLAUDE_CONFIG_DIR for sessions
+	// being redirected to a different account's config dir (spread rotation).
+	// Used when multiple sessions share the same config dir and need to be
+	// fanned out across multiple accounts. The executor skips keychain swap
+	// and instead respawns each session pointing at its target account's dir.
+	// Only populated during preemptive --from rotation with multiple accounts.
+	SpreadConfigDirs map[string]string `json:"spread_config_dirs,omitempty"`
+
 	// SkippedAccounts maps handle -> reason for accounts that were
 	// available by quota status but had invalid/expired tokens.
 	SkippedAccounts map[string]string `json:"skipped_accounts,omitempty"`
@@ -247,12 +255,42 @@ func PlanRotation(scanner *Scanner, mgr *Manager, acctCfg *config.AccountsConfig
 		}
 	}
 
+	// For preemptive rotation (--from), fan out sessions across multiple accounts.
+	// When there are more available accounts than unique config dirs, sessions
+	// sharing a config dir can each be redirected to a DIFFERENT account's config
+	// dir instead of all piling onto a single keychain-swap destination. Each
+	// session's CLAUDE_CONFIG_DIR is redirected to the target account's own dir so
+	// no keychain swap is needed — sessions use the target account's credentials
+	// file directly (SpreadConfigDirs signals this to the executor).
+	var spreadConfigDirs map[string]string
+	if opts.FromAccount != "" && len(available) > 1 && len(targetSessions) > 1 {
+		// Collect all sessions on the from-account (they share a config dir).
+		// Assign them round-robin across available accounts.
+		spreadConfigDirs = make(map[string]string)
+		ai := 0
+		for _, r := range targetSessions {
+			if ai >= len(available) {
+				ai = 0 // wrap around if more sessions than accounts
+			}
+			// Skip same-account (already excluded from available, but be defensive)
+			candidate := available[ai]
+			ai++
+			targetAcct, ok := acctCfg.Accounts[candidate]
+			if !ok {
+				continue
+			}
+			assignments[r.Session] = candidate
+			spreadConfigDirs[r.Session] = util.ExpandHome(targetAcct.ConfigDir)
+		}
+	}
+
 	return &RotatePlan{
 		LimitedSessions:   limitedSessions,
 		NearLimitSessions: nearLimitSessions,
 		AvailableAccounts: available,
 		Assignments:       assignments,
 		ConfigDirSwaps:    configDirSwaps,
+		SpreadConfigDirs:  spreadConfigDirs,
 		SkippedAccounts:   skipped,
 		TokenExpiries:     expiries,
 		PlannedAt:         time.Now().UTC().Format(time.RFC3339),

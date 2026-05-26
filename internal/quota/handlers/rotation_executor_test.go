@@ -243,3 +243,96 @@ func TestRotationExecutorBuildCommandFailureStillRotates(t *testing.T) {
 		t.Fatal("expected Error to surface the restart failure reason")
 	}
 }
+
+// TestRotationExecutorSpreadRotation verifies that when plan.SpreadConfigDirs
+// is populated, the executor redirects CLAUDE_CONFIG_DIR to the target
+// account's dir and skips the keychain swap.
+func TestRotationExecutorSpreadRotation(t *testing.T) {
+	townRoot := t.TempDir()
+	mgr := quota.NewManager(townRoot)
+	alphaDir := filepath.Join(townRoot, "alpha-dir")
+	betaDir := filepath.Join(townRoot, "beta-dir")
+	gammaDir := filepath.Join(townRoot, "gamma-dir")
+
+	accts := &config.AccountsConfig{
+		Accounts: map[string]config.Account{
+			"alpha": {ConfigDir: alphaDir},
+			"beta":  {ConfigDir: betaDir},
+			"gamma": {ConfigDir: gammaDir},
+		},
+	}
+
+	// Two sessions on alpha, spread: bear → beta dir, wolf → gamma dir.
+	plan := &quota.RotatePlan{
+		Assignments: map[string]string{
+			"gt-rig-bear": "beta",
+			"gt-rig-wolf": "gamma",
+		},
+		ConfigDirSwaps: map[string]string{alphaDir: "beta"},
+		// SpreadConfigDirs overrides CLAUDE_CONFIG_DIR per session.
+		SpreadConfigDirs: map[string]string{
+			"gt-rig-bear": betaDir,
+			"gt-rig-wolf": gammaDir,
+		},
+		LimitedSessions: []quota.ScanResult{
+			{Session: "gt-rig-bear", AccountHandle: "alpha", ConfigDir: alphaDir},
+			{Session: "gt-rig-wolf", AccountHandle: "alpha", ConfigDir: alphaDir},
+		},
+	}
+
+	tx := newFakeTmuxOps()
+	tx.setEnv("gt-rig-bear", "CLAUDE_CONFIG_DIR", alphaDir)
+	tx.setEnv("gt-rig-wolf", "CLAUDE_CONFIG_DIR", alphaDir)
+	tx.panes["gt-rig-bear"] = "%1"
+	tx.panes["gt-rig-wolf"] = "%2"
+
+	swapper := &fakeSwapper{}
+	exec := NewRotationExecutor(RotationExecutorConfig{
+		Tmux:     tx,
+		Manager:  mgr,
+		Accounts: accts,
+		Swapper:  swapper,
+		Builder: func(_ string, _ sessionrestart.Options) (string, error) {
+			return "exec claude --continue", nil
+		},
+	})
+
+	results := exec.Execute(context.Background(), plan)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	for _, r := range results {
+		if !r.Rotated {
+			t.Errorf("session %s: expected Rotated=true, got false (error: %q)", r.Session, r.Error)
+		}
+		// Spread rotation must NOT do a keychain swap.
+		if r.KeychainSwap {
+			t.Errorf("session %s: expected no keychain swap in spread rotation", r.Session)
+		}
+	}
+
+	// No keychain swaps should have occurred for spread sessions.
+	if len(swapper.keySwaps) != 0 {
+		t.Errorf("expected 0 keychain swaps for spread rotation, got %d: %v", len(swapper.keySwaps), swapper.keySwaps)
+	}
+
+	// Both sessions should have been respawned.
+	if len(tx.respawn) != 2 {
+		t.Errorf("expected 2 respawns, got %d", len(tx.respawn))
+	}
+
+	// GT_QUOTA_ACCOUNT must be set on each session.
+	quotaAccts := make(map[string]string)
+	for _, e := range tx.envSets {
+		if e.key == "GT_QUOTA_ACCOUNT" {
+			quotaAccts[e.session] = e.value
+		}
+	}
+	if quotaAccts["gt-rig-bear"] != "beta" {
+		t.Errorf("gt-rig-bear GT_QUOTA_ACCOUNT=%q, want beta", quotaAccts["gt-rig-bear"])
+	}
+	if quotaAccts["gt-rig-wolf"] != "gamma" {
+		t.Errorf("gt-rig-wolf GT_QUOTA_ACCOUNT=%q, want gamma", quotaAccts["gt-rig-wolf"])
+	}
+}
