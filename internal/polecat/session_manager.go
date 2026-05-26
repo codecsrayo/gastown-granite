@@ -59,8 +59,19 @@ type SessionStartOptions struct {
 	// WorkDir overrides the default working directory (polecat clone dir).
 	WorkDir string
 
-	// Issue is an optional issue ID to work on.
+	// Issue is an optional issue ID to work on. Setting this triggers
+	// hookIssue (bd update --status=hooked) inside Start — only the
+	// direct StartPolecat path uses it. Sling attaches the hook BEFORE
+	// StartSession runs, so it MUST leave Issue empty and pass the bead
+	// via HookBead instead to avoid double-hook writes.
 	Issue string
+
+	// HookBead is the bead ID the polecat is hooked to. Unlike Issue, it
+	// does NOT trigger a hookIssue call — sling has already attached the
+	// hook before StartSession. HookBead is pinned into the session env
+	// as GT_HOOK_BEAD so prime/status code paths can bypass the bd lookup
+	// that upstream bd 1.0.4's scratch auto-import can revert (gg-0nb).
+	HookBead string
 
 	// Command overrides the default "claude" command.
 	Command string
@@ -502,13 +513,15 @@ func (m *SessionManager) Start(polecat string, opts SessionStartOptions) error {
 	if runtimeConfig.Session != nil && runtimeConfig.Session.ConfigDirEnv != "" && opts.RuntimeConfigDir != "" {
 		envVars[runtimeConfig.Session.ConfigDirEnv] = opts.RuntimeConfigDir
 	}
-	// GT_HOOK_BEAD bypasses the bd lookup path that the upstream bd 1.0.4
-	// scratch auto-import can revert (gg-0nb). When sling spawns a polecat
-	// with --issue, we pin the bead ID into the session env so gt prime, gt
-	// hook (status), and DetectAgentState can authoritatively see the hook
-	// without trusting a bd read that may flip status=hooked → open due to
-	// stale jsonl import.
-	if opts.Issue != "" {
+	// GT_HOOK_BEAD bypasses the bd lookup path that upstream bd 1.0.4's
+	// scratch auto-import can revert (gg-0nb). Prefer HookBead (sling
+	// already attached the hook), fall back to Issue (direct StartPolecat
+	// path where hookIssue runs below). Either way, the polecat session
+	// gets the pin so prime/status code can identify its hooked work
+	// without trusting a bd read that may flip status=hooked → open.
+	if opts.HookBead != "" {
+		envVars["GT_HOOK_BEAD"] = opts.HookBead
+	} else if opts.Issue != "" {
 		envVars["GT_HOOK_BEAD"] = opts.Issue
 	}
 
