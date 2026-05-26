@@ -35,6 +35,9 @@ services:
       # Dolt data on a proper ext4 volume (not the macOS bind mount) to
       # avoid journal corruption from VirtioFS fsync semantics.
       - dolt-data:/gt/.dolt-data
+      # Host SSH keys (read-only). Entrypoint copies into agent home so
+      # git push/pull to private remotes works inside the sandbox.
+      - ${HOST_SSH_DIR:-${HOME}/.ssh}:/host-ssh:ro
     expose:
       - "8080"
     ports:

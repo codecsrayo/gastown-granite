@@ -11,6 +11,21 @@ if [ -n "$GIT_USER" ] && [ -n "$GIT_EMAIL" ]; then
     dolt config --global --add user.email "$GIT_EMAIL"
 fi
 
+# Sync SSH keys from host bind-mount into agent home so git over SSH works.
+# Runs every start so re-created agent-home volume gets keys back.
+if [ -d /host-ssh ]; then
+    mkdir -p /home/agent/.ssh
+    chmod 700 /home/agent/.ssh
+    for key in id_ed25519 id_ed25519.pub id_rsa id_rsa.pub known_hosts; do
+        if [ -f "/host-ssh/$key" ] && [ ! -f "/home/agent/.ssh/$key" ]; then
+            cp "/host-ssh/$key" "/home/agent/.ssh/$key"
+        fi
+    done
+    chmod 600 /home/agent/.ssh/id_ed25519 2>/dev/null || true
+    chmod 600 /home/agent/.ssh/id_rsa 2>/dev/null || true
+    chmod 644 /home/agent/.ssh/*.pub /home/agent/.ssh/known_hosts 2>/dev/null || true
+fi
+
 if [ ! -f /gt/mayor/town.json ]; then
     echo "Initializing Gas Town workspace at /gt..."
     /app/gastown/gt install /gt --git
