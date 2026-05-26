@@ -920,6 +920,23 @@ func closeConvoyIfComplete(townBeads, convoyID, title string, tracked []trackedI
 		return true, nil
 	}
 
+	// Re-fetch current status immediately before closing to guard against stale Dolt
+	// reads. bd close is idempotent (exit 0 for already-closed convoys), so without
+	// this check a stale read → close → notifyConvoyCompletion loop creates duplicate
+	// completion wisps. (gg-rn5)
+	if freshBytes, fetchErr := runBdJSON(townBeads, "show", convoyID, "--json"); fetchErr == nil {
+		var freshConvoys []struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal(freshBytes, &freshConvoys) == nil && len(freshConvoys) > 0 {
+			if normalizeConvoyStatus(freshConvoys[0].Status) == convoyStatusClosed {
+				fmt.Printf("%s Convoy %s already closed — skipping duplicate notification\n",
+					style.Dim.Render("○"), convoyID)
+				return false, nil
+			}
+		}
+	}
+
 	reason := "All tracked issues completed"
 	closeArgs := []string{"close", convoyID, "-r", reason}
 	if err := BdCmd(closeArgs...).Dir(townBeads).WithAutoCommit().Run(); err != nil {

@@ -557,7 +557,15 @@ func runDone(cmd *cobra.Command, args []string) (retErr error) {
 				branchPushedWithWork := false
 				if branch != defaultBranch {
 					pushed, unpushed, pushErr := g.BranchPushedToRemote(branch, "origin")
-					branchPushedWithWork = pushErr == nil && pushed && unpushed == 0
+					if pushErr == nil && pushed && unpushed == 0 {
+						// Remote branch exists and no local unpushed commits.
+						// Verify the remote branch actually has commits beyond the target
+						// branch — an empty branch at origin/main is not "work that was
+						// pushed". Prevents false-completion when branch has 0 commits
+						// but exists on remote at same SHA as origin/main. (gg-rn5)
+						remoteAhead, raErr := g.CommitsAhead("origin/"+defaultBranch, "origin/"+branch)
+						branchPushedWithWork = raErr == nil && remoteAhead > 0
+					}
 				}
 				if !branchPushedWithWork {
 					return fmt.Errorf("cannot complete: no commits on branch ahead of %s\n"+
