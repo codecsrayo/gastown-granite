@@ -69,6 +69,13 @@ tasks:
       - task: build
       - docker compose up -d --force-recreate {{.SERVICE}}
 
+  hot-deploy:
+    desc: Zero-downtime deploy — build in container, swap binary, restart daemon only (Dolt + sessions stay up)
+    cmds:
+      - task: compile-in-container
+      - docker compose exec -T {{.SERVICE}} gt daemon stop
+      - docker compose exec -T {{.SERVICE}} gt daemon start
+
   logs:
     desc: Tail container logs
     cmds:
