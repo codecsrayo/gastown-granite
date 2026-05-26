@@ -1137,6 +1137,11 @@ func (m *Mailbox) Count() (total, unread int, err error) {
 // tracking (phase-1 is written at send time as delivery:pending).
 // Acks are run concurrently (bounded to 8) to avoid N+1 sequential subprocess
 // spawns on the hot path.
+//
+// Notification and reply messages are also closed after a successful ack,
+// since they require no further recipient action — leaving them open caused
+// the post-ack wisp leak (2026-05-26: 4 hq wisps stuck open after ack).
+// Task/escalation/scavenge messages stay open: those require claim/complete.
 func (m *Mailbox) AcknowledgeDeliveries(recipientAddress string, messages []*Message) error {
 	if m.legacy || len(messages) == 0 {
 		return nil
@@ -1172,15 +1177,27 @@ func (m *Mailbox) AcknowledgeDeliveries(recipientAddress string, messages []*Mes
 	for _, msg := range toAck {
 		wg.Add(1)
 		sem <- struct{}{} // acquire
-		go func(id string) {
+		go func(msg *Message) {
 			defer wg.Done()
 			defer func() { <-sem }() // release
-			if err := AcknowledgeDeliveryBead(m.workDir, m.beadsDir, id, recipientIdentity); err != nil {
+			if err := AcknowledgeDeliveryBead(m.workDir, m.beadsDir, msg.ID, recipientIdentity); err != nil {
 				mu.Lock()
-				errs = append(errs, fmt.Sprintf("%s: %v", id, err))
+				errs = append(errs, fmt.Sprintf("%s: %v", msg.ID, err))
+				mu.Unlock()
+				return
+			}
+			// Notification and reply types require no further recipient action,
+			// so close the bead after the ack to prevent the post-ack-open leak.
+			// Task/Escalation/Scavenge stay open: those require claim/complete.
+			if msg.Type != TypeNotification && msg.Type != TypeReply {
+				return
+			}
+			if err := m.markReadBeads(msg.ID); err != nil && !errors.Is(err, ErrMessageNotFound) {
+				mu.Lock()
+				errs = append(errs, fmt.Sprintf("%s close: %v", msg.ID, err))
 				mu.Unlock()
 			}
-		}(msg.ID)
+		}(msg)
 	}
 	wg.Wait()
 
