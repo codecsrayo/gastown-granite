@@ -1640,7 +1640,16 @@ func checkAndCloseCompletedConvoys(townBeads string, dryRun bool) ([]struct{ ID,
 	return closed, nil
 }
 
+// convoyNotifiedLabel marks a convoy whose completion notifications have
+// already been delivered. notifyConvoyCompletion skips re-sending when it
+// finds this label, which prevents flooding mayor/ when an upstream bug
+// (e.g. split-brain reads, throttled bd writes) causes a convoy to be
+// repeatedly re-detected as complete.
+const convoyNotifiedLabel = "gt:convoy-notified"
+
 // notifyConvoyCompletion sends notifications to owner, any notify addresses, and mayor/.
+// Sends each convoy completion at most once: a successful send adds the
+// convoyNotifiedLabel to the convoy bead so subsequent calls return early.
 func notifyConvoyCompletion(townBeads, convoyID, title string) {
 	stdout, err := runBdJSON(townBeads, "show", convoyID, "--json")
 	if err != nil {
@@ -1648,10 +1657,17 @@ func notifyConvoyCompletion(townBeads, convoyID, title string) {
 	}
 
 	var convoys []struct {
-		Description string `json:"description"`
-		CreatedAt   string `json:"created_at"`
+		Description string   `json:"description"`
+		CreatedAt   string   `json:"created_at"`
+		Labels      []string `json:"labels"`
 	}
 	if err := json.Unmarshal(stdout, &convoys); err != nil || len(convoys) == 0 {
+		return
+	}
+
+	// De-dupe guard: if we've already notified for this convoy, do nothing.
+	// The label is added at the end of this function on a successful send.
+	if hasLabel(convoys[0].Labels, convoyNotifiedLabel) {
 		return
 	}
 
@@ -1717,6 +1733,14 @@ func notifyConvoyCompletion(townBeads, convoyID, title string) {
 
 	// Push notification to active Mayor session if configured.
 	notifyMayorSession(townBeads, convoyID, title)
+
+	// Mark this convoy as notified so future polls don't re-flood mayor/.
+	// Non-fatal: if the label write fails (e.g. throttled bd race) the only
+	// consequence is one extra notification on the next poll.
+	if err := BdCmd("update", convoyID, "--add-label", convoyNotifiedLabel).
+		Dir(townBeads).WithAutoCommit().Run(); err != nil {
+		style.PrintWarning("could not mark convoy %s as notified: %v", convoyID, err)
+	}
 }
 
 // notifyMayorSession pushes a convoy completion notification into the active

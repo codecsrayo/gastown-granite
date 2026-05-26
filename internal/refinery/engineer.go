@@ -2070,15 +2070,31 @@ func (e *Engineer) checkAndCloseCompletedConvoys(townRoot, townBeads string) []c
 			Description: convoy.Description,
 		})
 
-		// Send convoy completion notifications (owner + notify addresses)
-		e.notifyConvoyCompletion(townRoot, convoy.ID, convoy.Title, convoy.Description)
+		// Send convoy completion notifications (owner + notify addresses).
+		// Pass labels so the notify function can short-circuit when this
+		// convoy was already notified by an earlier poll or by the CLI path.
+		e.notifyConvoyCompletion(townRoot, townBeads, convoy.ID, convoy.Title, convoy.Description, convoy.Labels)
 	}
 
 	return closed
 }
 
+// convoyNotifiedLabel marks a convoy whose completion notifications have
+// already been delivered. notifyConvoyCompletion skips re-sending when it
+// finds this label, preventing flooded notify addresses if an upstream bug
+// (split-brain reads, throttled bd writes) causes the same convoy to be
+// re-detected as complete on subsequent polls.
+const convoyNotifiedLabel = "gt:convoy-notified"
+
 // notifyConvoyCompletion sends notifications to convoy owner and notify addresses.
-func (e *Engineer) notifyConvoyCompletion(townRoot, convoyID, title, description string) {
+// Skips if the convoy already carries convoyNotifiedLabel, and adds that label
+// after sending so future polls do not re-flood.
+func (e *Engineer) notifyConvoyCompletion(townRoot, townBeads, convoyID, title, description string, labels []string) {
+	// De-dupe: nothing to do if we've already notified for this convoy.
+	if refineryHasLabel(labels, convoyNotifiedLabel) {
+		return
+	}
+
 	// ZFC: Use typed accessor instead of parsing description text
 	fields := beads.ParseConvoyFields(&beads.Issue{Description: description})
 	for _, addr := range fields.NotificationAddresses() {
@@ -2090,6 +2106,15 @@ func (e *Engineer) notifyConvoyCompletion(townRoot, convoyID, title, description
 		if err := mailCmd.Run(); err != nil {
 			_, _ = fmt.Fprintf(e.output, "[Engineer] Warning: could not notify %s: %v\n", addr, err)
 		}
+	}
+
+	// Mark convoy notified so future polls skip the notify path.
+	// Non-fatal: a failed label write only costs one extra notify next cycle.
+	townMutationEnv := beads.BuildMutationPinnedBDEnv(os.Environ(), townBeads)
+	markArgs := beads.MaybePrependAllowStaleWithEnv(townMutationEnv, []string{"update", convoyID, "--add-label", convoyNotifiedLabel})
+	markCmd := beads.Command(townBeads, townBeads, beads.MutationPinned, markArgs...)
+	if err := markCmd.Run(); err != nil {
+		_, _ = fmt.Fprintf(e.output, "[Engineer] Warning: could not mark convoy %s as notified: %v\n", convoyID, err)
 	}
 }
 
