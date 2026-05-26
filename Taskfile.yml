@@ -63,13 +63,6 @@ tasks:
       - task: compile-in-container
       - task: restart
 
-  hot-deploy:
-    desc: Zero-downtime deploy — build in container, swap binary, restart daemon only (Dolt + sessions stay up)
-    cmds:
-      - task: compile-in-container
-      - docker compose exec -T {{.SERVICE}} gt daemon stop
-      - docker compose exec -T {{.SERVICE}} gt daemon start
-
   rebuild:
     desc: Full image rebuild and recreate container
     cmds:
