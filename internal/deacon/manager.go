@@ -149,6 +149,16 @@ func (m *Manager) Start(agentOverride string) error {
 		return fmt.Errorf("creating tmux session: %w", err)
 	}
 
+	// Publish the resolved config dir at the SESSION level too. The -e flags
+	// above inject CLAUDE_CONFIG_DIR into the pane process (so the right
+	// credential burns), but the quota scanner reads `tmux show-environment`
+	// (session env) for attribution. Without this, the Deacon's burn is
+	// correctly charged at runtime but still surfaces as an "orphan session" on
+	// the dashboard. Non-fatal: attribution is best-effort.
+	if runtimeConfigDir != "" {
+		_ = t.SetEnvironment(sessionID, "CLAUDE_CONFIG_DIR", runtimeConfigDir)
+	}
+
 	// PATCH-010: Set remain-on-exit IMMEDIATELY after session creation.
 	// This ensures the pane stays if Claude exits before hooks are fully set.
 	// The pane will show "[Exited]" status but remain available for respawn.

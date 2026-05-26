@@ -201,7 +201,20 @@ func (b *Boot) spawnTmux(agentOverride string) error {
 		AgentOverride:    agentOverride,
 		RuntimeConfigDir: runtimeConfigDir,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Publish the resolved config dir at the SESSION level too. StartSession
+	// only injects CLAUDE_CONFIG_DIR into the pane process (via -e flags and a
+	// command prepend), which the quota scanner can't read — it inspects
+	// `tmux show-environment` (session env). Without this, Boot's real burn is
+	// correctly attributed at runtime but still surfaces as an "orphan session"
+	// on the dashboard. Non-fatal: attribution is best-effort.
+	if runtimeConfigDir != "" {
+		_ = b.tmux.SetEnvironment(session.BootSessionName(), "CLAUDE_CONFIG_DIR", runtimeConfigDir)
+	}
+	return nil
 }
 
 // spawnDegraded spawns Boot in degraded mode (no tmux).
