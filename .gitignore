@@ -201,3 +201,4 @@ mayor/
 /rigs.json
 graphify-out/*
 .graphify*
+.direnv
