@@ -202,3 +202,4 @@ mayor/
 graphify-out/*
 .graphify*
 .direnv
+.tmp
