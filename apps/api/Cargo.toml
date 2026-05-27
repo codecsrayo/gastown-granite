@@ -15,6 +15,7 @@ members = [
     "crates/kernel/gt-store-dolt",
     "crates/kernel/gt-store-pg",
     "crates/domain/gt-agent",
+    "crates/domain/gt-scheduling",
 ]
 
 [workspace.package]
