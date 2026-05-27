@@ -48,9 +48,10 @@ es la especificación de referencia.
 > | 4 | `gt-beads` + `gt-store-dolt` | DONE | — | — |
 > | 5 | `gt-scheduling` | DONE | — | hq-mc72 |
 > | 6.a | `gt-patrol` (lease-expired → re-enqueue, cierra el lease del Paso 5) | DONE | — | hq-mc72 |
-> | 6.b+ | `gt-merge`, `gt-quota`+`gt-store-pg`, `gt-orchestration`, `gt-web`, `gt-mcp`, `gt-feed` | PLANEADO | — | — |
+> | 6.b | `gt-merge` + `gt-channel` (refinery await MERGE_READY) | DONE | — | hq-mc72.2 |
+> | 6.c+ | `gt-quota`+`gt-store-pg`, `gt-orchestration`, `gt-web`, `gt-mcp`, `gt-feed` | PLANEADO | — | — |
 >
-> Estado global: **Paso 6.a (`gt-patrol`) DONE** (al 2026-05-27). Mantén esta tabla viva.
+> Estado global: **Paso 6.b (`gt-merge` + `gt-channel`) DONE** (al 2026-05-27). Mantén esta tabla viva.
 
 ---
 

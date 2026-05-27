@@ -133,7 +133,20 @@ Mismo patrón aplicado en orden:
    con `BeadRepository::cas_release` + re-encolar. El reloj entra como dato en cada
    evento → replay determinista (regla de `docs/06`). Crate: `crates/domain/gt-patrol`.
    Gate test: `orchestrated_flow_with_stale_polecat_recovers_via_patrol`.
-2. **`gt-merge`** (introduce `gt-channel` para `await MERGE_READY`).
+2. **`gt-merge` + `gt-channel`** ✅ DONE — introduce el mailbox de archivo *entre
+   procesos* para `await MERGE_READY`. `gt-channel` expone `Channel::{open, emit,
+   subscribe, ack}` sobre `<root>/<name>/<ulid>.event` con escritura atómica
+   (write-then-rename) y watcher `notify` (inotify en Linux, sin polling); el subscriber
+   drena los archivos preexistentes y luego reenvía live, deduplicando la ráfaga
+   `Create`/`Modify(Name(To))`. `gt-merge` define `MergeEvent { Ready, Started, Merged,
+   Failed }`, `MergeSlot` con state machine `Ready → Merging → Merged | Failed`
+   (transiciones ilegales = `AppError::InvalidTransition`), `MergeBoard` (dueño único en
+   el actor), `MergeState` (reducer de replay) y la `refinery` (productor que traduce
+   cada mensaje del canal a `Submit` y ackea **después** de empujar → at-least-once;
+   payload corrupto se ackea para no entrar en bucle). Crates:
+   `crates/kernel/gt-channel`, `crates/domain/gt-merge`. Gates:
+   `refinery_drives_slot_to_merged_then_replay_matches`,
+   `refinery_failed_merge_records_failed_event_and_replay_matches`.
 3. **`gt-quota`** + `gt-store-pg` (primer Postgres; `keychain` platform-specific).
 4. **`gt-orchestration`** (mayor / deacon / crew / convoy).
 5. **`gt-web`** (cuando ya hay datos significativos que exponer).

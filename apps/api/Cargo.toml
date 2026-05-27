@@ -17,6 +17,7 @@ members = [
     "crates/domain/gt-agent",
     "crates/domain/gt-scheduling",
     "crates/domain/gt-patrol",
+    "crates/domain/gt-merge",
 ]
 
 [workspace.package]
@@ -35,6 +36,9 @@ fs2 = "0.4"
 mysql_async = { version = "0.34", default-features = false, features = ["minimal"] }
 # Async solo en los bordes (actor + supervisor). El runtime lo crean los bins, no los crates.
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "fs", "time", "sync", "io-util"] }
+# Cross-process file watcher: gt-channel uses it for *.event mailboxes (await MERGE_READY).
+# Default backend = inotify on Linux; no polling unless explicitly requested.
+notify = "6"
 
 # Perfil dev rápido (sin requerir mold/lld para que compile en cualquier host).
 [profile.dev]
