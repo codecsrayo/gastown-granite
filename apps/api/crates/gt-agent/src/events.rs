@@ -1,9 +1,11 @@
+use serde::{Deserialize, Serialize};
+
 use gt_events::EventKind;
 
 /// Eventos del dominio agente. Enum **owned** (sin lifetimes, trivialmente `Send`); el
 /// `match` de `kind()` es exhaustivo y lo verifica el compilador (añade variante y olvida
-/// el brazo → no compila).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// el brazo → no compila). `Serialize`/`Deserialize` para el log de eventos (gt-audit).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentEvent {
     Spawned { session: String, rig: String },
     Heartbeat { session: String },

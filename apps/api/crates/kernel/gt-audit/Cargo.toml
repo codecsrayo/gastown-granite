@@ -1,0 +1,12 @@
+[package]
+name = "gt-audit"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+gt-events = { path = "../gt-events" }
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+fs2.workspace = true

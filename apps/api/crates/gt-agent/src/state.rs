@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use gt_events::AppError;
 
+use crate::events::AgentEvent;
+
 /// Ciclo de vida de una sesión. Las transiciones ilegales se rechazan (error semántico
 /// atrapado por el tipo, ver `docs/06-observability.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +103,40 @@ impl SessionRegistry {
 
     pub fn is_empty(&self) -> bool {
         self.sessions.is_empty()
+    }
+
+    /// **Reducer** del dominio (event-sourcing): pliega un evento como un hecho, sin
+    /// validar (la legalidad la chequea el camino de escritura, no el replay). Puro y
+    /// total → reconstrucción determinista del estado desde el log (gate del Paso 3).
+    pub fn apply(&mut self, event: &AgentEvent) {
+        match event {
+            AgentEvent::Spawned { session, rig } => {
+                self.add(Session::new(session.clone(), rig.clone()));
+            }
+            AgentEvent::Heartbeat { .. } => {} // no cambia el registro
+            AgentEvent::SessionEnd { session } => {
+                if let Some(s) = self.sessions.get_mut(session) {
+                    s.state = SessionState::Done;
+                }
+            }
+            AgentEvent::Killed { session, .. } => {
+                if let Some(s) = self.sessions.get_mut(session) {
+                    s.state = SessionState::Killed;
+                }
+            }
+        }
+    }
+
+    /// Huella determinista del estado: sesiones ordenadas por id. Igualdad de strings =
+    /// estado byte-idéntico (independiente del orden del `HashMap`).
+    pub fn fingerprint(&self) -> String {
+        let mut rows: Vec<String> = self
+            .sessions
+            .values()
+            .map(|s| format!("{}:{}:{:?}", s.id, s.rig, s.state))
+            .collect();
+        rows.sort();
+        rows.join("|")
     }
 }
 

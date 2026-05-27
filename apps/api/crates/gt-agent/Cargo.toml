@@ -8,3 +8,9 @@ rust-version.workspace = true
 gt-events = { path = "../kernel/gt-events" }
 gt-bus = { path = "../kernel/gt-bus" }
 tokio.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+# Solo para el gate de replay (Paso 3): el dominio no depende del log en runtime.
+gt-audit = { path = "../kernel/gt-audit" }
+serde_json.workspace = true
