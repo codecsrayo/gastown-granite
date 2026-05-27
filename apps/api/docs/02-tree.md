@@ -21,6 +21,7 @@ gastown-rs/                          # (montado bajo apps/api/ en el repo)
 │   │   │       ├── kind.rs          # trait EventKind { fn kind(&self)->&str }
 │   │   │       ├── envelope.rs      # Envelope<E>: event_id, correlation_id, causation_id, ts
 │   │   │       ├── ctx.rs           # Ctx (correlation id, CancellationToken)
+│   │   │       ├── command.rs       # trait Command { validate, execute } — SYNC (ver doc 09)
 │   │   │       └── error.rs         # AppError (thiserror)
 │   │   ├── gt-bus/                  # Bus<E: EventKind> — fan-out síncrono + relay a canales
 │   │   │   └── src/
@@ -142,6 +143,8 @@ gastown-rs/                          # (montado bajo apps/api/ en el repo)
 │   │   └── src/main.rs
 │   ├── gt-web/                      # API + SSE (Axum)
 │   │   └── src/{main, routes, stream, dto}.rs
+│   ├── gt-mcp/                      # MCP server: commands como tools para LLM (ver doc 09)
+│   │   └── src/{main, tools, schema, auth, audit}.rs
 │   ├── gt-proxy-server/             # punto de aplicación: consume gt-quota
 │   │   └── src/main.rs
 │   └── gt-proxy-client/
