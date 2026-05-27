@@ -51,10 +51,14 @@ El CAS es la red para crash/recuperación o un segundo dispatcher, no el camino 
 
 ### Lease / visibility-timeout = heartbeat + witness
 
-Un bead `dispatched` cuyo polecat muere (heartbeat stale) **vuelve a `pending`**. Eso ya lo
-hace `gt-patrol` (detecta stale → emite evento → handler en `gt-scheduling` re-encola). Es
-el visibility-timeout de SQS, implementado con la maquinaria de heartbeat existente. Vive
-en `gt-scheduling/src/expectations.rs`.
+Un bead `dispatched` cuyo polecat muere (heartbeat stale) **vuelve a `pending`**. Eso lo
+hace `gt-patrol` (Paso 6.a, `crates/domain/gt-patrol`): el actor mantiene el set de leases
+vivos, el detector puro (`expectations::expired_leases`) compara `now_secs - last_seen`
+contra el timeout, y al expirar emite `PatrolEvent::LeaseExpired { bead, worker, priority }`.
+El composition root reacciona invocando `BeadRepository::cas_release(bead, worker)` (sólo
+gana si el bead sigue `dispatched` y asignado al polecat muerto) y luego re-encola en
+`gt-scheduling`. Es el visibility-timeout de SQS, expresado como eventos para no perder el
+determinismo del replay.
 
 ### Despertar sin polling
 

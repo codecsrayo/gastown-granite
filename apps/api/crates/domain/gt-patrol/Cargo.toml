@@ -1,0 +1,19 @@
+[package]
+name = "gt-patrol"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+gt-events = { path = "../../kernel/gt-events" }
+tokio.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+# El test e2e juega el rol de composition root: cablea patrol + scheduling + agent + repo.
+# Son dev-deps (test-only) — la librería NO depende de otro dominio.
+gt-agent = { path = "../gt-agent" }
+gt-beads = { path = "../../kernel/gt-beads" }
+gt-scheduling = { path = "../gt-scheduling" }
+gt-audit = { path = "../../kernel/gt-audit" }
+serde_json.workspace = true

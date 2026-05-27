@@ -45,4 +45,19 @@ impl BeadRepository for InMemoryBeads {
             _ => Ok(false),
         }
     }
+
+    async fn cas_release(&self, id: &str, expected_worker: &str) -> Result<bool, AppError> {
+        let mut beads = self.beads.lock().unwrap();
+        match beads.get_mut(id) {
+            Some(b)
+                if b.status == BeadStatus::Dispatched
+                    && b.assignee.as_deref() == Some(expected_worker) =>
+            {
+                b.status = BeadStatus::Pending;
+                b.assignee = None;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
 }

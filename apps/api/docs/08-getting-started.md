@@ -127,8 +127,12 @@ inter-dominio por bus.
 
 Mismo patrón aplicado en orden:
 
-1. **`gt-patrol`** (necesario para que el lease del Paso 5 funcione de verdad: detección
-   de stale y re-encolado).
+1. **`gt-patrol`** ✅ DONE — cierra el lease del Paso 5: el actor recibe
+   `Register`/`Heartbeat`/`Close`/`Tick(now_secs, timeout)` desde el borde, el detector
+   puro emite `LeaseExpired { bead, worker, priority }`, y el composition root reacciona
+   con `BeadRepository::cas_release` + re-encolar. El reloj entra como dato en cada
+   evento → replay determinista (regla de `docs/06`). Crate: `crates/domain/gt-patrol`.
+   Gate test: `orchestrated_flow_with_stale_polecat_recovers_via_patrol`.
 2. **`gt-merge`** (introduce `gt-channel` para `await MERGE_READY`).
 3. **`gt-quota`** + `gt-store-pg` (primer Postgres; `keychain` platform-specific).
 4. **`gt-orchestration`** (mayor / deacon / crew / convoy).

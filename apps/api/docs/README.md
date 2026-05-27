@@ -41,15 +41,16 @@ es la especificación de referencia.
 >
 > | Paso | Entregable | Estado | Agente | Bead |
 > |---|---|---|---|---|
-> | 0 | esqueleto del workspace | PLANEADO | — | — |
-> | 1 | espina `gt-events` + `gt-bus` | PLANEADO | — | — |
-> | 2 | slice `gt-agent` (sin BD) | PLANEADO | — | — |
-> | 3 | `gt-audit` + replay (gate determinismo) | PLANEADO | — | — |
-> | 4 | `gt-beads` + `gt-store-dolt` | PLANEADO | — | — |
-> | 5 | `gt-scheduling` | PLANEADO | — | — |
-> | 6+ | resto de dominios + `gt-web` + `gt-mcp` + `gt-feed` | PLANEADO | — | — |
+> | 0 | esqueleto del workspace | DONE | — | — |
+> | 1 | espina `gt-events` + `gt-bus` | DONE | — | — |
+> | 2 | slice `gt-agent` (sin BD) | DONE | — | — |
+> | 3 | `gt-audit` + replay (gate determinismo) | DONE | — | — |
+> | 4 | `gt-beads` + `gt-store-dolt` | DONE | — | — |
+> | 5 | `gt-scheduling` | DONE | — | hq-mc72 |
+> | 6.a | `gt-patrol` (lease-expired → re-enqueue, cierra el lease del Paso 5) | DONE | — | hq-mc72 |
+> | 6.b+ | `gt-merge`, `gt-quota`+`gt-store-pg`, `gt-orchestration`, `gt-web`, `gt-mcp`, `gt-feed` | PLANEADO | — | — |
 >
-> Estado global: **PLANEADO, no iniciado** (al 2026-05-27). Mantén esta tabla viva.
+> Estado global: **Paso 6.a (`gt-patrol`) DONE** (al 2026-05-27). Mantén esta tabla viva.
 
 ---
 

@@ -112,4 +112,18 @@ impl BeadRepository for DoltBeads {
         .map_err(map_err)?;
         Ok(conn.affected_rows() == 1)
     }
+
+    async fn cas_release(&self, id: &str, expected_worker: &str) -> Result<bool, AppError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        // Solo libera leases vivos cuyo dueño coincide (otro patrol o un completion ya
+        // movió el bead → affected_rows == 0; el caller no re-encola).
+        conn.exec_drop(
+            "UPDATE beads SET status = 'pending', assignee = NULL
+             WHERE id = :id AND status = 'dispatched' AND assignee = :w",
+            params! { "id" => id, "w" => expected_worker },
+        )
+        .await
+        .map_err(map_err)?;
+        Ok(conn.affected_rows() == 1)
+    }
 }

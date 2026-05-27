@@ -32,6 +32,30 @@ async fn bead_repo_contract<R: BeadRepository>(repo: &R) {
     // upsert sobre-escribe (idempotente por id)
     repo.upsert(&Bead::new("b2", "second-v2", BeadStatus::Pending, 0)).await.unwrap();
     assert_eq!(repo.get("b2").await.unwrap().unwrap().title, "second-v2");
+
+    // CAS release (visibility-timeout / lease-expired): sólo gana si el bead sigue
+    // dispatched **Y** asignado al expected_worker.
+    assert!(
+        !repo.cas_release("b1", "worker-b").await.unwrap(),
+        "release con worker incorrecto pierde",
+    );
+    let b1 = repo.get("b1").await.unwrap().unwrap();
+    assert_eq!(b1.status, BeadStatus::Dispatched, "estado intacto tras release perdido");
+
+    assert!(repo.cas_release("b1", "worker-a").await.unwrap());
+    let b1 = repo.get("b1").await.unwrap().unwrap();
+    assert_eq!(b1.status, BeadStatus::Pending);
+    assert_eq!(b1.assignee, None);
+
+    // segundo release sobre un bead ya pending pierde (no es dispatched).
+    assert!(!repo.cas_release("b1", "worker-a").await.unwrap());
+
+    // tras release, b1 vuelve a ser reclamable por otro worker.
+    assert!(repo.cas_claim("b1", "worker-c").await.unwrap());
+    assert_eq!(
+        repo.get("b1").await.unwrap().unwrap().assignee.as_deref(),
+        Some("worker-c"),
+    );
 }
 
 #[tokio::test]
