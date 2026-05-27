@@ -1,0 +1,9 @@
+[package]
+name = "gt-store-pg"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+gt-events = { path = "../gt-events" }
+gt-beads = { path = "../gt-beads" }

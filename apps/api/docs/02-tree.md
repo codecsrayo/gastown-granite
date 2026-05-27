@@ -59,7 +59,7 @@ gastown-rs/                          # (montado bajo apps/api/ en el repo)
 │   │   └── gt-store-pg/                # quota + audit (EventStore) + proyecciones de feed
 │   │       └── src/{lib, pool, quota_repo, outbox, audit_store, feed_proj}.rs
 │   │
-│   └── ══ DOMINIOS (enum de eventos owned + actor dueño del estado + state machine) ══
+│   └── domain/                       # ══ DOMINIOS: enum de eventos owned + actor dueño del estado + state machine ══
 │       │
 │       ├── gt-agent/                                                       [Dolt]
 │       │   └── src/

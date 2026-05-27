@@ -1,0 +1,13 @@
+[package]
+name = "gt-store-dolt"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+gt-events = { path = "../gt-events" }
+gt-beads = { path = "../gt-beads" }
+mysql_async = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

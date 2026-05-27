@@ -1,13 +1,20 @@
 # gastown-rs — workspace raíz (montado bajo apps/api/).
-# Pasos 0-3 de docs/08-getting-started.md: núcleo de eventos + gt-agent + audit/replay.
+# Pasos 0-4 de docs/08-getting-started.md: núcleo + gt-agent + audit/replay + Dolt.
 # El resto de crates (más dominios, adaptadores, bins) se añaden en pasos posteriores.
 [workspace]
 resolver = "2"
 members = [
     "crates/kernel/gt-events",
     "crates/kernel/gt-bus",
+    "crates/kernel/gt-plugin",
     "crates/kernel/gt-audit",
-    "crates/gt-agent",
+    "crates/kernel/gt-channel",
+    "crates/kernel/gt-beads",
+    "crates/kernel/gt-workspace",
+    "crates/kernel/gt-telemetry",
+    "crates/kernel/gt-store-dolt",
+    "crates/kernel/gt-store-pg",
+    "crates/domain/gt-agent",
 ]
 
 [workspace.package]
@@ -22,6 +29,8 @@ time = { version = "0.3", features = ["std", "formatting"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 fs2 = "0.4"
+# Cliente MySQL-wire para Dolt (:3307). Sin TLS (Dolt local), deps mínimas.
+mysql_async = { version = "0.34", default-features = false, features = ["minimal"] }
 # Async solo en los bordes (actor + supervisor). El runtime lo crean los bins, no los crates.
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "fs", "time", "sync", "io-util"] }
 
