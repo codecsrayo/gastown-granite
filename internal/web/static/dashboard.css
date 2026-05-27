@@ -4453,6 +4453,17 @@
         .quota-card-status.s-limited   { background: rgba(255, 143, 64, 0.18); color: var(--orange); }
         .quota-card-status.s-cooldown  { background: rgba(255, 180, 84, 0.18); color: var(--yellow); }
         .quota-card-status.s-expired   { background: rgba(240, 113, 120, 0.20); color: var(--red); }
+        .quota-card-live-limited {
+            font-size: 0.65rem;
+            font-weight: 600;
+            padding: 1px 6px;
+            border-radius: 10px;
+            margin-left: 4px;
+            background: rgba(255, 143, 64, 0.18);
+            color: var(--orange);
+            cursor: help;
+        }
+        .quota-card.has-live-limited { border-left-color: var(--orange); }
 
         .quota-card-email {
             font-size: 0.7rem;

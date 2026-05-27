@@ -4349,11 +4349,39 @@
     // Compact card — only handle/status/star/swap-arrow + the primary usage
     // bar + session chips. Everything else (email, expires, week bar, faltan,
     // relogin command) moves into the modal opened on click.
+    // Persisted account.status stays 'available' even when live scan finds
+    // sessions rate-limited — that's intentional (snapshot.go SnapshotLink)
+    // so the rotation planner pool doesn't collapse on a stale pane. The
+    // helpers below let cards surface the live drift without altering
+    // persisted state, fixing the badge/chip mismatch reported in hq-r6e8.
+    function quotaLiveLimitedCount(account, limitedSessions) {
+        if (!limitedSessions || !account || !account.active_sessions) return 0;
+        var n = 0;
+        for (var i = 0; i < account.active_sessions.length; i++) {
+            var info = limitedSessions[account.active_sessions[i]];
+            if (info && info.rate_limited) n++;
+        }
+        return n;
+    }
+
+    function renderQuotaLiveLimitedChip(account, liveLimited) {
+        if (!liveLimited) return '';
+        var total = (account.active_sessions || []).length;
+        var tip = liveLimited + ' of ' + total + ' active session(s) rate-limited (live scan). ' +
+                  'Credential stays available so the rotation planner can still target it.';
+        return '<span class="quota-card-live-limited" title="' + escapeHTML(tip) + '">' +
+               liveLimited + '/' + total + ' live-limited</span>';
+    }
+
     function renderQuotaCard(a, limitedSessions, ceilings) {
         var statusKey = a.status || 'available';
         var pool = quotaAccountPool(a);
+        var liveLimited = quotaLiveLimitedCount(a, limitedSessions);
         var classes = 'quota-card quota-card-compact status-' + statusKey + ' pool-' + pool;
-        var ariaLabel = a.handle + ' — ' + statusKey + ' — click for detail';
+        if (liveLimited > 0) classes += ' has-live-limited';
+        var ariaLabel = a.handle + ' — ' + statusKey +
+                        (liveLimited > 0 ? ' — ' + liveLimited + ' session(s) rate-limited' : '') +
+                        ' — click for detail';
         var html = '<article class="' + classes + '" data-handle="' + escapeHTML(a.handle) + '" data-pool="' + pool + '" tabindex="0" role="button" aria-label="' + escapeHTML(ariaLabel) + '">';
 
         html += '<div class="quota-card-head">';
@@ -4362,6 +4390,7 @@
         html += escapeHTML(a.handle);
         html += '</span>';
         html += '<span class="quota-card-status s-' + statusKey + '">' + escapeHTML(statusKey) + '</span>';
+        html += renderQuotaLiveLimitedChip(a, liveLimited);
         html += '</div>';
 
         if (pool === 'active') {
@@ -4420,12 +4449,13 @@
     // ----------------------------------------------------------------------
     var QuotaDetailRenderers = {
         // Shared block all renderers reuse — handle, email, swap line.
-        renderHeader: function(a) {
+        renderHeader: function(a, limitedSessions) {
             var html = '<section class="qd-section qd-section-header">';
             html += '<div class="qd-handle">';
             if (a.is_default) html += '<span class="default-marker" title="Default account">&gt;</span> ';
             html += escapeHTML(a.handle);
             html += '<span class="quota-card-status s-' + (a.status || 'available') + '">' + escapeHTML(a.status || 'available') + '</span>';
+            html += renderQuotaLiveLimitedChip(a, quotaLiveLimitedCount(a, limitedSessions));
             html += '</div>';
             if (a.email) html += '<div class="qd-email">' + escapeHTML(a.email) + '</div>';
             if (a.swapped_to) {
@@ -4492,21 +4522,21 @@
     };
 
     function ActiveDetailRenderer(account, limitedSessions, ceilings) {
-        return QuotaDetailRenderers.renderHeader(account) +
+        return QuotaDetailRenderers.renderHeader(account, limitedSessions) +
                QuotaDetailRenderers.renderMeta(account) +
                QuotaDetailRenderers.renderBars(account, ceilings) +
                QuotaDetailRenderers.renderSessions(account, limitedSessions);
     }
 
     function InactiveDetailRenderer(account, limitedSessions, ceilings) {
-        return QuotaDetailRenderers.renderHeader(account) +
+        return QuotaDetailRenderers.renderHeader(account, limitedSessions) +
                QuotaDetailRenderers.renderMeta(account) +
                QuotaDetailRenderers.renderBars(account, ceilings) +
                QuotaDetailRenderers.renderSessions(account, limitedSessions);
     }
 
     function BlockedDetailRenderer(account, limitedSessions, ceilings) {
-        var html = QuotaDetailRenderers.renderHeader(account);
+        var html = QuotaDetailRenderers.renderHeader(account, limitedSessions);
         html += QuotaDetailRenderers.renderMeta(account);
         html += '<div class="quota-card-action">needs relogin: <code>gt account login ' + escapeHTML(account.handle) + '</code></div>';
         html += QuotaDetailRenderers.renderBars(account, ceilings);
