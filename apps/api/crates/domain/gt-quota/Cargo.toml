@@ -1,0 +1,15 @@
+[package]
+name = "gt-quota"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+gt-events = { path = "../../kernel/gt-events" }
+tokio.workspace = true
+serde.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+gt-audit = { path = "../../kernel/gt-audit" }
+serde_json.workspace = true

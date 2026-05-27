@@ -182,7 +182,22 @@ GROUP BY account_id;
 
 ## Estado
 
-**PLANEADO, no iniciado** (al 2026-05-27). Pertenece a `gt-quota`, por tanto **Paso 6+** de
-[../08-getting-started.md](../08-getting-started.md) (no empezar por aquí: el keychain
-platform-specific de quota no valida nada arquitectónico temprano). Reclamar como bead antes
-de implementar.
+**Núcleo DONE** (Paso 6.c, al 2026-05-27, bead hq-mc72.3). Implementado en
+`crates/domain/gt-quota` + `crates/kernel/gt-store-pg`:
+
+- `QuotaEvent` con `TokensSampled` / `UsageProbed` / `WindowReset` / `BlockPredicted` /
+  `AccountLimited` / `Rotated` / `Blocked`. El reloj viaja como `now_secs` en cada evento.
+- `cost::cost_units` normaliza tokens a unidad de coste por modelo (`ModelWeights`); sin
+  calibración usa `IDENTITY`.
+- `expectations::predict` es **puro**: `consumed`/`remaining`/`rate_per_min`/`eta_to_block`
+  + `should_predict_block` (solo dispara si el ETA cae bajo el umbral **y dentro** de la
+  ventana vigente). EWMA del rate vive en `AccountRegistry` (actor), idempotencia de
+  `BlockPredicted` por ventana.
+- `QuotaRepository` (puerto): `token_usage` append-only, sumas por cuenta y por sesión, sin
+  `UPDATE` de contadores. `gt-store-pg::PgQuota` lo implementa con `sqlx` (sin macros).
+- Gates verdes: contrato in-memory + Postgres (`GT_PG_URL`), rotación predictiva antes de
+  `AccountLimited` con replay byte-idéntico, y reset de ventana que rehabilita la predicción.
+
+**Pendiente:** el `probe.rs` que captura las cabeceras `anthropic-ratelimit-*` reales, el
+`keychain` platform-specific (queda detrás del puerto), las métricas Prometheus / traces
+Tempo y la materialized view `account_window_usage` (se crea cuando haya datos reales).

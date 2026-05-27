@@ -147,7 +147,22 @@ Mismo patrón aplicado en orden:
    `crates/kernel/gt-channel`, `crates/domain/gt-merge`. Gates:
    `refinery_drives_slot_to_merged_then_replay_matches`,
    `refinery_failed_merge_records_failed_event_and_replay_matches`.
-3. **`gt-quota`** + `gt-store-pg` (primer Postgres; `keychain` platform-specific).
+3. **`gt-quota` + `gt-store-pg`** ✅ DONE — primer Postgres del workspace. Trazabilidad de
+   tokens por sesión + **rotación predictiva** (`docs/features/token-tracking-prediction.md`).
+   `gt-quota` define `QuotaEvent { TokensSampled, UsageProbed, WindowReset, BlockPredicted,
+   AccountLimited, Rotated, Blocked }`, `AccountRegistry` (dueño único en el actor, EWMA del
+   rate por cuenta/sesión, idempotencia de predicción por ventana), un **predictor puro**
+   (`expectations::predict`: `now`, rate y umbral entran como datos; sin reloj ni `rand`) y
+   `cost::cost_units` (normaliza tokens a unidad de coste por modelo — no se suman tokens de
+   modelos distintos). El puerto `QuotaRepository` (append-only `token_usage`, sin `UPDATE`
+   de contadores) lo implementa `gt-store-pg::PgQuota` con `sqlx` (`query`/`query_as`
+   runtime, sin macros → no requiere BD en build-time). Crates: `crates/domain/gt-quota`,
+   `crates/kernel/gt-store-pg`. Gates: contrato `QuotaRepository` corre 2× (in-memory +
+   Postgres real si `GT_PG_URL`); `predictive_rotation_fires_before_account_limited_and_replay_matches`
+   (seed de rate conocido → ETA < umbral → **un** `BlockPredicted` por ventana → rotación
+   antes de `AccountLimited` → replay reconstruye `QuotaState`);
+   `fresh_window_after_reset_allows_another_prediction`. El `keychain` platform-specific
+   queda detrás del puerto, pendiente de cablear en el bin.
 4. **`gt-orchestration`** (mayor / deacon / crew / convoy).
 5. **`gt-web`** (cuando ya hay datos significativos que exponer).
 6. **`gt-feed`** + adaptador final para el log.

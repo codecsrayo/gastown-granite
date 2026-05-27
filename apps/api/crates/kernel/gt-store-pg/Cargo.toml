@@ -7,3 +7,10 @@ rust-version.workspace = true
 [dependencies]
 gt-events = { path = "../gt-events" }
 gt-beads = { path = "../gt-beads" }
+gt-quota = { path = "../../domain/gt-quota" }
+tokio.workspace = true
+time = { workspace = true, features = ["std", "formatting", "macros"] }
+serde_json.workspace = true
+# Cliente Postgres nativo: pool + runtime tokio, sin TLS (Postgres local en container).
+# `query`/`query_as` runtime (sin macros) para no requerir DB en build-time.
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "time"] }
