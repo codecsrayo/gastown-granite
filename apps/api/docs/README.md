@@ -67,6 +67,12 @@ es la especificación de referencia.
 | [08-getting-started.md](08-getting-started.md) | Hoja de ruta de implementación: pasos, entregables y gates de validación |
 | [09-llm-integration.md](09-llm-integration.md) | Integración con modelos: `gt-mcp`, patrón `Command { validate, execute }`, scopes |
 
+### Features
+
+| Doc | Contenido |
+|---|---|
+| [features/token-tracking-prediction.md](features/token-tracking-prediction.md) | `gt-quota`: trazabilidad de tokens por sesión, promedio (EWMA), predicción de ETA-al-bloqueo → rotación predictiva |
+
 ## Alcance y objetivo
 
 La ventaja de esta migración **no es rendimiento**. gastown es un orquestador
