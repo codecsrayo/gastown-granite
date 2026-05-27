@@ -1,11 +1,12 @@
 # gastown-rs — workspace raíz (montado bajo apps/api/).
-# Espina (Paso 0+1 de docs/08-getting-started.md): solo los crates del núcleo de eventos.
-# El resto de crates (dominios, adaptadores, bins) se añaden en pasos posteriores.
+# Pasos 0-2 de docs/08-getting-started.md: núcleo de eventos + primer slice (gt-agent).
+# El resto de crates (más dominios, adaptadores, bins) se añaden en pasos posteriores.
 [workspace]
 resolver = "2"
 members = [
     "crates/kernel/gt-events",
     "crates/kernel/gt-bus",
+    "crates/gt-agent",
 ]
 
 [workspace.package]
@@ -17,6 +18,8 @@ rust-version = "1.75"
 thiserror = "2"
 ulid = "1"
 time = { version = "0.3", features = ["std"] }
+# Async solo en los bordes (actor + supervisor). El runtime lo crean los bins, no los crates.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "fs", "time", "sync", "io-util"] }
 
 # Perfil dev rápido (sin requerir mold/lld para que compile en cualquier host).
 [profile.dev]

@@ -1,0 +1,10 @@
+[package]
+name = "gt-agent"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+gt-events = { path = "../kernel/gt-events" }
+gt-bus = { path = "../kernel/gt-bus" }
+tokio.workspace = true
