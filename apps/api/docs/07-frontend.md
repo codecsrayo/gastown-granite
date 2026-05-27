@@ -1,5 +1,22 @@
 # 07 — Frontend / `gt-web`
 
+> ## ⛔ ALCANCE — `gt-web` es BACKEND, no la UI del navegador
+>
+> `gt-web` aquí es **solo el lado servidor**: API REST (snapshot) + SSE (stream) en Axum.
+> **La aplicación web del navegador (el dashboard) NO se migra en este esfuerzo Rust.**
+>
+> - **No portar `internal/web/`** (`dashboard.js`, `dashboard.css`, `convoy.html`,
+>   terminales xterm, etc.) a Rust ni a estos crates. Ese código sigue siendo el frontend
+>   vivo en Go y se migra por separado.
+> - La migración de la **UI** tiene su propio plan y framework (**SvelteKit**):
+>   [apps/town/docs/frontend-migration-sveltekit.md](../../town/docs/frontend-migration-sveltekit.md).
+> - La única responsabilidad de `gt-web` es **exponer el contrato** (`/api/snapshot` + SSE
+>   `EventRecord`) que ese frontend consume. Backend y frontend se migran en **pistas
+>   separadas**; lo único compartido es el contrato HTTP/SSE.
+>
+> Si un agente empieza a reescribir HTML/CSS/JS de la app web dentro de `apps/api`, está
+> fuera de alcance — parar y mover ese trabajo al plan SvelteKit.
+
 ## Dos naturalezas de dato → dos canales
 
 | Naturaleza | Canal | Tecnología |

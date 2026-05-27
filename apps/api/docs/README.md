@@ -31,6 +31,11 @@ es la especificación de referencia.
 >    bordes); `Command` sync; persistencia **2 motores** (Dolt + Postgres, audit en `JSONB`,
 >    **sin Mongo**); trazabilidad Grafana vía **OTEL→Tempo + Prometheus + Postgres**;
 >    `dyn`/`#[async_trait]` confinados a `gt-plugin`.
+> 7. **La UI del navegador NO se migra aquí.** `gt-web` es solo backend (API+SSE). **No
+>    portar `internal/web/`** (dashboard.js/convoy.html/etc.) a Rust ni a `apps/api`. El
+>    frontend va en pista separada con SvelteKit
+>    ([plan](../../town/docs/frontend-migration-sveltekit.md)); aquí solo se expone el
+>    contrato que consume. Ver [07-frontend.md](07-frontend.md).
 >
 > ### Tabla de estado (ver pasos en [08-getting-started.md](08-getting-started.md))
 >
