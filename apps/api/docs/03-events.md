@@ -92,8 +92,15 @@ Los handlers que necesitan **I/O** no se vuelven async: empujan a un canal y una
 long-lived hace el trabajo (relay):
 
 ```
-publish(ev) → handler síncrono → tx.send(ev) → [task drena mpsc y escribe async]
+publish(ev) → handler síncrono → tx.try_send(ev) → [task drena mpsc y escribe async]
 ```
+
+`try_send`, **no** `send().await`: un handler sync no puede `.await` (y `publish` puede
+correr dentro de una task async, donde un `blocking_send` clavaría un worker de tokio). La
+contrapresión, por tanto, **no se aplica bloqueando al bus** — se aplica en el borde del
+relay. Política por canal en [05-queues.md](05-queues.md): los sinks durables (audit) usan
+buffer bounded grande y, ante overflow, **spillean a disco + emiten un evento de overflow**
+(nunca pérdida silenciosa); los sinks lossy (SSE) descartan frames a propósito.
 
 ## Dead-letter (parte del diseño, no extra)
 

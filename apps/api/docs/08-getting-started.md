@@ -86,8 +86,10 @@ vida del proyecto para errores semánticos.
 - El estado final del `SessionRegistry` reconstruido es **byte-idéntico** al de la
   corrida en vivo.
 
-Sin este gate no se avanza. Si el replay no es determinista, hay async o impureza filtrada
-en el núcleo y hay que limpiarla antes de seguir.
+Sin este gate no se avanza. Si el replay no es determinista, hay impureza filtrada en el
+núcleo — async, **reloj de pared, `rand`, o un timeout calculado en vez de leído del log**
+(ver la regla de determinismo en [06-observability.md](06-observability.md)) — y hay que
+limpiarla antes de seguir.
 
 ## Paso 4 — Primer adaptador real: `gt-beads` + `gt-store-dolt`
 

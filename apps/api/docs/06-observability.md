@@ -11,6 +11,27 @@ La buena noticia: el diseño tiene un **sustrato fuerte** porque el núcleo es
 **síncrono y puro**, lo que vuelve la lógica de dominio **determinista respecto al stream
 de eventos**. Eso habilita **replay**, que es lo que de verdad caza errores semánticos.
 
+### Regla de determinismo (no negociable — es lo que hace funcionar al replay)
+
+El replay re-corre la lógica pura sobre el log grabado. Para que el estado reconstruido sea
+**byte-idéntico** al de producción (gate del Paso 3, [08-getting-started.md](08-getting-started.md)),
+el núcleo debe cumplir:
+
+1. **El núcleo nunca lee el reloj de pared ni genera aleatoriedad.** `transition()` y los
+   `Command::{validate,execute}` no llaman a `Instant::now()`, `OffsetDateTime::now_utc()`
+   ni `rand`. El tiempo y la identidad (`event_id`, `correlation_id`, `ts`) se generan
+   **solo en el borde** (productores async) y viajan dentro del `Envelope`; el núcleo los
+   **consume**, no los produce. El replay re-alimenta los envelopes grabados tal cual.
+2. **Los timeouts y expiraciones son eventos reales, no cálculos del núcleo.** Un tick
+   periódico vive en un *productor* async (`expectations.rs`, `witness.rs`): compara los
+   timestamps grabados contra el reloj y, si vence, **emite** `DispatchTimeout` / `MergeStuck`
+   / `PolecatStale` al bus → se persisten en el log. El replay los **lee del log**; jamás los
+   recomputa contra un reloj vivo. Un núcleo que decidiera "expiró" mirando la hora durante el
+   replay divergiría del run original.
+
+Corolario práctico: si el gate del Paso 3 falla, el sospechoso #1 es reloj o random filtrado
+al núcleo, o un timeout calculado en vez de leído del log.
+
 ## Las seis piezas del circuito
 
 ### 1. Envelope con causación

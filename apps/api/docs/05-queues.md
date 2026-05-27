@@ -59,7 +59,10 @@ en `gt-scheduling/src/expectations.rs`.
 ### Despertar sin polling
 
 Dolt no tiene `LISTEN/NOTIFY`. Pero el dispatcher es un actor: lo despiertan los mensajes
-`Enqueue` del bus. No hay busy-poll. Un tick periódico solo revisa leases expirados.
+`Enqueue` del bus. No hay busy-poll. Un tick periódico (en el productor async, no en el
+núcleo) solo revisa leases expirados y, si vence alguno, **emite** un evento de timeout al
+bus — no muta estado leyendo el reloj. Así el re-encolado queda en el log y es replay-able
+(regla de determinismo, [06-observability.md](06-observability.md)).
 
 ### Backpressure = capacity governor
 
@@ -102,14 +105,20 @@ Fuente: documentación de DoltHub (modelo de concurrencia y transacciones).
 
 ## Política de backpressure por canal
 
-| Canal | Política | Razón |
-|---|---|---|
-| Audit drain (→ Mongo) | `mpsc` bounded + `send().await` | nunca perder eventos; bloquear al productor es correcto |
-| SSE broadcast (→ navegador) | `try_send` / `broadcast` lossy | si un cliente se queda atrás, que pierda frames, no que tumbe el sistema |
-| Actor mailbox | bounded | bloquear al emisor cuando el actor satura |
+| Canal | Productor | Política | Razón |
+|---|---|---|---|
+| Audit drain (→ Mongo) | handler **sync** del bus | `mpsc` bounded grande + `try_send`; overflow ⇒ spill a `.events.jsonl` local + evento `AuditOverflow` | el handler es sync, no puede `.await`; no se pierde en silencio, pero la contrapresión **no** bloquea al bus |
+| SSE broadcast (→ navegador) | handler sync del bus | `try_send` / `broadcast` lossy | si un cliente se queda atrás, que pierda frames, no que tumbe el sistema |
+| Actor mailbox | task async (supervisor, dispatcher) | bounded + `send().await` | el emisor **sí** es async aquí; bloquearlo cuando el actor satura es correcto |
+
+La asimetría es deliberada: solo bloquea con `send().await` quien ya está en contexto async
+(productores → mailbox de actor). El fan-out del bus es **sync**, así que sus handlers solo
+pueden `try_send`; por eso el sink durable (audit) necesita buffer holgado **y** un fallback
+de overflow explícito, no `.await`.
 
 **Prohibido `unbounded`** salvo prueba de que el consumidor siempre gana. Canal sin
-límite = bomba de memoria diferida.
+límite = bomba de memoria diferida. (El append a `.events.jsonl` local es justamente ese
+caso probado y sirve de red de spill para el drain a Mongo.)
 
 ## Veredicto para este caso
 

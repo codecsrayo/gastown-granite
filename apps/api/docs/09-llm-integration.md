@@ -31,25 +31,35 @@ Hoy los commands ejecutan. Para que un modelo *valide sin efectos*, cada command
 explícitamente las dos fases:
 
 ```rust
-// gt-events/src/command.rs
-#[async_trait]
+// gt-events/src/command.rs — SÍNCRONO. Vive en el núcleo, sin async_trait, sin dyn.
 pub trait Command {
     type Output;
     type State;
 
     /// Comprueba si el command sería aceptado dado el estado actual.
-    /// SIN EFECTOS COLATERALES. Puede inspeccionar `state` pero no mutarlo.
-    async fn validate(&self, state: &Self::State) -> Result<(), AppError>;
+    /// SIN EFECTOS COLATERALES, SIN I/O. Inspecciona `state`, no lo muta.
+    fn validate(&self, state: &Self::State) -> Result<(), AppError>;
 
-    /// Ejecuta el command. Solo llamar tras `validate` exitoso
-    /// (o asumiendo la validación implícita).
-    async fn execute(&self, state: &mut Self::State) -> Result<Self::Output, AppError>;
+    /// Aplica el command al estado en memoria (puro, sync).
+    /// Solo llamar tras `validate` exitoso. La I/O (persistir el efecto,
+    /// spawnear el proceso) la hace el actor/adaptador en el borde — no el command.
+    fn execute(&self, state: &mut Self::State) -> Result<Self::Output, AppError>;
 }
 ```
 
+**Por qué sync (coherencia con [01-architecture.md](01-architecture.md)).** `validate`/`execute`
+operan contra estado en memoria: son lógica pura, no I/O. Mantenerlos sync respeta la regla
+"async en los bordes, núcleo sync" y los hace **replay-ables** (ver [06-observability.md](06-observability.md)).
+La parte async vive afuera: `gt-mcp`/`gt-web` reciben la petición de red (async), piden al
+actor un snapshot del estado (`Snapshot` por `mpsc`), corren `validate` sync contra él, y si
+procede envían el `*Msg` al actor, que aplica `execute` sync y persiste el efecto en su borde.
+El núcleo nunca se vuelve async; `Command` no necesita `#[async_trait]` ni boxing.
+
 Cada `*Msg` de los dominios implementa `Command`. El actor procesa el mensaje llamando
-`validate` y luego `execute`; el modelo puede llamar **solo** `validate` para "preguntar
-sin hacer".
+`validate` y luego `execute` **dentro de la misma vuelta** (sin `.await` entre ambos), de modo
+que no hay ventana TOCTOU dentro del actor. El modelo puede llamar **solo** `validate` para
+"preguntar sin hacer" — pero ese resultado es una foto: el estado puede cambiar antes de un
+`execute` posterior, por eso el actor **revalida** al ejecutar.
 
 Retrofittear esto después es invasivo: hay que escribirlo desde el Paso 2 de la hoja de
 ruta para todos los commands nuevos.

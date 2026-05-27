@@ -81,11 +81,17 @@ lectores sin lock, el escritor reemplaza el `Arc` entero.
 |---|---|
 | `gt-store-*`, `gt-web`, `gt-channel` | todos los `model.rs` |
 | `supervisor`/`probe` (procesos, red) | cálculo de planes, derivación de estado |
-| el relay del bus a tasks de I/O | serde, máquinas de estado, matching |
+| el relay del bus a tasks de I/O | serde, máquinas de estado, matching, `Command::{validate,execute}` |
 
 Razón: una `async fn` "colorea" a todos sus callers (deben `.await`). Mantener el
 núcleo síncrono evita ese contagio y permite **replay determinista** del log de
 eventos (ver [06-observability.md](06-observability.md)).
+
+Corolario (regla de determinismo): el núcleo síncrono tampoco lee **reloj** ni **random**.
+El tiempo y los ids entran por el `Envelope`, generados en el borde; los timeouts son
+**eventos** emitidos por productores async, no cálculos del núcleo. Por eso el `trait Command`
+([09-llm-integration.md](09-llm-integration.md)) es sync y sin `#[async_trait]` — `dyn` +
+`#[async_trait]` siguen confinados a `gt-plugin`. Detalle en [06-observability.md](06-observability.md).
 
 Un único `tokio::Runtime`, creado en los binarios (`bins/`). Los crates de dominio
 **no** crean runtime: reciben handles. Así un dominio se testea con `#[tokio::test]`
