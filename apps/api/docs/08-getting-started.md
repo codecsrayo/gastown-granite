@@ -163,7 +163,26 @@ Mismo patrón aplicado en orden:
    antes de `AccountLimited` → replay reconstruye `QuotaState`);
    `fresh_window_after_reset_allows_another_prediction`. El `keychain` platform-specific
    queda detrás del puerto, pendiente de cablear en el bin.
-4. **`gt-orchestration`** (mayor / deacon / crew / convoy).
+4. **`gt-orchestration`** ✅ DONE — el dominio del **convoy**: un convoy arrastra un conjunto
+   ordenado de beads miembro hasta completarlos, alimentando el siguiente cuando el actual
+   termina (el *handoff*) y cerrándose cuando todos están `Done`. `OrchEvent {
+   ConvoyCreated, ConvoyLaunched, MemberDispatched, MemberCompleted, MemberFailed,
+   ConvoyClosed, ConvoyFailed }`; state machine del convoy (`Staged → Launched → Closed |
+   Failed`) y del miembro (`Pending → Active → Done | Failed`), ambas rechazan transiciones
+   ilegales con `AppError::InvalidTransition`. `ConvoyBoard` (dueño único en el actor) es
+   **secuencial**: a lo sumo un miembro `Active`, el siguiente se alimenta solo tras el
+   anterior. El convoy avanza por **hechos** (un miembro terminó), no por reloj → replay
+   determinista. `mayor`/`deacon` son productores de borde (traducen hechos del bus a
+   `OrchMsg`; lanzan convoys, observan beads miembro cerrando); `crew` ejecuta cada
+   `MemberDispatched` que el composition root convierte en `gt sling`. Aislamiento: solo
+   depende de `gt-events` (no `gt-scheduling`/`gt-merge`/`gt-beads`). Crate:
+   `crates/domain/gt-orchestration`. Gates:
+   `convoy_drives_members_to_close_then_replay_matches` (3 miembros → handoff secuencial →
+   cierre → replay reconstruye `OrchState` byte-idéntico) y
+   `convoy_member_failure_halts_then_replay_matches` (fallo de miembro halta el convoy, el
+   siguiente nunca se alimenta). Persistir el progreso del convoy en Dolt (marcador `[Dolt]`
+   de `docs/02-tree.md`) queda como adaptador follow-up; el dominio entrega puro + replay-able
+   primero, como `gt-patrol` y `gt-merge`.
 5. **`gt-web`** (cuando ya hay datos significativos que exponer).
 6. **`gt-feed`** + adaptador final para el log.
 

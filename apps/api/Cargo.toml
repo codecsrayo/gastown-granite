@@ -19,6 +19,7 @@ members = [
     "crates/domain/gt-patrol",
     "crates/domain/gt-merge",
     "crates/domain/gt-quota",
+    "crates/domain/gt-orchestration",
 ]
 
 [workspace.package]
