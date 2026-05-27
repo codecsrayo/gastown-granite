@@ -8,6 +8,7 @@ services:
       dockerfile: Dockerfile
     container_name: gastown-sandbox
     stdin_open: false
+    restart: unless-stopped
     tty: false
     security_opt:
       - no-new-privileges:true
@@ -40,11 +41,6 @@ services:
       - ${HOST_SSH_DIR:-${HOME}/.ssh}:/host-ssh:ro
     expose:
       - "8080"
-    ports:
-      # OAuth callback range for `claude auth login` flow. Claude CLI picks a
-      # random ephemeral port; expose a range so browser → host:port → container
-      # works regardless of which port Claude picked.
-      - "44000-44099:44000-44099"
     command: ["/app/gastown/gt", "dashboard", "--bind", "0.0.0.0", "--port", "8080"]
     networks:
       - default
