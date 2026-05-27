@@ -4,6 +4,45 @@ Plan por fases para reemplazar el frontend actual del dashboard (`internal/web/`
 una SPA en **SvelteKit**. Cada fase entrega algo verificable y tiene un **gate**; no se
 cruza al siguiente sin el anterior en verde.
 
+---
+
+> ## ⚠️ AVISO PARA AGENTES — leer antes de tocar el frontend
+>
+> **Hay varios agentes trabajando en este repo.** Este documento es la **fuente de verdad**
+> de la migración del frontend. Sigue estas reglas para no perder ni pisar trabajo:
+>
+> 1. **Esto es un plan, no permiso para borrar nada.** El frontend viejo
+>    (`internal/web/templates/convoy.html`, `static/dashboard.js`, `static/dashboard.css`)
+>    **debe seguir vivo y funcionando** hasta la **Fase 5**, y solo se borra con paridad
+>    probada. No lo toques "de paso" en otras fases.
+> 2. **Reclama antes de trabajar.** Antes de empezar una fase o región, márcala ocupada
+>    (bead en estado busy) y anótala en la **tabla de estado** de abajo con tu identidad.
+>    Al terminar, cierra el bead y actualiza la tabla. Así nadie duplica.
+> 3. **Respeta el orden de fases.** No te saltes la Fase 0 (endpoint JSON snapshot): todo
+>    lo demás depende de ella. Las fases tienen dependencia, no son paralelas entre sí
+>    (las *regiones* de la Fase 4 sí son paralelizables entre agentes).
+> 4. **Rama aparte → merge a main → borra la rama.** Nunca trabajes directo sobre main
+>    (el town root revierte). Usa worktree.
+> 5. **Decisiones ya tomadas (no re-litigar sin acuerdo):** framework = **SvelteKit**;
+>    Astro descartado para el dash; el backend Go pasa a **API+SSE puro**; el contrato
+>    `/api/snapshot` + SSE debe quedar compatible con el `gt-web` Rust de
+>    [07-frontend.md](../../api/docs/07-frontend.md).
+>
+> ### Tabla de estado (actualizar al reclamar/terminar)
+>
+> | Fase | Estado | Agente | Bead | Notas |
+> |---|---|---|---|---|
+> | 0 — `/api/snapshot` JSON | PLANEADO | — | — | backend Go puro; bajo riesgo |
+> | 1 — scaffold SvelteKit + SSE | PLANEADO | — | — | bloqueada por Fase 0 |
+> | 2 — CSRF + escritura | PLANEADO | — | — | |
+> | 3 — terminales xterm | PLANEADO | — | — | |
+> | 4 — descomponer por región | PLANEADO | — | — | regiones paralelizables |
+> | 5 — cutover + borrado | PLANEADO | — | — | **solo con paridad probada** |
+>
+> Estado global: **PLANEADO, no iniciado** (al 2026-05-27). Mantén esta tabla viva.
+
+---
+
 ## Punto de partida (qué hay hoy)
 
 | Pieza | Estado |

@@ -7,6 +7,47 @@ Esta carpeta describe **cómo debería quedar la implementación**: las frontera
 contratos y las decisiones de diseño que el código debe respetar. No es un tutorial;
 es la especificación de referencia.
 
+---
+
+> ## ⚠️ AVISO PARA AGENTES — leer antes de tocar gastown-rs
+>
+> **Hay varios agentes trabajando en este repo.** Esta carpeta es la **fuente de verdad**
+> del diseño de la migración a Rust. Reglas para no perder ni pisar trabajo:
+>
+> 1. **Esto es la spec, no permiso para borrar el Go.** El **gastown Go vivo es producción**
+>    y la fuente de verdad operativa; no se toca ni se reemplaza pieza por pieza sin un plan
+>    de cutover acordado. La migración Rust es greenfield en paralelo.
+> 2. **Reclama antes de implementar.** Antes de empezar un crate/paso, márcalo ocupado
+>    (bead en estado busy) y anótalo en la **tabla de estado** de abajo. Al terminar, cierra
+>    el bead y actualiza la tabla. Así nadie duplica un dominio o adaptador.
+> 3. **Respeta el orden de [08-getting-started.md](08-getting-started.md).** Los pasos tienen
+>    dependencia y un **gate** cada uno; no se cruza al siguiente sin el anterior en verde.
+>    En especial: **no saltarse el gate del Paso 3** (replay determinista).
+> 4. **La spec manda sobre el código.** Si el código diverge de estos docs, o es bug del
+>    código o hay que actualizar el doc **con acuerdo** — no dejar que diverjan en silencio.
+> 5. **Rama aparte → merge a main → borra la rama.** Nunca directo sobre main (el town root
+>    revierte). Usa worktree.
+> 6. **Decisiones ya tomadas (no re-litigar sin acuerdo):** núcleo **sync** (async solo en
+>    bordes); `Command` sync; persistencia **2 motores** (Dolt + Postgres, audit en `JSONB`,
+>    **sin Mongo**); trazabilidad Grafana vía **OTEL→Tempo + Prometheus + Postgres**;
+>    `dyn`/`#[async_trait]` confinados a `gt-plugin`.
+>
+> ### Tabla de estado (ver pasos en [08-getting-started.md](08-getting-started.md))
+>
+> | Paso | Entregable | Estado | Agente | Bead |
+> |---|---|---|---|---|
+> | 0 | esqueleto del workspace | PLANEADO | — | — |
+> | 1 | espina `gt-events` + `gt-bus` | PLANEADO | — | — |
+> | 2 | slice `gt-agent` (sin BD) | PLANEADO | — | — |
+> | 3 | `gt-audit` + replay (gate determinismo) | PLANEADO | — | — |
+> | 4 | `gt-beads` + `gt-store-dolt` | PLANEADO | — | — |
+> | 5 | `gt-scheduling` | PLANEADO | — | — |
+> | 6+ | resto de dominios + `gt-web` + `gt-mcp` + `gt-feed` | PLANEADO | — | — |
+>
+> Estado global: **PLANEADO, no iniciado** (al 2026-05-27). Mantén esta tabla viva.
+
+---
+
 ## Índice
 
 | Doc | Contenido |
