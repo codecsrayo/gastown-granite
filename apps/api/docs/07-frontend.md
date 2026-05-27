@@ -7,7 +7,7 @@
 | **Snapshot** (estado actual) | REST `GET /api/…` | Axum handlers + JSON |
 | **Stream** (deltas en vivo) | SSE `EventSource` | broadcast del bus → SSE |
 
-El frontend **nunca** habla con Dolt/Postgres/Mongo directo. Solo con `gt-web`, que es el
+El frontend **nunca** habla con Dolt/Postgres directo. Solo con `gt-web`, que es el
 único punto de entrada (composition root del read-side).
 
 ## Topología
@@ -17,14 +17,14 @@ Browser (React / Astro + Tailwind)
    │
    ├── GET  /api/sessions        → snapshot: sesiones activas             [Dolt]
    ├── GET  /api/beads?rig=…      → snapshot: beads / cola / escalaciones  [Dolt]
-   ├── GET  /api/feed?since=1h    → snapshot inicial del feed              [Mongo]
+   ├── GET  /api/feed?since=1h    → snapshot inicial del feed           [Postgres]
    ├── POST /api/nudge            → emite comando al bus (write-side)
    └── EventSource /api/stream    → SSE: EventRecord en vivo               [bus]
                                      (spawn, nudge, session_death, merge_*)
    ▼
 gt-web (bin Axum — composition root)
    ├── gt-agent::SessionQueries     ──► gt-store-dolt
-   ├── gt-audit::EventStore          ──► gt-store-mongo
+   ├── gt-audit::EventStore          ──► gt-store-pg
    └── subscribe(gt-bus)  ──► tokio::broadcast ──► cada conexión SSE
 ```
 

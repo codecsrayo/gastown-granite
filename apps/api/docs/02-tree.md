@@ -35,7 +35,7 @@ gastown-rs/                          # (montado bajo apps/api/ en el repo)
 │   │   ├── gt-audit/
 │   │   │   └── src/
 │   │   │       ├── lib.rs
-│   │   │       ├── record.rs        # EventRecord (wire/Mongo) + From<Envelope<E>>
+│   │   │       ├── record.rs        # EventRecord (wire/Postgres JSONB) + From<Envelope<E>>
 │   │   │       ├── store.rs         # trait EventStore
 │   │   │       ├── writer.rs        # task que drena mpsc → append (.events.jsonl)
 │   │   │       ├── reader.rs        # tail / seek
@@ -55,10 +55,8 @@ gastown-rs/                          # (montado bajo apps/api/ en el repo)
 │   │   │   ── Adaptadores de BD (async, en los bordes) ──
 │   │   ├── gt-store-dolt/
 │   │   │   └── src/{lib, conn, beads_repo, commit, wasteland_sync}.rs
-│   │   ├── gt-store-pg/
-│   │   │   └── src/{lib, pool, quota_repo, outbox}.rs
-│   │   └── gt-store-mongo/
-│   │       └── src/{lib, client, audit_store, feed_proj}.rs
+│   │   └── gt-store-pg/                # quota + audit (EventStore) + proyecciones de feed
+│   │       └── src/{lib, pool, quota_repo, outbox, audit_store, feed_proj}.rs
 │   │
 │   └── ══ DOMINIOS (enum de eventos owned + actor dueño del estado + state machine) ══
 │       │
@@ -127,7 +125,7 @@ gastown-rs/                          # (montado bajo apps/api/ en el repo)
 │       │           ├── mod.rs       # trait Keychain
 │       │           └── linux.rs · stub.rs
 │       │
-│       └── gt-feed/                 # CONSUMIDOR PURO — solo gt-audit              [Mongo]
+│       └── gt-feed/                 # CONSUMIDOR PURO — solo gt-audit           [Postgres]
 │           └── src/
 │               ├── lib.rs
 │               ├── curator.rs       # lee EventRecord, deriva estado (síncrono)

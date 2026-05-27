@@ -121,15 +121,28 @@ La pieza más valiosa, y solo es posible porque el núcleo es síncrono y puro:
 - Reconciliación: como en banca — tomar el ledger de eventos y reconstruir el estado para
   comparar contra lo que la BD dice que es.
 
-## Tracing + OTEL (capa de logs estructurados)
+## Tracing + OTEL → Grafana (capa de trazabilidad)
 
-Sobre el sustrato anterior, `gt-telemetry` añade lo estándar:
+Sobre el sustrato anterior, `gt-telemetry` añade lo estándar, y **es la vía de
+trazabilidad hacia Grafana** — no una consulta a una BD de documentos:
 
 - `tracing` con `#[instrument]` por workflow → spans anidados (la cadena de rotación
   aparece como árbol de spans).
 - Exporte a OTEL via `tracing-opentelemetry`.
-- `correlation_id` del envelope se propaga como span attribute para correlacionar con
-  los traces externos.
+- `correlation_id` / `causation_id` del envelope se propagan como span attributes: la
+  cadena causal *es* el trace.
+
+### El stack de Grafana (todo datasource nativo OSS)
+
+| Señal | Backend | Datasource Grafana | Qué responde |
+|---|---|---|---|
+| **Traces** (cadenas causales) | Tempo | nativo | "muéstrame todo lo causado por el spawn X y dónde murió la cadena" |
+| **Métricas** | Prometheus | nativo | tasas, latencias, profundidad de cola, contadores de dead-letter |
+| **Log de eventos** (`EventRecord`) | Postgres (`JSONB`) | nativo (SQL) | consulta ad-hoc del audit: filtrar por `actor`, `type`, `correlation_id` |
+
+Deliberadamente **no se usa Mongo**: su datasource en Grafana es Enterprise/community, no
+core OSS, y para causación los traces de Tempo son superiores a consultar documentos. El
+audit consultable vive en Postgres `JSONB` (ver [04-persistence.md](04-persistence.md)).
 
 ## Cobertura honesta
 

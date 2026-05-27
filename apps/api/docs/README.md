@@ -14,7 +14,7 @@ es la especificación de referencia.
 | [01-architecture.md](01-architecture.md) | Capas (kernel / dominios), regla de dependencias, ports & adapters, modelo de actores, async-en-los-bordes |
 | [02-tree.md](02-tree.md) | Árbol completo del workspace |
 | [03-events.md](03-events.md) | Modelo de eventos: enums owned, envelope con causación, bus síncrono, dead-letter |
-| [04-persistence.md](04-persistence.md) | Persistencia híbrida Dolt / Postgres / Mongo; puertos y adaptadores; outbox |
+| [04-persistence.md](04-persistence.md) | Persistencia híbrida Dolt / Postgres (audit en `JSONB`); puertos y adaptadores; outbox; trazabilidad Grafana vía OTEL/Tempo |
 | [05-queues.md](05-queues.md) | Taxonomía de colas, cola de trabajo sobre Dolt, claim por CAS, Dolt vs InnoDB, backpressure |
 | [06-observability.md](06-observability.md) | Seguimiento de errores semánticos: causación, state machines, expectations, replay determinista |
 | [07-frontend.md](07-frontend.md) | `gt-web`: API + SSE, snapshot vs stream |

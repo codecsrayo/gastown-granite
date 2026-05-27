@@ -15,7 +15,7 @@
 │  kernel/      contratos + transportes + adaptadores BD      │
 │               gt-events · gt-bus · gt-audit · gt-channel ·  │
 │               gt-beads · gt-workspace · gt-telemetry ·      │
-│               gt-plugin · gt-store-{dolt,pg,mongo}          │
+│               gt-plugin · gt-store-{dolt,pg}                │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -49,7 +49,7 @@ El adaptador lo implementa en el kernel:
 impl SessionQueries for DoltRepo { /* … */ }
 ```
 
-Beneficio: cada dominio se testea con un repo in-memory sin levantar Dolt/Postgres/Mongo,
+Beneficio: cada dominio se testea con un repo in-memory sin levantar Dolt/Postgres,
 igual que los tests de DTO no necesitan base de datos.
 
 ## Modelo de actores (estado mutable)

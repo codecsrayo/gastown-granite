@@ -114,6 +114,6 @@ buffer bounded grande y, ante overflow, **spillean a disco + emiten un evento de
 
 ## Type-erased solo en el cable
 
-El enum tipado vive **en el bus in-process**. Al persistir (audit/Mongo) se convierte a
+El enum tipado vive **en el bus in-process**. Al persistir (audit en Postgres `JSONB`) se convierte a
 un `EventRecord` type-erased (`type: String`, `payload: Map`), que es como funciona el
 `.events.jsonl` hoy en Go. `gt-feed` consume ese `EventRecord`, nunca el enum.

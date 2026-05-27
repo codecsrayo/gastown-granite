@@ -107,7 +107,7 @@ Fuente: documentación de DoltHub (modelo de concurrencia y transacciones).
 
 | Canal | Productor | Política | Razón |
 |---|---|---|---|
-| Audit drain (→ Mongo) | handler **sync** del bus | `mpsc` bounded grande + `try_send`; overflow ⇒ spill a `.events.jsonl` local + evento `AuditOverflow` | el handler es sync, no puede `.await`; no se pierde en silencio, pero la contrapresión **no** bloquea al bus |
+| Audit drain (→ Postgres `JSONB`) | handler **sync** del bus | `mpsc` bounded grande + `try_send`; overflow ⇒ spill a `.events.jsonl` local + evento `AuditOverflow` | el handler es sync, no puede `.await`; no se pierde en silencio, pero la contrapresión **no** bloquea al bus |
 | SSE broadcast (→ navegador) | handler sync del bus | `try_send` / `broadcast` lossy | si un cliente se queda atrás, que pierda frames, no que tumbe el sistema |
 | Actor mailbox | task async (supervisor, dispatcher) | bounded + `send().await` | el emisor **sí** es async aquí; bloquearlo cuando el actor satura es correcto |
 
@@ -118,7 +118,7 @@ de overflow explícito, no `.await`.
 
 **Prohibido `unbounded`** salvo prueba de que el consumidor siempre gana. Canal sin
 límite = bomba de memoria diferida. (El append a `.events.jsonl` local es justamente ese
-caso probado y sirve de red de spill para el drain a Mongo.)
+caso probado y sirve de red de spill para el drain a Postgres.)
 
 ## Veredicto para este caso
 
