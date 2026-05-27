@@ -30,6 +30,18 @@ ENV PATH="/app/gastown:/usr/local/go/bin:/home/agent/go/bin:${PATH}"
 RUN curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
 RUN curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/install.sh | bash
 
+# Install Rust (system-wide) for the gastown-rs workspace in apps/api/.
+# CARGO_HOME world-writable so the unprivileged `agent` user can build (registry cache).
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:${PATH}
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+        sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable && \
+    chmod -R a+w "$CARGO_HOME" "$RUSTUP_HOME"
+# Make the toolchain visible to interactive login shells (bash + zsh / tmux sessions).
+RUN printf 'export RUSTUP_HOME=/usr/local/rustup\nexport CARGO_HOME=/usr/local/cargo\nexport PATH=/usr/local/cargo/bin:$PATH\n' > /etc/profile.d/rust.sh && \
+    printf 'export RUSTUP_HOME=/usr/local/rustup; export CARGO_HOME=/usr/local/cargo; export PATH=/usr/local/cargo/bin:$PATH\n' >> /etc/zsh/zshenv
+
 # Set up directories
 RUN mkdir -p /app /gt /gt/.dolt-data && chown -R agent:agent /app /gt
 

@@ -1,0 +1,24 @@
+# gastown-rs — workspace raíz (montado bajo apps/api/).
+# Espina (Paso 0+1 de docs/08-getting-started.md): solo los crates del núcleo de eventos.
+# El resto de crates (dominios, adaptadores, bins) se añaden en pasos posteriores.
+[workspace]
+resolver = "2"
+members = [
+    "crates/kernel/gt-events",
+    "crates/kernel/gt-bus",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+rust-version = "1.75"
+
+[workspace.dependencies]
+thiserror = "2"
+ulid = "1"
+time = { version = "0.3", features = ["std"] }
+
+# Perfil dev rápido (sin requerir mold/lld para que compile en cualquier host).
+[profile.dev]
+opt-level = 0
+debug = 1
