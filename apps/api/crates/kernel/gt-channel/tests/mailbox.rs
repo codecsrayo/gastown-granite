@@ -47,8 +47,13 @@ async fn existing_files_are_drained_on_subscribe() {
     let mut rx = ch.subscribe(8).unwrap();
     let m1 = recv_one(&mut rx).await;
     let m2 = recv_one(&mut rx).await;
-    let payloads: Vec<&[u8]> = vec![&m1.payload, &m2.payload];
-    // ulid ids sort lexicographically by emit order → "first" precedes "second".
+    // The channel guarantees both preexisting files are drained, but delivery is unordered:
+    // when both emits land in the same millisecond their ULID time bits tie and the random
+    // suffix decides drain order (see Channel::subscribe docs). Assert set-equality, not
+    // sequence — the refinery treats each message as an independent slot, so order is not
+    // part of the contract.
+    let mut payloads: Vec<&[u8]> = vec![&m1.payload, &m2.payload];
+    payloads.sort();
     assert_eq!(payloads, vec![&b"first"[..], &b"second"[..]]);
     ch.ack(&m1).unwrap();
     ch.ack(&m2).unwrap();

@@ -75,6 +75,13 @@ impl Channel {
     /// the Create/Modify(Name(To)) burst inotify emits on atomic rename). Across
     /// subscriptions, an un-acked file is re-delivered — that's the at-least-once
     /// guarantee callers rely on.
+    ///
+    /// Delivery is **unordered**, not FIFO. The drain sorts filenames so the order is
+    /// deterministic *given a set of files*, but ULID ids only sort by emit order when the
+    /// emits land in distinct milliseconds — within the same ms the time bits tie and the
+    /// random suffix decides, so two same-ms emits may drain in either order. This is fine
+    /// for the only consumer (the `gt-merge` refinery turns each message into an
+    /// independent `MergeSlot`); callers that need total order must not rely on the channel.
     pub fn subscribe(&self, buffer: usize) -> Result<mpsc::Receiver<ChannelMessage>, ChannelError> {
         let (tx, rx) = mpsc::channel::<ChannelMessage>(buffer);
 
