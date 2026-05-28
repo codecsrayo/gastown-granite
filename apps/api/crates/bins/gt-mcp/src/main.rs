@@ -46,10 +46,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Share the root's domain actors, not isolated `actor::spawn`s. MCP tool calls drive the
-    // same agent + merge + scheduling + patrol + orchestration actors the root drives, so their
-    // events land in the shared log.
-    // same agent + merge + scheduling + patrol + quota actors the root drives, so their events
-    // land in the shared log.
+    // same agent + merge + scheduling + patrol + orchestration + quota actors the root drives,
+    // so their events land in the shared log.
     let service = McpService::new(
         root.agent.clone(),
         root.merge.clone(),
@@ -61,8 +59,19 @@ async fn main() -> anyhow::Result<()> {
         audit,
     );
 
-    let handle = service.serve(stdio()).await?;
-    handle.waiting().await?;
+    // Transport selection (Paso 6.f.12). `GT_MCP_TRANSPORT=http` serves the streamable-HTTP
+    // transport (bind via `GT_MCP_HTTP_BIND`); anything else keeps the default stdio transport.
+    match std::env::var("GT_MCP_TRANSPORT").as_deref() {
+        Ok("http") => {
+            let bind =
+                std::env::var("GT_MCP_HTTP_BIND").unwrap_or_else(|_| "127.0.0.1:8765".to_string());
+            gt_mcp::http::serve(service, &bind).await?;
+        }
+        _ => {
+            let handle = service.serve(stdio()).await?;
+            handle.waiting().await?;
+        }
+    }
 
     root.shutdown();
     Ok(())

@@ -30,14 +30,19 @@ gt-quota = { path = "../../domain/gt-quota" }
 gt-beads = { path = "../../kernel/gt-beads" }
 gt-audit = { path = "../../kernel/gt-audit" }
 
-tokio = { workspace = true, features = ["io-util", "io-std", "macros", "rt", "rt-multi-thread", "sync"] }
+tokio = { workspace = true, features = ["io-util", "io-std", "macros", "rt", "rt-multi-thread", "sync", "net"] }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 thiserror.workspace = true
 schemars.workspace = true
-rmcp.workspace = true
+# transport-streamable-http-server adds the tower-based HTTP transport (Paso 6.f.12); stdio
+# (transport-io) stays on via the workspace default features.
+rmcp = { workspace = true, features = ["transport-streamable-http-server"] }
+axum = "0.7"
 anyhow.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util", "sync", "time"] }
+# HTTP transport gate drives a real rmcp streamable-http client against the in-process server.
+rmcp = { workspace = true, features = ["transport-streamable-http-client-reqwest", "client"] }
