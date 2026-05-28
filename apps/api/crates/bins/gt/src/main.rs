@@ -6,11 +6,16 @@
 //! runs without a Dolt server still work end-to-end. When `GT_PG_AUDIT_URL` is set, the
 //! same boot also spawns the Postgres audit relay (canonical EventStore per docs/04).
 //! The local `.events.jsonl` keeps writing in both modes as a spill/fallback.
+//!
+//! Effects (hq-7pdl.1): the composition root is wired with the production [`RealEffects`]
+//! adapter (`gt sling` child processes + the `QuotaCommand::Rotate` chain). The `gt` binary
+//! path is configurable via `GT_BIN`.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gt_beads::{BeadRepository, InMemoryBeads};
-use gt_root::{spawn, LogEffects, RootConfig, RootHandle, SystemClock};
+use gt_root::{spawn, RealEffects, RootConfig, RootHandle, SystemClock};
 use gt_store_dolt::DoltBeads;
 use gt_store_pg::PgAudit;
 
@@ -23,28 +28,33 @@ fn main() {
     runtime.block_on(async {
         let log_path = std::env::var("GT_EVENT_LOG")
             .unwrap_or_else(|_| "/tmp/gt.events.jsonl".to_string());
+        let gt_bin = std::env::var("GT_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("gt"));
 
         match std::env::var("GT_DOLT_URL").ok() {
             Some(url) => {
                 let dolt = DoltBeads::connect(&url).expect("connect Dolt");
                 dolt.ensure_schema().await.expect("Dolt ensure_schema");
                 eprintln!("[gt] beads: Dolt @ {url}");
-                run(Arc::new(dolt), &log_path).await;
+                run(Arc::new(dolt), &log_path, gt_bin).await;
             }
             None => {
                 eprintln!("[gt] beads: in-memory (set GT_DOLT_URL for Dolt persistence)");
-                run(Arc::new(InMemoryBeads::default()), &log_path).await;
+                run(Arc::new(InMemoryBeads::default()), &log_path, gt_bin).await;
             }
         }
     });
 }
 
-async fn run<R>(repo: Arc<R>, log_path: &str)
+async fn run<R>(repo: Arc<R>, log_path: &str, gt_bin: PathBuf)
 where
     R: BeadRepository + 'static,
     Arc<R>: BeadRepository + Clone + 'static,
 {
-    let root = spawn(repo, LogEffects, SystemClock, log_path, RootConfig::default());
+    let (effects, quota_slot) = RealEffects::new(gt_bin);
+    let root = spawn(repo, effects, SystemClock, log_path, RootConfig::default());
+    let _ = quota_slot.set(root.quota.clone());
 
     let audit_task = spawn_pg_audit(&root).await;
 

@@ -14,7 +14,9 @@ use gt_agent::{AgentEvent, InMemorySessions, Session};
 use gt_beads::{Bead, BeadRepository, BeadStatus, InMemoryBeads};
 use gt_events::Envelope;
 use gt_root::{root::Effects, spawn, RootConfig, SystemClock};
-use gt_web::{router, AppState};
+use gt_web::{
+    router, AppState, AuthConfig, InMemoryWebAudit, WebAuditEvent, WebAuditSink,
+};
 
 struct NoopEffects;
 impl Effects for NoopEffects {
@@ -23,6 +25,18 @@ impl Effects for NoopEffects {
 }
 
 async fn boot(log: std::path::PathBuf) -> (String, gt_root::RootHandle<Arc<InMemoryBeads>>) {
+    let (base, root, _audit) = boot_with_auth(log, AuthConfig::open()).await;
+    (base, root)
+}
+
+async fn boot_with_auth(
+    log: std::path::PathBuf,
+    auth: AuthConfig,
+) -> (
+    String,
+    gt_root::RootHandle<Arc<InMemoryBeads>>,
+    InMemoryWebAudit,
+) {
     let beads = Arc::new(InMemoryBeads::default());
     beads
         .upsert(&Bead::new("hq-x1", "demo bead", BeadStatus::Pending, 1))
@@ -39,13 +53,16 @@ async fn boot(log: std::path::PathBuf) -> (String, gt_root::RootHandle<Arc<InMem
         events: root.events_sender(),
     };
 
+    let audit = InMemoryWebAudit::new();
+    let sink: Arc<dyn WebAuditSink> = Arc::new(audit.clone());
+
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = router(state);
+    let app = router(state, auth, sink);
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    (format!("http://{addr}"), root)
+    (format!("http://{addr}"), root, audit)
 }
 
 #[tokio::test]
@@ -208,4 +225,67 @@ fn tempfile(label: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!("gt-web-test-{label}-{}.jsonl", ulid::Ulid::new()));
     p
+}
+
+/// hq-7pdl.2 gate: bearer middleware enforces auth and records both outcomes to the audit log.
+/// Doc 07: IAM lives at the gateway; "who-consulted-what" lands in the shared event log.
+#[tokio::test]
+async fn bearer_auth_enforced_and_audited() {
+    let log = tempfile("auth");
+    let token = "shared-test-token";
+    let (base, _root, audit) =
+        boot_with_auth(log, AuthConfig::bearer(token.to_string())).await;
+
+    let client = reqwest::Client::new();
+
+    // Missing token -> 401, no handler reached.
+    let r = client
+        .get(format!("{base}/api/beads?status=pending"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
+
+    // Wrong token -> 401.
+    let r = client
+        .get(format!("{base}/api/beads?status=pending"))
+        .header("authorization", "Bearer wrong")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
+
+    // Correct token -> 200 + body served.
+    let r = client
+        .get(format!("{base}/api/beads?status=pending"))
+        .header("authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let beads: Vec<gt_web::dto::BeadDto> = r.json().await.unwrap();
+    assert_eq!(beads.len(), 1);
+
+    let recorded = audit.snapshot();
+    assert!(
+        recorded.iter().any(|e| matches!(
+            e,
+            WebAuditEvent::Unauthorized { reason, .. } if reason == "missing bearer token"
+        )),
+        "missing-token unauthorized audit row not recorded: {recorded:?}",
+    );
+    assert!(
+        recorded.iter().any(|e| matches!(
+            e,
+            WebAuditEvent::Unauthorized { reason, .. } if reason == "invalid bearer token"
+        )),
+        "invalid-token unauthorized audit row not recorded: {recorded:?}",
+    );
+    assert!(
+        recorded.iter().any(|e| matches!(
+            e,
+            WebAuditEvent::Invoked { status: 200, path, .. } if path == "/api/beads"
+        )),
+        "authorized invoked audit row not recorded: {recorded:?}",
+    );
 }

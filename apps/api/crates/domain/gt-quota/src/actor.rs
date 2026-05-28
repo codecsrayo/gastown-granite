@@ -70,6 +70,9 @@ pub enum QuotaMsg {
     },
     /// Diagnostics: (live accounts, predictions emitted).
     Snapshot(oneshot::Sender<(usize, usize)>),
+    /// Read-only snapshot of every registered account. The edge needs this to pick a healthy
+    /// rotation target when the predictive chain fires (`docs/features/token-tracking-prediction.md`).
+    AccountsSnapshot(oneshot::Sender<Vec<Account>>),
     /// "Ask without doing": run `validate` against the current registry, no mutation/emit.
     Validate {
         cmd: QuotaCommand,
@@ -211,6 +214,16 @@ impl QuotaHandle {
             return (0, 0);
         }
         rx.await.unwrap_or((0, 0))
+    }
+
+    /// Owned snapshot of every account in the registry. Used by the real `Effects` adapter to
+    /// pick a healthy rotation target on `BlockPredicted` / `AccountLimited`.
+    pub async fn accounts(&self) -> Vec<Account> {
+        let (reply, rx) = oneshot::channel();
+        if self.tx.send(QuotaMsg::AccountsSnapshot(reply)).await.is_err() {
+            return Vec::new();
+        }
+        rx.await.unwrap_or_default()
     }
 
     /// "Ask without doing": run `validate` against the current registry snapshot.
@@ -402,6 +415,9 @@ pub fn spawn(
                 }
                 QuotaMsg::Snapshot(reply) => {
                     let _ = reply.send((registry.accounts().count(), predictions_emitted));
+                }
+                QuotaMsg::AccountsSnapshot(reply) => {
+                    let _ = reply.send(registry.accounts().cloned().collect());
                 }
                 QuotaMsg::Validate { cmd, reply } => {
                     let _ = reply.send(cmd.validate(&registry));
