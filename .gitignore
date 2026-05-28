@@ -34,6 +34,10 @@ config.toml
 !config.example.toml
 !internal/hooks/templates/vibe/config.toml
 gt
+# The Rust composition root crate (apps/api/crates/bins/gt/) is named `gt` too —
+# unignore it so the source is tracked. The repo-root `gt` Go binary stays ignored.
+!apps/api/crates/bins/gt/
+!apps/api/crates/bins/gt/**
 
 # Runtime state (ignore contents, but allow setup-hooks to be tracked)
 state.json

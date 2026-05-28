@@ -134,11 +134,14 @@ gastown-rs/                          # (montado bajo apps/api/ en el repo)
 │               └── view.rs          # proyección TUI
 │
 ├── bins/
-│   ├── gt/                          # COMPOSITION ROOT
-│   │   └── src/
-│   │       ├── main.rs              # crea el runtime tokio (uno), cablea todo
-│   │       ├── event.rs             # enum GtEvent { Agent(AgentEvent), Merge(MergeEvent), … }
-│   │       └── wiring.rs            # actores, drain tasks, suscribe handlers, dead-letter
+│   ├── gt/                          # COMPOSITION ROOT — Paso 6.e DONE
+│   │   ├── src/
+│   │   │   ├── lib.rs               # re-exporta GtEvent/GtState + Root API (también testable como lib)
+│   │   │   ├── event.rs             # enum GtEvent + GtState agregado + replay_gt
+│   │   │   ├── root.rs              # spawnea actores, drena los 6 relays en un select!, reacciones cross-dominio, dead-letter
+│   │   │   └── main.rs              # crea el runtime tokio (uno), enchufa InMemoryBeads + LogEffects + SystemClock
+│   │   └── tests/
+│   │       └── composition.rs       # gate: e2e multi-dominio → unified replay byte-idéntico al per-dominio
 │   ├── gt-replay/                   # debugging: replay del log + diff esperado/real
 │   │   └── src/main.rs
 │   ├── gt-web/                      # API + SSE (Axum)

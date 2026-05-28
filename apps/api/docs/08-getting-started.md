@@ -183,8 +183,34 @@ Mismo patrón aplicado en orden:
    siguiente nunca se alimenta). Persistir el progreso del convoy en Dolt (marcador `[Dolt]`
    de `docs/02-tree.md`) queda como adaptador follow-up; el dominio entrega puro + replay-able
    primero, como `gt-patrol` y `gt-merge`.
-5. **`gt-web`** (cuando ya hay datos significativos que exponer).
-6. **`gt-feed`** + adaptador final para el log.
+5. **`bins/gt` composition root** ✅ DONE — el primer crate en `bins/` y el único autorizado a
+   conocer todos los dominios. Aporta el **unificador** `GtEvent` (suma de
+   `Agent/Sched/Patrol/Merge/Quota/Orch`) cuyo `kind()` delega al evento interno — por eso
+   el `events.jsonl` mantiene su forma type-erased por dominio y el replay por prefijo de
+   los Pasos 2–6 sigue funcionando byte-a-byte. `GtState` agrega un reducer por sub-dominio;
+   `replay_gt` reconstruye el sistema completo desde el único log. El root spawnea cada
+   actor con su relay, drena los seis en un único `select!` async (un único escritor → orden
+   total), y cablea las reacciones cross-dominio que los pasos anteriores difirieron
+   explícitamente: `SchedEvent::Dispatched → patrol.register` (Paso 6.a),
+   `PatrolEvent::LeaseExpired → repo.cas_release + sched.capacity_freed + sched.enqueue`
+   (Paso 6.a), `MergeEvent::Ready → merge.start` y `Merged → repo.upsert(done) +
+   capacity_freed` (Paso 6.b), `OrchEvent::MemberDispatched → Effects::sling` (Paso 6.d),
+   `QuotaEvent::BlockPredicted | AccountLimited → Effects::rotate` (Paso 6.c). Los efectos
+   externos (`gt sling`, rotación) y el reloj entran por los puertos `Effects`/`Clock`
+   (inyectados — `main` enchufa los reales, el gate inyecta dobles deterministas). Fallos
+   de reacción y eventos sin prefijo conocido caen al dead-letter (entrada del kernel
+   `gt-bus::DeadLetterEntry`); contador expuesto en `RootHandle::dead_letters()` — el gate
+   exige 0. El `dyn`/`#[async_trait]` sigue confinado a `gt-plugin`: el root usa genéricos
+   (`R: BeadRepository + Clone`, `FX: Effects`, `CK: Clock`). El runtime tokio único se
+   crea en `main.rs` — los dominios siguen recibiendo handles. Crate: `crates/bins/gt`.
+   Gate: `multi_domain_flow_through_root_replays_byte_identical` arrastra
+   scheduling+patrol+agent+orch a través de un único root + un único log (`enqueue →
+   dispatched → lease registered → tick stale → expired → reclaim → re-dispatched →
+   completion + convoy launch → handoff → close`), y verifica que `GtState` reconstruido
+   por `replay_gt` es **byte-idéntico** al replay por prefijo dominio a dominio (preserva
+   el gate del Paso 3 sin perder la unificación).
+6. **`gt-web`** (cuando ya hay datos significativos que exponer — ahora sí los hay).
+7. **`gt-feed`** + adaptador final para el log.
 
 Cada uno repite la receta: enum owned, actor, repo trait, test con repo in-memory,
 adaptador con BD real, los dos tests deben pasar, replay reconstruye.

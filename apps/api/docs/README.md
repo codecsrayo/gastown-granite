@@ -51,9 +51,10 @@ es la especificación de referencia.
 > | 6.b | `gt-merge` + `gt-channel` (refinery await MERGE_READY) | DONE | — | hq-mc72.2 |
 > | 6.c | `gt-quota` + `gt-store-pg` (primer Postgres, rotación predictiva) | DONE | — | hq-mc72.3 |
 > | 6.d | `gt-orchestration` (convoy: handoff secuencial + replay) | DONE | — | hq-mc72.4 |
-> | 6.e+ | `gt-web`, `gt-mcp`, `gt-feed` | PLANEADO | — | — |
+> | 6.e | `bins/gt` composition root (GtEvent unifier, actores/relays/dead-letter) | DONE | — | hq-mc72.6 |
+> | 6.f+ | `gt-web`, `gt-mcp`, `gt-feed` | PLANEADO | — | — |
 >
-> Estado global: **Paso 6.d (`gt-orchestration`) DONE** (al 2026-05-27). Mantén esta tabla viva.
+> Estado global: **Paso 6.e (`bins/gt` composition root) DONE** (al 2026-05-27). Mantén esta tabla viva.
 
 ---
 

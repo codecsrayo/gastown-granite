@@ -1,0 +1,36 @@
+[package]
+name = "gt"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+# The composition root: the ONE crate allowed to know every domain and wire them
+# together (docs/01-architecture.md, layer `bins/`). The library holds the wiring + the
+# `GtEvent`/`GtState` unifier; `main.rs` is the thin boot that owns the single tokio runtime.
+[lib]
+name = "gt_root"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gt"
+path = "src/main.rs"
+
+[dependencies]
+# Kernel: contracts + transports + the Dolt-port repo + the type-erased log/replay.
+gt-events = { path = "../../kernel/gt-events" }
+gt-bus = { path = "../../kernel/gt-bus" }
+gt-audit = { path = "../../kernel/gt-audit" }
+gt-beads = { path = "../../kernel/gt-beads" }
+# Every domain — only the composition root is allowed this fan-in.
+gt-agent = { path = "../../domain/gt-agent" }
+gt-scheduling = { path = "../../domain/gt-scheduling" }
+gt-patrol = { path = "../../domain/gt-patrol" }
+gt-merge = { path = "../../domain/gt-merge" }
+gt-quota = { path = "../../domain/gt-quota" }
+gt-orchestration = { path = "../../domain/gt-orchestration" }
+# `signal` (ctrl_c) is bin-only; the workspace tokio set stays minimal for the libs.
+tokio = { workspace = true, features = ["signal"] }
+serde.workspace = true
+
+[dev-dependencies]
+ulid.workspace = true
