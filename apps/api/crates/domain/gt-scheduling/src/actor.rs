@@ -9,7 +9,7 @@
 
 use tokio::sync::{mpsc, oneshot};
 
-use gt_beads::BeadRepository;
+use gt_beads::{Bead, BeadRepository};
 use gt_events::{AppError, Command, Envelope};
 
 use crate::commands::SchedCommand;
@@ -17,7 +17,19 @@ use crate::events::SchedEvent;
 use crate::state::SchedCore;
 
 pub enum SchedMsg {
-    Enqueue { bead: String, priority: u8 },
+    Enqueue {
+        bead: String,
+        priority: u8,
+    },
+    /// Create (or replace) a bead row in the repo. A passthrough to `BeadRepository::upsert`
+    /// run from the one task that owns the repo handle (hq-mc72.10) — so the MCP edge can mint
+    /// the schedulable work the dispatcher's CAS-claim later needs. No `SchedEvent`: bead
+    /// creation is a repo write, not a queue state change (the durable truth is the repo, as
+    /// when `bd`/Dolt creates beads externally).
+    CreateBead {
+        bead: Bead,
+        reply: oneshot::Sender<Result<(), AppError>>,
+    },
     /// Un worker terminó: libera capacidad y re-bombea.
     CapacityFreed,
     /// (queued, in_flight)
@@ -52,6 +64,18 @@ impl SchedHandle {
 
     pub async fn capacity_freed(&self) {
         let _ = self.tx.send(SchedMsg::CapacityFreed).await;
+    }
+
+    /// Create (or replace) a bead in the repo via the owning actor. Returns the repo result so
+    /// the caller (the MCP `scheduling.create_bead` tool) can surface a failure.
+    pub async fn create_bead(&self, bead: Bead) -> Result<(), AppError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(SchedMsg::CreateBead { bead, reply })
+            .await
+            .map_err(|_| AppError::Other("actor gone".into()))?;
+        rx.await
+            .map_err(|_| AppError::Other("actor dropped reply".into()))?
     }
 
     pub async fn snapshot(&self) -> (usize, usize) {
@@ -123,6 +147,10 @@ where
                     let _ = events
                         .send(Envelope::root(SchedEvent::Enqueue { bead, priority }))
                         .await;
+                }
+                SchedMsg::CreateBead { bead, reply } => {
+                    let _ = reply.send(repo.upsert(&bead).await);
+                    pump = false;
                 }
                 SchedMsg::CapacityFreed => core.gov.release(),
                 SchedMsg::Snapshot(reply) => {

@@ -13,6 +13,8 @@
 
 use std::sync::Arc;
 
+use tokio::sync::mpsc;
+
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{
@@ -24,10 +26,14 @@ use rmcp::{
     tool, tool_handler, tool_router, RoleServer, ServerHandler,
 };
 
-use gt_events::AppError;
+use gt_events::{AppError, Envelope};
 
 use gt_agent::actor::AgentHandle;
-use gt_agent::{AddSession, AgentCommand, RemoveSession, Session, SessionQueries, TransitionSession};
+use gt_agent::{
+    AddSession, AgentCommand, AgentEvent, RemoveSession, Session, SessionQueries, SessionRole,
+    TransitionSession,
+};
+use gt_beads::{Bead, BeadStatus};
 use gt_store_dolt::DoltSessions;
 use gt_merge::actor::MergeHandle;
 use gt_merge::{CompleteMerge, FailMerge, MergeCommand, StartMerge, SubmitMerge};
@@ -38,7 +44,10 @@ use gt_patrol::{CloseLease, Heartbeat, PatrolCommand, RegisterLease, Tick};
 use gt_scheduling::actor::SchedHandle;
 use gt_scheduling::{Enqueue, MarkDispatched, SchedCommand};
 use gt_quota::actor::QuotaHandle;
-use gt_quota::{ProbeWindow, QuotaCommand, RotateAccount, SampleTokens};
+use gt_quota::{
+    Account, AccountQuotaStatus, AccountWindow, ProbeWindow, QuotaCommand, RotateAccount,
+    SampleTokens, WindowKind,
+};
 
 use crate::audit::{AuditEvent, AuditSink, Outcome};
 use crate::auth::Scope;
@@ -69,6 +78,90 @@ impl SessionsRead {
     }
 }
 
+/// Input for the `quota.register` tool (hq-mc72.10). Account registration is intentionally
+/// *not* a `QuotaCommand`: the domain treats window initialization as edge configuration that
+/// arrives outside the event log (`gt-quota::state` — the edge re-registers on boot, the actor
+/// re-derives rates from the next probe). So this DTO lives at the edge and feeds
+/// `QuotaHandle::upsert_account` directly. Without it, sample/probe/rotate are no-ops over an
+/// empty registry, since they only mutate accounts that already exist.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct RegisterAccount {
+    /// Account id (the provider / keychain correlative). Must be non-empty.
+    pub account: String,
+    /// Budget for the live window, in cost units. Must be > 0.
+    pub limit: u64,
+    /// Window start (UTC epoch seconds).
+    pub started_at_secs: u64,
+    /// When the window resets (UTC epoch seconds). Must be after `started_at_secs`.
+    pub resets_at_secs: u64,
+    /// Use the weekly window instead of the default rolling-5h.
+    #[serde(default)]
+    pub weekly: bool,
+}
+
+impl RegisterAccount {
+    fn validate(&self) -> Result<(), AppError> {
+        if self.account.is_empty() {
+            return Err(AppError::Validation("account is empty".into()));
+        }
+        if self.limit == 0 {
+            return Err(AppError::Validation("limit must be > 0".into()));
+        }
+        if self.resets_at_secs <= self.started_at_secs {
+            return Err(AppError::Validation(
+                "resets_at_secs must be after started_at_secs".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn to_account(&self) -> Account {
+        Account {
+            id: self.account.clone(),
+            status: AccountQuotaStatus::Healthy,
+            window: Some(AccountWindow {
+                kind: if self.weekly {
+                    WindowKind::Weekly
+                } else {
+                    WindowKind::Rolling5h
+                },
+                limit: self.limit,
+                started_at_secs: self.started_at_secs,
+                resets_at_secs: self.resets_at_secs,
+                consumed: 0.0,
+            }),
+        }
+    }
+}
+
+/// Input for the `scheduling.create_bead` tool (hq-mc72.10). Mints a `pending` bead in the
+/// repo so the dispatcher's CAS-claim has work to find — closing the loop the MCP surface
+/// otherwise couldn't drive (`scheduling.enqueue` dispatches nothing if no `pending` bead
+/// exists). Routed through the scheduling actor, the one task that owns the `BeadRepository`
+/// handle; in production beads still originate in Dolt/`bd`, this is the edge equivalent.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct CreateBead {
+    /// Unique bead id. Must be non-empty.
+    pub id: String,
+    /// Human-readable title for the bead.
+    pub title: String,
+    /// Priority: 0 = P0 (highest) .. 2 = P2.
+    pub priority: u8,
+}
+
+impl CreateBead {
+    fn validate(&self) -> Result<(), AppError> {
+        if self.id.is_empty() {
+            return Err(AppError::Validation("bead id is empty".into()));
+        }
+        Ok(())
+    }
+
+    fn to_bead(&self) -> Bead {
+        Bead::new(&self.id, &self.title, BeadStatus::Pending, self.priority)
+    }
+}
+
 #[derive(Clone)]
 pub struct McpService {
     inner: Arc<Inner>,
@@ -84,6 +177,11 @@ struct Inner {
     quota: QuotaHandle,
     scope: Scope,
     audit: Arc<dyn AuditSink>,
+    /// Edge relay for agent events. The agent actor is relay-less by design (the supervisor
+    /// and spawn edges emit on it — see `bins/gt::root`), so a tool-driven `agent.add` must
+    /// publish `Spawned` here itself for the event to reach the log/broadcast/projector.
+    /// `None` in tests built via [`McpService::new`]; `main.rs` wires the root's relay.
+    agent_events: Option<mpsc::Sender<Envelope<AgentEvent>>>,
 }
 
 #[tool_router]
@@ -100,12 +198,16 @@ impl McpService {
         audit: Arc<dyn AuditSink>,
     ) -> Self {
         let sessions = SessionsRead::Actor(agent.clone());
-        Self::with_sessions(agent, sessions, merge, sched, patrol, orch, quota, scope, audit)
+        Self::with_sessions(
+            agent, sessions, merge, sched, patrol, orch, quota, scope, audit, None,
+        )
     }
 
     /// Same as [`McpService::new`] but lets the caller override the sessions read-side
-    /// (Paso 6.h epic A, hq-u955). `main.rs` passes [`SessionsRead::Dolt`] when
-    /// `GT_DOLT_URL` is set; tests keep the default actor backend via [`McpService::new`].
+    /// (Paso 6.h epic A, hq-u955) and supply the agent event relay (hq-mc72.10). `main.rs`
+    /// passes [`SessionsRead::Dolt`] when `GT_DOLT_URL` is set and `Some(root.agent_events)`
+    /// so tool-driven session changes reach the log; tests keep the default actor backend
+    /// and `None` relay via [`McpService::new`].
     #[allow(clippy::too_many_arguments)]
     pub fn with_sessions(
         agent: AgentHandle,
@@ -117,6 +219,7 @@ impl McpService {
         quota: QuotaHandle,
         scope: Scope,
         audit: Arc<dyn AuditSink>,
+        agent_events: Option<mpsc::Sender<Envelope<AgentEvent>>>,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -129,6 +232,7 @@ impl McpService {
                 quota,
                 scope,
                 audit,
+                agent_events,
             }),
         }
     }
@@ -151,6 +255,21 @@ impl McpService {
             return Err(McpError::invalid_request(err.to_string(), None));
         }
 
+        // The agent actor mutates its registry but emits nothing. A successful `agent.add`
+        // execute must publish `Spawned` on the edge relay so the event reaches the log,
+        // the SSE broadcast and the sessions projector — the same path the supervisor/sling
+        // edge uses (hq-mc72.10). `new()` matches the polecat default of `Session::new`, so
+        // the emitted event and the actor snapshot agree.
+        let spawn_event = match (&cmd, validate_only) {
+            (AgentCommand::Add(a), false) => Some(AgentEvent::Spawned {
+                session: a.id.clone(),
+                rig: a.rig.clone(),
+                role: SessionRole::Polecat,
+                crew: None,
+            }),
+            _ => None,
+        };
+
         let domain_result = if validate_only {
             self.inner.agent.validate(cmd).await
         } else {
@@ -167,6 +286,14 @@ impl McpService {
             arguments,
             outcome,
         });
+
+        // Best-effort emit: a full mailbox must not fail the tool call. The actor snapshot
+        // already reflects the add and the audit record above captured the invocation.
+        if domain_result.is_ok() {
+            if let (Some(ev), Some(tx)) = (spawn_event, &self.inner.agent_events) {
+                let _ = tx.send(Envelope::root(ev)).await;
+            }
+        }
 
         match domain_result {
             Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
@@ -497,6 +624,73 @@ impl McpService {
             false,
         )
         .await
+    }
+
+    /// Scope check + (validate | upsert) + audit for `scheduling.create_bead`. Bead creation
+    /// is a repo write, not a queue command, so it bypasses the `SchedCommand` path and emits
+    /// no `SchedEvent`; only the frontier audit records the invocation (hq-mc72.10).
+    pub async fn run_create_bead(
+        &self,
+        tool: &str,
+        args: CreateBead,
+        validate_only: bool,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let json = serde_json::to_value(&args).expect("CreateBead is Serialize");
+        let domain_result = if validate_only {
+            args.validate()
+        } else {
+            match args.validate() {
+                Ok(()) => self.inner.sched.create_bead(args.to_bead()).await,
+                Err(e) => Err(e),
+            }
+        };
+
+        let outcome = match &domain_result {
+            Ok(()) => Outcome::Ok,
+            Err(e) => Outcome::Failed { error: e.to_string() },
+        };
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments: json,
+            outcome,
+        });
+
+        match domain_result {
+            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
+            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "scheduling.create_bead.validate",
+        description = "Check whether creating a bead would be accepted. No state change."
+    )]
+    async fn scheduling_create_bead_validate(
+        &self,
+        Parameters(args): Parameters<CreateBead>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_create_bead("scheduling.create_bead.validate", args, true).await
+    }
+
+    #[tool(
+        name = "scheduling.create_bead.execute",
+        description = "Create a pending bead in the repo so the dispatcher can claim it. Not event-logged."
+    )]
+    async fn scheduling_create_bead_execute(
+        &self,
+        Parameters(args): Parameters<CreateBead>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_create_bead("scheduling.create_bead.execute", args, false).await
     }
 
     /// Patrol-domain twin of [`McpService::run`]: same scope + audit boundary, dispatching to
@@ -862,6 +1056,69 @@ impl McpService {
     ) -> Result<CallToolResult, McpError> {
         let json = serde_json::to_value(&args).expect("RotateAccount is Serialize");
         self.run_quota("quota.rotate.execute", json, QuotaCommand::Rotate(args), false).await
+    }
+
+    /// Scope check + (validate | upsert) + audit for `quota.register`. Mirrors the other
+    /// `run_*` helpers but bypasses the `QuotaCommand` path: registration emits no domain
+    /// event (see [`RegisterAccount`]), so only the frontier audit records the invocation.
+    pub async fn run_quota_register(
+        &self,
+        tool: &str,
+        args: RegisterAccount,
+        validate_only: bool,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let json = serde_json::to_value(&args).expect("RegisterAccount is Serialize");
+        let domain_result = args.validate();
+        if domain_result.is_ok() && !validate_only {
+            self.inner.quota.upsert_account(args.to_account()).await;
+        }
+
+        let outcome = match &domain_result {
+            Ok(()) => Outcome::Ok,
+            Err(e) => Outcome::Failed { error: e.to_string() },
+        };
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments: json,
+            outcome,
+        });
+
+        match domain_result {
+            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
+            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "quota.register.validate",
+        description = "Check whether registering a quota account would be accepted. No state change."
+    )]
+    async fn quota_register_validate(
+        &self,
+        Parameters(args): Parameters<RegisterAccount>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_quota_register("quota.register.validate", args, true).await
+    }
+
+    #[tool(
+        name = "quota.register.execute",
+        description = "Register (or replace) a quota account with a live window so sample/probe/rotate can act on it. Not event-logged."
+    )]
+    async fn quota_register_execute(
+        &self,
+        Parameters(args): Parameters<RegisterAccount>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_quota_register("quota.register.execute", args, false).await
     }
 
     // --- read-side: domain snapshots exposed as MCP Resources (doc 09 row 1) ----------------

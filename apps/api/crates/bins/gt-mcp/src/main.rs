@@ -143,6 +143,7 @@ where
         root.quota.clone(),
         scope,
         audit,
+        Some(root.agent_events.clone()),
     );
 
     // Transport selection (Paso 6.f.12). `GT_MCP_TRANSPORT=http` serves the streamable-HTTP
