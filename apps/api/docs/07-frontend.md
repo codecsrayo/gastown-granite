@@ -115,14 +115,31 @@ Como `gt-web` es el único camino al dato:
 Los dominios y las BD nunca quedan expuestos. Mismo principio que en un API gateway
 bancario: la frontera es el único sitio donde se aplica política.
 
+### Implementación (Paso 7.2, hq-7pdl.2)
+
+- Middleware de autenticación en `bins/gt-web/src/auth.rs`. El binario lee el secreto
+  compartido de `GT_WEB_TOKEN` y compara con tiempo constante el header
+  `Authorization: Bearer <token>`. Sin token configurado el bin se niega a arrancar; para
+  dev existe el override explícito `GT_WEB_AUTH=disabled`. El JWT contra clave pública
+  queda como follow-up.
+- Cada request autorizada / rechazada produce un record de auditoría (`web.invoked` o
+  `web.unauthorized`) que se persiste en el mismo `events.jsonl` que el resto del sistema
+  vía `JsonlWebAudit` (`bins/gt-web/src/audit.rs`). El prefijo `web.*` marca observabilidad
+  pura: el `replay_gt` salta esos records y el dominio no los ve, igual que con `mcp.*`.
+- El identificador que aparece en el audit es un tag derivado del SHA-256 del token
+  (`web:<12hex>`); el secreto nunca cae al log.
+- El rate-limit por usuario/endpoint queda como follow-up explícito (no bloquea Paso 7).
+
 ## Estructura en el árbol
 
 ```
 bins/gt-web/
 └── src/
-    ├── main.rs        # arranca Axum, cablea estado compartido
+    ├── main.rs        # arranca Axum, cablea estado compartido + auth + audit
     ├── routes.rs      # endpoints REST (sessions, beads, feed, nudge)
     ├── stream.rs      # bus → broadcast → SSE
+    ├── auth.rs        # middleware Bearer + AuthConfig + actor tag
+    ├── audit.rs       # WebAuditSink + JsonlWebAudit (web.* frontier-audit)
     └── dto.rs         # SessionDto, BeadDto, FeedEventDto
 ```
 
