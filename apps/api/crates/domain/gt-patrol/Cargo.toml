@@ -8,6 +8,8 @@ rust-version.workspace = true
 gt-events = { path = "../../kernel/gt-events" }
 tokio.workspace = true
 serde.workspace = true
+# JSON Schema derives for Command arguments — surfaced by gt-mcp.
+schemars.workspace = true
 
 [dev-dependencies]
 # El test e2e juega el rol de composition root: cablea patrol + scheduling + agent + repo.

@@ -23,6 +23,8 @@ use gt_agent::actor::AgentHandle;
 use gt_agent::{AddSession, AgentCommand, RemoveSession, TransitionSession};
 use gt_merge::actor::MergeHandle;
 use gt_merge::{CompleteMerge, FailMerge, MergeCommand, StartMerge, SubmitMerge};
+use gt_patrol::actor::PatrolHandle;
+use gt_patrol::{CloseLease, Heartbeat, PatrolCommand, RegisterLease, Tick};
 use gt_scheduling::actor::SchedHandle;
 use gt_scheduling::{Enqueue, MarkDispatched, SchedCommand};
 
@@ -38,6 +40,7 @@ struct Inner {
     agent: AgentHandle,
     merge: MergeHandle,
     sched: SchedHandle,
+    patrol: PatrolHandle,
     scope: Scope,
     audit: Arc<dyn AuditSink>,
 }
@@ -48,6 +51,7 @@ impl McpService {
         agent: AgentHandle,
         merge: MergeHandle,
         sched: SchedHandle,
+        patrol: PatrolHandle,
         scope: Scope,
         audit: Arc<dyn AuditSink>,
     ) -> Self {
@@ -56,6 +60,7 @@ impl McpService {
                 agent,
                 merge,
                 sched,
+                patrol,
                 scope,
                 audit,
             }),
@@ -426,5 +431,143 @@ impl McpService {
             false,
         )
         .await
+    }
+
+    /// Patrol-domain twin of [`McpService::run`]: same scope + audit boundary, dispatching to
+    /// the lease-tracker actor. A `Tick` may emit several `LeaseExpired`s; the actor relays
+    /// them — `run_patrol` only reports the single ok/err the dispatch returned.
+    pub async fn run_patrol(
+        &self,
+        tool: &str,
+        arguments: serde_json::Value,
+        cmd: PatrolCommand,
+        validate_only: bool,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let domain_result = if validate_only {
+            self.inner.patrol.validate(cmd).await
+        } else {
+            self.inner.patrol.exec(cmd).await
+        };
+
+        let outcome = match &domain_result {
+            Ok(()) => Outcome::Ok,
+            Err(e) => Outcome::Failed { error: e.to_string() },
+        };
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments,
+            outcome,
+        });
+
+        match domain_result {
+            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
+            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "patrol.register.validate",
+        description = "Check whether opening a lease would be accepted. No state change."
+    )]
+    async fn patrol_register_validate(
+        &self,
+        Parameters(args): Parameters<RegisterLease>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("RegisterLease is Serialize");
+        self.run_patrol("patrol.register.validate", json, PatrolCommand::Register(args), true).await
+    }
+
+    #[tool(
+        name = "patrol.register.execute",
+        description = "Open a lease for a dispatched bead/worker. Emits patrol.lease_registered."
+    )]
+    async fn patrol_register_execute(
+        &self,
+        Parameters(args): Parameters<RegisterLease>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("RegisterLease is Serialize");
+        self.run_patrol("patrol.register.execute", json, PatrolCommand::Register(args), false).await
+    }
+
+    #[tool(
+        name = "patrol.heartbeat.validate",
+        description = "Check whether a worker heartbeat would be accepted. No state change."
+    )]
+    async fn patrol_heartbeat_validate(
+        &self,
+        Parameters(args): Parameters<Heartbeat>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("Heartbeat is Serialize");
+        self.run_patrol("patrol.heartbeat.validate", json, PatrolCommand::Heartbeat(args), true).await
+    }
+
+    #[tool(
+        name = "patrol.heartbeat.execute",
+        description = "Record a worker heartbeat, refreshing every lease it owns. Emits patrol.heartbeat."
+    )]
+    async fn patrol_heartbeat_execute(
+        &self,
+        Parameters(args): Parameters<Heartbeat>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("Heartbeat is Serialize");
+        self.run_patrol("patrol.heartbeat.execute", json, PatrolCommand::Heartbeat(args), false).await
+    }
+
+    #[tool(
+        name = "patrol.close.validate",
+        description = "Check whether closing a lease would be accepted. No state change."
+    )]
+    async fn patrol_close_validate(
+        &self,
+        Parameters(args): Parameters<CloseLease>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("CloseLease is Serialize");
+        self.run_patrol("patrol.close.validate", json, PatrolCommand::Close(args), true).await
+    }
+
+    #[tool(
+        name = "patrol.close.execute",
+        description = "Close a lease on completion/failure (no expiry fires). Emits patrol.lease_closed."
+    )]
+    async fn patrol_close_execute(
+        &self,
+        Parameters(args): Parameters<CloseLease>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("CloseLease is Serialize");
+        self.run_patrol("patrol.close.execute", json, PatrolCommand::Close(args), false).await
+    }
+
+    #[tool(
+        name = "patrol.tick.validate",
+        description = "Check whether running the stale-lease detector would be accepted. No state change."
+    )]
+    async fn patrol_tick_validate(
+        &self,
+        Parameters(args): Parameters<Tick>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("Tick is Serialize");
+        self.run_patrol("patrol.tick.validate", json, PatrolCommand::Tick(args), true).await
+    }
+
+    #[tool(
+        name = "patrol.tick.execute",
+        description = "Run the stale-lease detector at now_secs; emits patrol.lease_expired for each lease past timeout."
+    )]
+    async fn patrol_tick_execute(
+        &self,
+        Parameters(args): Parameters<Tick>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("Tick is Serialize");
+        self.run_patrol("patrol.tick.execute", json, PatrolCommand::Tick(args), false).await
     }
 }

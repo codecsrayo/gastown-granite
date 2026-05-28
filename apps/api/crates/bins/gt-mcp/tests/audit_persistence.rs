@@ -33,13 +33,15 @@ async fn jsonl_audit_persists_invocations_to_log_and_replay_tolerates_them() {
     let _ = std::fs::remove_file(&log_path);
 
     let agent = actor::spawn(16);
-    // Agent-only gate; wire merge + scheduling actors so the service has its full surface
-    // (relay receivers kept alive so the actors' sends don't error).
+    // Agent-only gate; wire merge + scheduling + patrol actors so the service has its full
+    // surface (relay receivers kept alive so the actors' sends don't error).
     let (merge_tx, _merge_rx) = tokio::sync::mpsc::channel(16);
     let merge = gt_merge::actor::spawn(merge_tx);
     let (sched_tx, _sched_rx) = tokio::sync::mpsc::channel(16);
     let sched =
         gt_scheduling::actor::spawn(Arc::new(gt_beads::InMemoryBeads::default()), sched_tx, 4);
+    let (patrol_tx, _patrol_rx) = tokio::sync::mpsc::channel(16);
+    let patrol = gt_patrol::actor::spawn(patrol_tx);
     let audit: Arc<dyn AuditSink> =
         Arc::new(JsonlAudit::new(Arc::new(JsonlWriter::new(&log_path))));
 
@@ -47,6 +49,7 @@ async fn jsonl_audit_persists_invocations_to_log_and_replay_tolerates_them() {
         agent.clone(),
         merge.clone(),
         sched.clone(),
+        patrol.clone(),
         Scope::admin("max"),
         Arc::clone(&audit),
     );
@@ -54,6 +57,7 @@ async fn jsonl_audit_persists_invocations_to_log_and_replay_tolerates_them() {
         agent.clone(),
         merge.clone(),
         sched.clone(),
+        patrol.clone(),
         Scope::read_only("watcher"),
         Arc::clone(&audit),
     );

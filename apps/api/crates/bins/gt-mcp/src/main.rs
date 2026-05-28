@@ -34,12 +34,13 @@ async fn main() -> anyhow::Result<()> {
         Scope::admin(std::env::var("GT_MCP_ACTOR").unwrap_or_else(|_| "mcp-local".to_string()));
 
     // Share the root's domain actors, not isolated `actor::spawn`s. MCP tool calls drive the
-    // same agent + merge + scheduling actors the root drives, so their events land in the
-    // shared log.
+    // same agent + merge + scheduling + patrol actors the root drives, so their events land in
+    // the shared log.
     let service = McpService::new(
         root.agent.clone(),
         root.merge.clone(),
         root.sched.clone(),
+        root.patrol.clone(),
         scope,
         audit,
     );

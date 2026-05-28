@@ -38,6 +38,7 @@ async fn mcp_drives_merge_slot_through_lifecycle_and_emits_events() {
         actor_agent(),
         merge.clone(),
         actor_sched(),
+        actor_patrol(),
         Scope::read_only("watcher"),
         Arc::clone(&watcher_audit) as Arc<dyn AuditSink>,
     );
@@ -47,6 +48,7 @@ async fn mcp_drives_merge_slot_through_lifecycle_and_emits_events() {
         actor_agent(),
         merge.clone(),
         actor_sched(),
+        actor_patrol(),
         Scope::admin("admin"),
         Arc::clone(&admin_audit) as Arc<dyn AuditSink>,
     );
@@ -189,4 +191,10 @@ fn actor_agent() -> gt_agent::actor::AgentHandle {
 fn actor_sched() -> gt_scheduling::actor::SchedHandle {
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
     gt_scheduling::actor::spawn(Arc::new(gt_beads::InMemoryBeads::default()), tx, 4)
+}
+
+/// A throwaway patrol actor so the service has its full surface; relay receiver dropped.
+fn actor_patrol() -> gt_patrol::actor::PatrolHandle {
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
+    gt_patrol::actor::spawn(tx)
 }

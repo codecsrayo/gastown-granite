@@ -4,8 +4,9 @@
 
 use tokio::sync::{mpsc, oneshot};
 
-use gt_events::Envelope;
+use gt_events::{AppError, Command, Envelope};
 
+use crate::commands::PatrolCommand;
 use crate::events::PatrolEvent;
 use crate::expectations::expired_leases;
 use crate::state::LeaseTracker;
@@ -36,6 +37,17 @@ pub enum PatrolMsg {
     },
     /// Diagnostics: snapshot `(live_leases, expired_emitted_total)`.
     Snapshot(oneshot::Sender<(usize, usize)>),
+    /// "Ask without doing": run `validate` against the current tracker. No mutation.
+    Validate {
+        cmd: PatrolCommand,
+        reply: oneshot::Sender<Result<(), AppError>>,
+    },
+    /// Apply the command. Re-validates inside the same tick, then emits whatever events the
+    /// command produced (zero or many, e.g. a `Tick` expiring several leases).
+    Exec {
+        cmd: PatrolCommand,
+        reply: oneshot::Sender<Result<(), AppError>>,
+    },
 }
 
 #[derive(Clone)]
@@ -80,6 +92,30 @@ impl PatrolHandle {
             return (0, 0);
         }
         rx.await.unwrap_or((0, 0))
+    }
+
+    /// "Ask without doing": validate against the current tracker snapshot. The actor
+    /// revalidates on `exec`, so the answer is a snapshot, not a lock.
+    pub async fn validate(&self, cmd: PatrolCommand) -> Result<(), AppError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(PatrolMsg::Validate { cmd, reply })
+            .await
+            .map_err(|_| AppError::Other("actor gone".into()))?;
+        rx.await
+            .map_err(|_| AppError::Other("actor dropped reply".into()))?
+    }
+
+    /// Apply the command. The actor re-validates inside the same tick and emits the events
+    /// the command produced.
+    pub async fn exec(&self, cmd: PatrolCommand) -> Result<(), AppError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(PatrolMsg::Exec { cmd, reply })
+            .await
+            .map_err(|_| AppError::Other("actor gone".into()))?;
+        rx.await
+            .map_err(|_| AppError::Other("actor dropped reply".into()))?
     }
 }
 
@@ -136,6 +172,27 @@ pub fn spawn(events: mpsc::Sender<Envelope<PatrolEvent>>) -> PatrolHandle {
                 }
                 PatrolMsg::Snapshot(reply) => {
                     let _ = reply.send((tracker.len(), expired_emitted));
+                }
+                PatrolMsg::Validate { cmd, reply } => {
+                    let _ = reply.send(cmd.validate(&tracker));
+                }
+                PatrolMsg::Exec { cmd, reply } => {
+                    // execute() re-validates first → no TOCTOU within the actor tick. It
+                    // returns the events to relay (a Tick may yield several LeaseExpired).
+                    match cmd.execute(&mut tracker) {
+                        Ok(evs) => {
+                            for ev in evs {
+                                if matches!(ev, PatrolEvent::LeaseExpired { .. }) {
+                                    expired_emitted += 1;
+                                }
+                                let _ = events.send(Envelope::root(ev)).await;
+                            }
+                            let _ = reply.send(Ok(()));
+                        }
+                        Err(e) => {
+                            let _ = reply.send(Err(e));
+                        }
+                    }
                 }
             }
         }

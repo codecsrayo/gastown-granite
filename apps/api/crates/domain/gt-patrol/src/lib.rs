@@ -13,9 +13,11 @@
 //! integration-by-events pattern used in Paso 5 (`docs/05-queues.md`).
 
 pub mod actor;
+pub mod commands;
 pub mod expectations;
 mod events;
 mod state;
 
+pub use commands::{CloseLease, Heartbeat, PatrolCommand, RegisterLease, Tick};
 pub use events::PatrolEvent;
 pub use state::{LeaseTracker, PatrolState};
