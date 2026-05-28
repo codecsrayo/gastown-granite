@@ -9,10 +9,26 @@
 //! Effects (hq-7pdl.1): wired with the production [`RealEffects`] adapter (`gt sling` child
 //! processes + `QuotaCommand::Rotate` chain). `gt` binary path comes from `GT_BIN`.
 //!
-//! IAM (hq-7pdl.2): bearer-token middleware sits in front of every route. The secret is
-//! read from `GT_WEB_TOKEN`; without it the bin refuses to start unless
+//! IAM (hq-7pdl.2): bearer-token middleware sits in front of every `/api` route. The secret
+//! is read from `GT_WEB_TOKEN`; without it the bin refuses to start unless
 //! `GT_WEB_AUTH=disabled` is set explicitly (intended for in-tree dev only). Every accepted
 //! / rejected request lands in the shared `events.jsonl` as a `web.*` frontier-audit record.
+//!
+//! Operational readiness (paso 8.5, hq-8iur.5):
+//! - `/health` (liveness) and `/readyz` (readiness) sit **outside** the IAM middleware so
+//!   systemd / kube probes work without carrying the bearer token. `/metrics` also moved out
+//!   of the auth layer — Prometheus scrapes anonymously.
+//! - The bin captures `Arc<DoltBeads>` and `Arc<PgAudit>` clones at boot and registers them
+//!   as readyz probes (`SELECT 1`), so a flapping backend visibly fails the probe instead of
+//!   tarpitting the IAM-protected routes.
+//! - The boot defaults `hydration_done=true` so the API is reachable from byte 0 until
+//!   paso 8.1 (boot replay, hq-8iur.1) lands; once it does, the hydrating task uses
+//!   [`ReadinessGate::pending_hydration`] + [`HydrationHandle::set`] to gate readyz on a
+//!   real warm-up.
+//! - SIGTERM / SIGINT trigger axum's graceful shutdown (in-flight requests drain), then the
+//!   root reactor is stopped which closes the broadcast hub, the PG audit task drains the
+//!   final batch and exits, and the telemetry guard flushes the OTLP batch on drop. No
+//!   `task.abort()` on the hot drain path — that was the silent-data-loss seam.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,7 +43,10 @@ use gt_root::{spawn, RealEffects, RootConfig, RootHandle, SystemClock};
 use gt_store_dolt::{DoltBeads, DoltMerge, DoltOrch, DoltPatrol, DoltSessions};
 use gt_store_pg::PgAudit;
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
-use gt_web::{router, AppState, AuthConfig, JsonlWebAudit, WebAuditSink};
+use gt_web::{
+    router, AppState, AuthConfig, JsonlWebAudit, ReadinessGate, ReadinessGateBuilder,
+    WebAuditSink,
+};
 
 fn main() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -61,9 +80,25 @@ fn main() {
             }
         };
 
+        // PG audit is opt-in; if configured, we both spawn the audit relay AND register a
+        // readyz probe against the same handle. Order matters: connect first so we can
+        // register the probe before the gate is built.
+        let pg_audit = connect_pg_audit().await;
+
+        // Seed the gate with the PG probe (if any). The Dolt probe is added inside the
+        // Dolt-on branch where the concrete handle exists.
+        let mut gate_builder = ReadinessGateBuilder::new();
+        if let Some(a) = &pg_audit {
+            let pinger = a.clone();
+            gate_builder = gate_builder.with_probe("pg-audit", move || {
+                let p = pinger.clone();
+                async move { p.ping().await.map_err(|e| e.to_string()) }
+            });
+        }
+
         match std::env::var("GT_DOLT_URL").ok() {
             Some(url) => {
-                let dolt = DoltBeads::connect(&url).expect("connect Dolt");
+                let dolt = Arc::new(DoltBeads::connect(&url).expect("connect Dolt"));
                 dolt.ensure_schema().await.expect("Dolt ensure_schema");
                 let dolt_sessions = DoltSessions::connect(&url).expect("connect Dolt sessions");
                 dolt_sessions
@@ -86,8 +121,17 @@ fn main() {
                     .await
                     .expect("Dolt orch ensure_schema");
                 eprintln!("[gt-web] beads + sessions + merge/patrol/orch: Dolt @ {url}");
+
+                let dolt_probe = dolt.clone();
+                let gate = gate_builder
+                    .with_probe("dolt", move || {
+                        let d = dolt_probe.clone();
+                        async move { d.ping().await.map_err(|e| e.to_string()) }
+                    })
+                    .build();
+
                 serve(
-                    Arc::new(dolt),
+                    dolt,
                     Arc::new(dolt_sessions),
                     Arc::new(dolt_merge),
                     Arc::new(dolt_patrol),
@@ -96,6 +140,8 @@ fn main() {
                     &bind,
                     gt_bin,
                     auth,
+                    gate,
+                    pg_audit,
                 )
                 .await;
             }
@@ -103,6 +149,7 @@ fn main() {
                 eprintln!(
                     "[gt-web] domain state + sessions: in-memory (set GT_DOLT_URL for Dolt persistence)"
                 );
+                let gate = gate_builder.build();
                 serve(
                     Arc::new(InMemoryBeads::default()),
                     Arc::new(InMemorySessions::default()),
@@ -113,6 +160,8 @@ fn main() {
                     &bind,
                     gt_bin,
                     auth,
+                    gate,
+                    pg_audit,
                 )
                 .await;
             }
@@ -130,6 +179,8 @@ async fn serve<R, SQ, MR, PR, OR>(
     bind: &str,
     gt_bin: PathBuf,
     auth: AuthConfig,
+    gate: ReadinessGate,
+    pg_audit: Option<Arc<PgAudit>>,
 ) where
     R: BeadRepository + Send + Sync + 'static,
     Arc<R>: BeadRepository + Clone + 'static,
@@ -141,7 +192,6 @@ async fn serve<R, SQ, MR, PR, OR>(
     OR: OrchRepository + 'static,
     Arc<OR>: OrchRepository + 'static,
 {
-
     let (effects, quota_slot) = RealEffects::new(gt_bin);
     let root = spawn(
         beads.clone(),
@@ -155,7 +205,10 @@ async fn serve<R, SQ, MR, PR, OR>(
     );
     let _ = quota_slot.set(root.quota.clone());
 
-    let audit_task = spawn_pg_audit(&root).await;
+    let audit_task = pg_audit.as_ref().map(|a| {
+        let rx = root.subscribe_events();
+        spawn_pg_audit_task(a.clone(), rx)
+    });
 
     // Frontier audit writes to the same events.jsonl the reactor appends to — the boundary's
     // who-consulted-what records share the system log (`web.*` frontier-audit prefix).
@@ -170,24 +223,54 @@ async fn serve<R, SQ, MR, PR, OR>(
         events: root.events_sender(),
     };
 
-    let app = router(state, auth, audit);
+    let app = router(state, auth, audit, gate);
     let listener = tokio::net::TcpListener::bind(bind).await.expect("bind gt-web");
     eprintln!(
         "[gt-web] up on {bind} — event log: {}",
         root.log_path().display()
     );
 
-    let _ = axum::serve(listener, app).await;
-    if let Some(task) = audit_task {
-        task.abort();
-    }
+    // Graceful shutdown (paso 8.5): SIGTERM / SIGINT closes the listener, axum drains the
+    // in-flight requests, then we tear down the background tasks in dependency order
+    // (broadcast producers before consumers) so no events are dropped from the audit relay.
+    let _ = axum::serve(listener, app)
+        .with_graceful_shutdown(wait_for_signal("gt-web"))
+        .await;
+
+    eprintln!("[gt-web] HTTP listener stopped — draining background tasks");
+    // Stop the reactor first: that drops its broadcast Sender, which signals the audit
+    // consumer to drain and exit cleanly via `RecvError::Closed`.
     root.shutdown();
+    if let Some(task) = audit_task {
+        let _ = task.await;
+    }
+    eprintln!("[gt-web] shutdown complete");
 }
 
-async fn spawn_pg_audit<R>(root: &RootHandle<R>) -> Option<tokio::task::JoinHandle<()>>
-where
-    R: BeadRepository + Clone + 'static,
-{
+/// Wait for SIGTERM or SIGINT. Returns the unit when the first arrives. If signal install
+/// fails (non-Unix), falls back to a never-resolving future so axum keeps serving until
+/// the process is killed externally — better than auto-exit on startup.
+async fn wait_for_signal(name: &'static str) {
+    use tokio::signal::unix::{signal, SignalKind};
+    let term = signal(SignalKind::terminate());
+    let int = signal(SignalKind::interrupt());
+    match (term, int) {
+        (Ok(mut term), Ok(mut int)) => {
+            tokio::select! {
+                _ = term.recv() => eprintln!("[{name}] SIGTERM received — draining"),
+                _ = int.recv() => eprintln!("[{name}] SIGINT received — draining"),
+            }
+        }
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("[{name}] signal install failed: {e}; running until killed externally");
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+/// Connect to PG audit if `GT_PG_AUDIT_URL` is set. `Arc<PgAudit>` so the same handle backs
+/// the relay task AND the readyz probe.
+async fn connect_pg_audit() -> Option<Arc<PgAudit>> {
     let url = std::env::var("GT_PG_AUDIT_URL").ok()?;
     let audit = match PgAudit::connect(&url).await {
         Ok(a) => a,
@@ -201,8 +284,17 @@ where
         return None;
     }
     eprintln!("[gt-web] audit: Postgres @ {url}");
-    let mut rx = root.subscribe_events();
-    Some(tokio::spawn(async move {
+    Some(Arc::new(audit))
+}
+
+/// Spawn the broadcast → Postgres relay task. The task exits on `Closed` (the root dropped
+/// its broadcast Sender on shutdown), so awaiting the join handle blocks until the final
+/// `append` lands — no events lost on a clean SIGTERM.
+fn spawn_pg_audit_task(
+    audit: Arc<PgAudit>,
+    mut rx: tokio::sync::broadcast::Receiver<gt_audit::EventRecord>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(rec) => {
@@ -216,5 +308,10 @@ where
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
-    }))
+    })
 }
+
+// Bounds anchor for `RootHandle<R>` generic so the import stays load-bearing in lib.rs
+// signatures and the IDE doesn't lint it as unused when neither branch is exercised.
+#[allow(dead_code)]
+fn _root_bounds<R: BeadRepository + Clone + 'static>(_: &RootHandle<R>) {}

@@ -15,6 +15,7 @@
 pub mod audit;
 pub mod auth;
 pub mod dto;
+pub mod health;
 pub mod routes;
 pub mod state;
 pub mod stream;
@@ -29,30 +30,47 @@ use gt_beads::BeadRepository;
 
 pub use audit::{InMemoryWebAudit, JsonlWebAudit, WebAuditEvent, WebAuditSink};
 pub use auth::{AuthConfig, AuthLayer};
+pub use health::{HydrationHandle, ReadinessGate, ReadinessGateBuilder};
 pub use state::AppState;
 
-/// Build the router around an [`AppState`]. The auth middleware runs first (`from_fn_with_state`)
-/// and short-circuits unauthorized requests with `401` before any handler sees them. The same
-/// builder is used by `main.rs` and the gate tests.
+/// Build the router around an [`AppState`].
+///
+/// The router is composed of two sub-routers merged at `/`:
+///
+/// - `api` — every `/api/*` route plus the SSE stream, wrapped by the bearer-token
+///   [`auth::auth_middleware`]. Unauthorized requests short-circuit with `401` before any
+///   handler sees them.
+/// - `probes` — `/health`, `/readyz` and `/metrics`. Operators (systemd, kube, Prometheus)
+///   probe these without an `Authorization` header, so they sit **outside** the auth layer
+///   on purpose (paso 8.5, hq-8iur.5). `/metrics` previously lived behind auth; bringing it
+///   out aligns with how Prometheus scrapes.
 pub fn router<R, SQ>(
     state: AppState<R, SQ>,
     auth: AuthConfig,
     audit: Arc<dyn WebAuditSink>,
+    readiness: ReadinessGate,
 ) -> Router
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
 {
     let layer = AuthLayer { config: auth, audit };
-    Router::new()
+    let api = Router::new()
         .route("/api/sessions", get(routes::list_sessions::<R, SQ>))
         .route("/api/beads", get(routes::list_beads::<R, SQ>))
         .route("/api/nudge", post(routes::nudge::<R, SQ>))
         .route("/api/stream", get(routes::stream::<R, SQ>))
-        .route("/metrics", get(routes::metrics))
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(
             layer,
             auth::auth_middleware,
-        ))
+        ));
+
+    let probes = Router::new()
+        .route("/health", get(health::health))
+        .route("/readyz", get(health::readyz))
+        .route("/metrics", get(routes::metrics))
+        .with_state(readiness);
+
+    Router::new().merge(api).merge(probes)
 }

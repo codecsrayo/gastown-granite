@@ -37,6 +37,17 @@ impl PgAudit {
         &self.pool
     }
 
+    /// Cheap connectivity check for `/readyz`. Acquires a connection from the pool and runs
+    /// `SELECT 1`. Returns immediately on success; surfaces the underlying sqlx error on
+    /// failure so the readiness body shows the operator what to fix.
+    pub async fn ping(&self) -> Result<(), AppError> {
+        sqlx::query("SELECT 1")
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
     /// Useful for tests / a clean slate.
     pub async fn truncate(&self) -> Result<(), AppError> {
         sqlx::query("TRUNCATE TABLE audit_events")

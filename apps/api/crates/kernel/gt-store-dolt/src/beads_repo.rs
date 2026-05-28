@@ -25,6 +25,14 @@ impl DoltBeads {
         &self.pool
     }
 
+    /// Cheap connectivity check for `/readyz` (paso 8.5). Grabs one connection from the pool
+    /// and runs `SELECT 1` — same shape as the Postgres ping. Returns the underlying
+    /// `mysql_async` error verbatim so the readiness body shows the operator what to fix.
+    pub async fn ping(&self) -> Result<(), AppError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        conn.query_drop("SELECT 1").await.map_err(map_err)
+    }
+
     /// Crea la tabla `beads` si no existe (migración mínima del Paso 4).
     pub async fn ensure_schema(&self) -> Result<(), AppError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;

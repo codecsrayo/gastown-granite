@@ -1,0 +1,71 @@
+# gt — the composition root daemon (bins/gt). Owns the single tokio runtime, the actor
+# fan-out, the audit log and the Postgres outbox pipeline.
+#
+# Paso 8.5 (hq-8iur.5): runs `gt` as a managed service so a panic or transient failure
+# heals automatically; SIGTERM drains the outbox to zero before exit.
+#
+# Operational contract:
+#  - KillSignal=SIGTERM triggers the graceful-shutdown protocol in `bins/gt/src/main.rs`:
+#      1. root.shutdown() drops the reactor's broadcast Sender.
+#      2. The PG outbox writer task receives `Closed`, finishes the last
+#         `outbox_events` INSERT, and exits.
+#      3. The drain task switches to its "pass-until-empty" mode, flushes every
+#         pending row into `audit_events` + `feed_projections`, then exits.
+#      4. The telemetry guard drops, flushing the OTLP batch exporter.
+#    Gate: `kill -TERM` → 0 outbox rows lost.
+#  - TimeoutStopSec=45 gives the final drain budget. Raise if outbox lag is large.
+#  - Restart=on-failure: clean SIGTERM is operator-intent, never auto-restart.
+#    Panic / non-zero exit → 5s backoff restart.
+#
+# Install:
+#   sudo cp gastown-gt.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now gastown-gt.service
+#
+# Required environment (via /etc/gastown/gastown-gt.env):
+#   GT_EVENT_LOG       path to the appended .events.jsonl
+#   GT_DOLT_URL        mysql://… for persistence (omit for in-memory)
+#   GT_PG_AUDIT_URL    postgres://… for the canonical audit log + outbox
+#   GT_BIN             absolute path to the `gt` binary (RealEffects::sling)
+#   OTEL_EXPORTER_OTLP_ENDPOINT   optional, http://tempo:4318
+#   RUST_LOG           tracing filter (default info)
+
+[Unit]
+Description=Gas Town root daemon (gt)
+Documentation=https://github.com/codecsrayo/gastown/blob/main/apps/api/docs/01-architecture.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gastown
+Group=gastown
+
+EnvironmentFile=-/etc/gastown/gastown-gt.env
+ExecStart=/usr/local/bin/gt
+
+StateDirectory=gastown
+StateDirectoryMode=0750
+ReadWritePaths=/var/lib/gastown
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=45s
+
+LimitNOFILE=65536
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gastown-gt
+
+[Install]
+WantedBy=multi-user.target

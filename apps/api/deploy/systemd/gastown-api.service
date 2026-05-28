@@ -1,0 +1,83 @@
+# gt-web — the read-side HTTP/SSE API for the Gas Town frontend (apps/town).
+#
+# Paso 8.5 (hq-8iur.5): runs `gt-web` as a managed daemon with an automatic restart
+# policy and the graceful-shutdown contract the binary now implements.
+#
+# Operational contract:
+#  - KillSignal=SIGTERM lets the binary drain in-flight HTTP requests, close the SSE
+#    broadcast cleanly, finish the final PG-audit append, and flush the OTLP batch
+#    exporter before exit. Do not change to SIGKILL — that bypasses the drain.
+#  - TimeoutStopSec=30 budgets the drain; raise it if `/readyz` reports a slow
+#    backend in production (the drain time scales with broadcast backlog + PG
+#    write latency).
+#  - Restart=on-failure: a clean SIGTERM (exit 0) is treated as operator-intended
+#    stop and is NOT restarted; a panic or non-zero exit triggers a 5s backoff
+#    restart so the service heals automatically without log-storm restarts.
+#
+# Install (system-wide):
+#   sudo cp gastown-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now gastown-api.service
+#
+# Health-check from outside systemd:
+#   curl -fsS http://127.0.0.1:8787/health   # liveness, no auth
+#   curl -fsS http://127.0.0.1:8787/readyz   # readiness, no auth
+#
+# Required environment (set via /etc/gastown/gastown-api.env or systemd drop-ins):
+#   GT_WEB_TOKEN       bearer secret for /api/* (refuse-to-start without it)
+#   GT_WEB_BIND        listen addr (default 127.0.0.1:8787)
+#   GT_EVENT_LOG       path to the appended .events.jsonl
+#   GT_DOLT_URL        mysql://… for persistence (omit for in-memory dev)
+#   GT_PG_AUDIT_URL    postgres://… for the canonical audit log (optional)
+#   GT_BIN             absolute path to the `gt` binary (sling invocations)
+#   OTEL_EXPORTER_OTLP_ENDPOINT   optional, http://tempo:4318
+#   RUST_LOG           tracing filter (default info)
+
+[Unit]
+Description=Gas Town API (gt-web)
+Documentation=https://github.com/codecsrayo/gastown/blob/main/apps/api/docs/07-frontend.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as a dedicated user — adjust to your fleet. Create with:
+#   sudo useradd --system --home /var/lib/gastown --shell /usr/sbin/nologin gastown
+User=gastown
+Group=gastown
+
+EnvironmentFile=-/etc/gastown/gastown-api.env
+ExecStart=/usr/local/bin/gt-web
+
+# Filesystem isolation. The event log + Dolt socket live under StateDirectory; everything
+# else is read-only. Tighten further per your fleet.
+StateDirectory=gastown
+StateDirectoryMode=0750
+ReadWritePaths=/var/lib/gastown
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+
+# Restart policy.
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+# Graceful shutdown contract. The binary installs SIGTERM+SIGINT handlers and drains
+# axum → root reactor → PG audit task → telemetry guard in that order.
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+
+# Resource limits — generous defaults; tune per workload.
+LimitNOFILE=65536
+
+# Logging.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gastown-api
+
+[Install]
+WantedBy=multi-user.target

@@ -15,7 +15,7 @@ use gt_beads::{Bead, BeadRepository, BeadStatus, InMemoryBeads};
 use gt_events::Envelope;
 use gt_root::{root::Effects, spawn, RootConfig, SystemClock};
 use gt_web::{
-    router, AppState, AuthConfig, InMemoryWebAudit, WebAuditEvent, WebAuditSink,
+    router, AppState, AuthConfig, InMemoryWebAudit, ReadinessGate, WebAuditEvent, WebAuditSink,
 };
 
 struct NoopEffects;
@@ -67,7 +67,7 @@ async fn boot_with_auth(
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = router(state, auth, sink);
+    let app = router(state, auth, sink, ReadinessGate::ready());
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });

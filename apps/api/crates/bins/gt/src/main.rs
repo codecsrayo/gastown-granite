@@ -15,8 +15,17 @@
 //! Effects (hq-7pdl.1): the composition root is wired with the production [`RealEffects`]
 //! adapter (`gt sling` child processes + the `QuotaCommand::Rotate` chain). The `gt` binary
 //! path is configurable via `GT_BIN`.
+//!
+//! Graceful shutdown (paso 8.5, hq-8iur.5): SIGTERM and SIGINT trigger a deterministic
+//! tear-down — root reactor first (its broadcast `Sender` drops, which is the only way the
+//! outbox writer learns to stop), then the writer task is **awaited** so the final
+//! `outbox_events` insert lands, then the drain task is told via an `AtomicBool` to do one
+//! last pass-until-empty and exit. Only after that do we drop the telemetry guard so the
+//! OTLP batch flush sees a quiescent process. No `task.abort()` on the outbox path — that
+//! was the silent-data-loss seam (gate: `kill -TERM` → 0 outbox rows lost).
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -126,7 +135,7 @@ async fn run<R, MR, PR, OR>(
     );
     let _ = quota_slot.set(root.quota.clone());
 
-    let pg_tasks = spawn_pg_outbox_pipeline(&root).await;
+    let pipeline = spawn_pg_outbox_pipeline(&root).await;
 
     eprintln!(
         "[gt] composition root up — event log: {}",
@@ -134,12 +143,76 @@ async fn run<R, MR, PR, OR>(
     );
     eprintln!("[gt] (edges: scheduler/patrol/merge/quota/orchestration actors live; drive via handles)");
 
-    let _ = tokio::signal::ctrl_c().await;
-    eprintln!("[gt] shutting down (dead-letters: {})", root.dead_letters());
-    for task in pg_tasks {
-        task.abort();
-    }
+    wait_for_signal("gt").await;
+
+    eprintln!(
+        "[gt] shutting down (dead-letters: {})",
+        root.dead_letters()
+    );
+    // Stop the reactor first — that drops its broadcast Sender, which is the only way the
+    // outbox writer receives `Closed`. Once root.shutdown returns, no new EventRecords are
+    // produced and the pipeline can drain to completion deterministically.
     root.shutdown();
+    if let Some(pipeline) = pipeline {
+        pipeline.shutdown_graceful().await;
+    }
+    eprintln!("[gt] shutdown complete");
+}
+
+/// Wait for SIGTERM or SIGINT. Returns the unit when the first arrives. If signal install
+/// fails (non-Unix), the future never resolves and the process keeps running until killed
+/// externally — better than auto-exiting on startup.
+async fn wait_for_signal(name: &'static str) {
+    use tokio::signal::unix::{signal, SignalKind};
+    let term = signal(SignalKind::terminate());
+    let int = signal(SignalKind::interrupt());
+    match (term, int) {
+        (Ok(mut term), Ok(mut int)) => {
+            tokio::select! {
+                _ = term.recv() => eprintln!("[{name}] SIGTERM received — draining"),
+                _ = int.recv() => eprintln!("[{name}] SIGINT received — draining"),
+            }
+        }
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("[{name}] signal install failed: {e}; running until killed externally");
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+/// Outbox pipeline handles. Returned by [`spawn_pg_outbox_pipeline`] so the bin can take it
+/// through the graceful-shutdown protocol instead of `task.abort()`-ing on TERM (which is the
+/// behavior the gate test for paso 8.5 explicitly forbids: zero outbox rows lost).
+struct OutboxPipeline {
+    /// Reads `EventRecord`s off the root's broadcast and commits them to `outbox_events`
+    /// (single-TX with `token_usage` when applicable). Exits naturally on broadcast `Closed`.
+    writer: tokio::task::JoinHandle<()>,
+    /// Fans drained rows into `audit_events` + `feed_projections`. Watches `drain_shutdown`
+    /// to switch from the periodic-tick loop to a final pass-until-empty before exiting.
+    drain: tokio::task::JoinHandle<()>,
+    /// Cooperative shutdown flag for the drain task. Set by `shutdown_graceful` after the
+    /// writer has finished, so the drain knows the upstream is closed and can stop polling.
+    drain_shutdown: Arc<AtomicBool>,
+}
+
+impl OutboxPipeline {
+    /// Shut down in dependency order:
+    /// 1. `await` the writer — it returns once it has consumed every `EventRecord` already in
+    ///    the broadcast (the reactor having dropped its Sender via `root.shutdown()`).
+    /// 2. Signal the drain that no more rows are coming and `await` it — it does a final
+    ///    pass-until-empty, marks every pending row drained, then exits.
+    async fn shutdown_graceful(self) {
+        // The writer drains naturally — the broadcast Sender has already been dropped by
+        // `root.shutdown()`, so its `rx.recv()` returns `Closed` once the ring is empty.
+        if let Err(e) = self.writer.await {
+            eprintln!("[gt] outbox writer join error: {e}");
+        }
+        // Tell the drain to stop the periodic tick and finish what is left in `outbox_events`.
+        self.drain_shutdown.store(true, Ordering::SeqCst);
+        if let Err(e) = self.drain.await {
+            eprintln!("[gt] outbox drain join error: {e}");
+        }
+    }
 }
 
 /// If `GT_PG_AUDIT_URL` is set, wire the doc-04 §3 outbox pipeline:
@@ -150,24 +223,23 @@ async fn run<R, MR, PR, OR>(
 ///      succeed.
 ///
 /// Both halves are idempotent on `event_id`; a crash between (1) and (2) is recovered on
-/// the next drain tick. Returns the spawned tasks so the bin can abort them on shutdown.
-async fn spawn_pg_outbox_pipeline<R>(root: &RootHandle<R>) -> Vec<tokio::task::JoinHandle<()>>
+/// the next drain tick. Returns an [`OutboxPipeline`] whose `shutdown_graceful` drains both
+/// tasks in dependency order instead of aborting them.
+async fn spawn_pg_outbox_pipeline<R>(root: &RootHandle<R>) -> Option<OutboxPipeline>
 where
     R: BeadRepository + Clone + 'static,
 {
-    let Some(url) = std::env::var("GT_PG_AUDIT_URL").ok() else {
-        return Vec::new();
-    };
+    let url = std::env::var("GT_PG_AUDIT_URL").ok()?;
     let writer = match PgOutboxWriter::connect(&url).await {
         Ok(w) => w,
         Err(e) => {
             eprintln!("[gt] PG outbox disabled — connect failed: {e}");
-            return Vec::new();
+            return None;
         }
     };
     if let Err(e) = gt_store_pg::ensure_schema(writer.pool()).await {
         eprintln!("[gt] PG outbox disabled — migrations failed: {e}");
-        return Vec::new();
+        return None;
     }
     // Reuse the writer's pool for the drain so we keep a single bounded connection budget.
     let drain = PgOutboxDrain::new(writer.pool().clone());
@@ -190,10 +262,27 @@ where
         }
     });
 
+    let drain_shutdown = Arc::new(AtomicBool::new(false));
+    let drain_shutdown_for_task = drain_shutdown.clone();
     let drain_task = tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_millis(200));
         loop {
             tick.tick().await;
+            if drain_shutdown_for_task.load(Ordering::SeqCst) {
+                // Final pass-until-empty. Bound the loop so a broken connection cannot pin
+                // the shutdown — if the drain errors, log and exit.
+                loop {
+                    match drain.drain_batch(256).await {
+                        Ok(0) => break,
+                        Ok(_) => continue,
+                        Err(e) => {
+                            eprintln!("[gt] PG outbox final drain failed: {e}");
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
             match drain.drain_batch(64).await {
                 Ok(0) => {}
                 Ok(n) => {
@@ -207,5 +296,9 @@ where
         }
     });
 
-    vec![writer_task, drain_task]
+    Some(OutboxPipeline {
+        writer: writer_task,
+        drain: drain_task,
+        drain_shutdown,
+    })
 }
