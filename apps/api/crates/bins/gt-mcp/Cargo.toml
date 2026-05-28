@@ -34,7 +34,7 @@ gt-audit = { path = "../../kernel/gt-audit" }
 gt-store-dolt = { path = "../../kernel/gt-store-dolt" }
 gt-store-pg = { path = "../../kernel/gt-store-pg" }
 
-tokio = { workspace = true, features = ["io-util", "io-std", "macros", "rt", "rt-multi-thread", "sync", "net"] }
+tokio = { workspace = true, features = ["io-util", "io-std", "macros", "rt", "rt-multi-thread", "sync", "net", "process"] }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

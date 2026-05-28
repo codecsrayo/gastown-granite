@@ -24,7 +24,7 @@ use gt_events::Envelope;
 use gt_mcp::{
     audit::{AuditEvent, AuditSink, InMemoryAudit, Outcome},
     auth::Scope,
-    CreateBead, McpService, RegisterAccount, SessionsRead,
+    CreateBead, CreateRig, McpService, RegisterAccount, SessionsRead,
 };
 use gt_quota::actor::{self as quota_actor, QuotaHandle};
 use gt_scheduling::actor::{self as sched_actor, SchedHandle};
@@ -66,6 +66,7 @@ fn service(
         scope,
         audit,
         Some(agent_tx),
+        None, // rig_creator: tests don't shell out to `gt`
     );
     (svc, agent_rx, quota)
 }
@@ -255,5 +256,53 @@ async fn quota_register_makes_account_visible() {
                 if tool == "quota.register.execute"
         )),
         "the rejected registration must be audited as a failed invocation",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rig_create_validates_and_reports_unconfigured() {
+    let repo = Arc::new(InMemoryBeads::default());
+    let (sched_tx, _sched_rx) = mpsc::channel::<Envelope<SchedEvent>>(16);
+    let sched = sched_actor::spawn(repo, sched_tx, 1);
+    let audit = Arc::new(InMemoryAudit::new());
+    // Built via `service` (McpService::new) → no RigCreator wired.
+    let (svc, _agent_rx, _quota) =
+        service(sched, Scope::admin("max"), Arc::clone(&audit) as Arc<dyn AuditSink>);
+
+    // Bad name (would be a shell/path hazard if not validated) is rejected.
+    let bad = svc
+        .run_rig_create(
+            "rig.create.validate",
+            CreateRig { name: "../evil; rm".into(), git_url: "x".into(), prefix: None },
+            true,
+        )
+        .await;
+    assert!(bad.is_err(), "invalid rig name must be rejected");
+
+    // Valid args, validate-only: ok without touching anything.
+    svc.run_rig_create(
+        "rig.create.validate",
+        CreateRig { name: "demo-rig".into(), git_url: "file:///tmp/x".into(), prefix: None },
+        true,
+    )
+    .await
+    .expect("valid rig.create.validate should pass");
+
+    // Execute with no RigCreator wired → clean error, audited as failed (not a panic/hang).
+    let unconfigured = svc
+        .run_rig_create(
+            "rig.create.execute",
+            CreateRig { name: "demo-rig".into(), git_url: "file:///tmp/x".into(), prefix: None },
+            false,
+        )
+        .await;
+    assert!(unconfigured.is_err(), "execute without GT_BIN must error");
+    assert!(
+        audit.snapshot().iter().any(|e| matches!(
+            e,
+            AuditEvent::Invoked { tool, outcome: Outcome::Failed { .. }, .. }
+                if tool == "rig.create.execute"
+        )),
+        "the unconfigured execute must be audited as a failed invocation",
     );
 }
