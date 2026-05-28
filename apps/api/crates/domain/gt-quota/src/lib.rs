@@ -15,6 +15,7 @@
 //!   tests without a DB and the first half of the Step 6.c contract.
 
 pub mod actor;
+pub mod commands;
 pub mod expectations;
 pub mod repo;
 
@@ -22,6 +23,7 @@ mod cost;
 mod events;
 mod state;
 
+pub use commands::{ProbeWindow, QuotaCommand, RotateAccount, SampleTokens};
 pub use cost::{cost_units, Cost, ModelWeights};
 pub use events::QuotaEvent;
 pub use expectations::{predict, Prediction};

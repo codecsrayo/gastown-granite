@@ -26,6 +26,7 @@ gt-scheduling = { path = "../../domain/gt-scheduling" }
 gt-merge = { path = "../../domain/gt-merge" }
 gt-patrol = { path = "../../domain/gt-patrol" }
 gt-orchestration = { path = "../../domain/gt-orchestration" }
+gt-quota = { path = "../../domain/gt-quota" }
 gt-beads = { path = "../../kernel/gt-beads" }
 gt-audit = { path = "../../kernel/gt-audit" }
 

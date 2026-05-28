@@ -3,10 +3,11 @@
 //! `AccountRegistry` is the mutable state the actor owns; `QuotaState` is the version
 //! rebuilt from the log for the Step 3 gate (deterministic replay).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
+use crate::cost::{cost_units, ModelWeights};
 use crate::events::QuotaEvent;
 
 /// Granularity of the window the provider counts usage over.
@@ -113,9 +114,17 @@ pub struct AccountRegistry {
     rate_by_session: BTreeMap<String, Ewma>,
     /// `BlockPredicted` already emitted in the live window (per-window idempotency).
     predicted_in_window: BTreeMap<String, u64>, // account -> window_started_at
+    /// Per-model cost weights (empty -> IDENTITY fallback). Owned here so the consumption
+    /// math has one home shared by the legacy actor messages and the typed `Command` path.
+    weights: HashMap<String, ModelWeights>,
 }
 
 impl AccountRegistry {
+    /// Install the per-model cost weights (the actor sets these at spawn).
+    pub fn set_weights(&mut self, weights: HashMap<String, ModelWeights>) {
+        self.weights = weights;
+    }
+
     pub fn upsert_account(&mut self, account: Account) {
         self.accounts.insert(account.id.clone(), account);
     }
@@ -181,6 +190,62 @@ impl AccountRegistry {
     /// emitted in the next window.
     pub fn clear_window_prediction(&mut self, account: &str) {
         self.predicted_in_window.remove(account);
+    }
+
+    /// Fold one local usage sample: add its normalized cost to the live window and update the
+    /// per-account and per-session rate EWMAs. The clock enters as `now_secs` data; no wall
+    /// clock is read. Shared by `QuotaMsg::Sample` and `SampleTokens` (`commands.rs`) so both
+    /// the legacy and the MCP path mutate state identically.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_sample(
+        &mut self,
+        account: &str,
+        session: &str,
+        model: &str,
+        input: u64,
+        output: u64,
+        cache_read: u64,
+        cache_creation: u64,
+        now_secs: u64,
+    ) {
+        let cost = cost_units(model, input, output, cache_read, cache_creation, &self.weights);
+        if let Some(acc) = self.get_mut(account) {
+            if let Some(w) = acc.window.as_mut() {
+                w.consumed += cost.0;
+            }
+        }
+        let rate = match self.get(account).and_then(|a| a.window.as_ref()) {
+            Some(w) => {
+                // `consumed / elapsed_minutes` (spec). 1-minute floor: a rate-per-minute is
+                // meaningless over less than a minute and the floor avoids the blow-up right
+                // when the window starts.
+                let elapsed_min =
+                    ((now_secs.saturating_sub(w.started_at_secs)) as f64 / 60.0).max(1.0);
+                w.consumed / elapsed_min
+            }
+            None => 0.0,
+        };
+        self.observe_rate(account, rate, now_secs);
+        self.observe_session_rate(account, session, cost.0, now_secs);
+    }
+
+    /// Reconcile the live window against the provider's authoritative `remaining`/`resets_at`.
+    /// No-op if the account has no live window. Shared by `QuotaMsg::Probe` and `ProbeWindow`.
+    pub fn apply_probe(&mut self, account: &str, remaining: u64, resets_at_secs: u64) {
+        if let Some(acc) = self.get_mut(account) {
+            if let Some(w) = acc.window.as_mut() {
+                w.consumed = (w.limit.saturating_sub(remaining)) as f64;
+                w.resets_at_secs = resets_at_secs;
+            }
+        }
+    }
+
+    /// Park the rotated-off account in `Cooldown`. No-op if unknown. Shared by
+    /// `QuotaMsg::Rotated` and `RotateAccount`.
+    pub fn apply_rotation(&mut self, from_account: &str) {
+        if let Some(a) = self.get_mut(from_account) {
+            a.status = AccountQuotaStatus::Cooldown;
+        }
     }
 }
 

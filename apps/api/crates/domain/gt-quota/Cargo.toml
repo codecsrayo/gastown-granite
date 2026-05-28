@@ -9,6 +9,8 @@ gt-events = { path = "../../kernel/gt-events" }
 tokio.workspace = true
 serde.workspace = true
 time.workspace = true
+# JSON Schema derives for Command arguments — surfaced by gt-mcp.
+schemars.workspace = true
 
 [dev-dependencies]
 gt-audit = { path = "../../kernel/gt-audit" }

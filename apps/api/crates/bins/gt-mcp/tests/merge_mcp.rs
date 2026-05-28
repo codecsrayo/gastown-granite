@@ -40,6 +40,7 @@ async fn mcp_drives_merge_slot_through_lifecycle_and_emits_events() {
         actor_sched(),
         actor_patrol(),
         actor_orch(),
+        actor_quota(),
         Scope::read_only("watcher"),
         Arc::clone(&watcher_audit) as Arc<dyn AuditSink>,
     );
@@ -51,6 +52,7 @@ async fn mcp_drives_merge_slot_through_lifecycle_and_emits_events() {
         actor_sched(),
         actor_patrol(),
         actor_orch(),
+        actor_quota(),
         Scope::admin("admin"),
         Arc::clone(&admin_audit) as Arc<dyn AuditSink>,
     );
@@ -205,4 +207,10 @@ fn actor_patrol() -> gt_patrol::actor::PatrolHandle {
 fn actor_orch() -> gt_orchestration::actor::OrchHandle {
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
     gt_orchestration::actor::spawn(tx)
+}
+
+/// A throwaway quota actor so the service has its full surface; relay receiver dropped.
+fn actor_quota() -> gt_quota::actor::QuotaHandle {
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
+    gt_quota::actor::spawn(tx, std::collections::HashMap::new())
 }

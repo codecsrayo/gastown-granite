@@ -48,12 +48,15 @@ async fn main() -> anyhow::Result<()> {
     // Share the root's domain actors, not isolated `actor::spawn`s. MCP tool calls drive the
     // same agent + merge + scheduling + patrol + orchestration actors the root drives, so their
     // events land in the shared log.
+    // same agent + merge + scheduling + patrol + quota actors the root drives, so their events
+    // land in the shared log.
     let service = McpService::new(
         root.agent.clone(),
         root.merge.clone(),
         root.sched.clone(),
         root.patrol.clone(),
         root.orch.clone(),
+        root.quota.clone(),
         scope,
         audit,
     );

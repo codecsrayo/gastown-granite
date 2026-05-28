@@ -28,8 +28,8 @@ async fn drain(rx: &mut mpsc::Receiver<Envelope<PatrolEvent>>) -> Vec<PatrolEven
     out
 }
 
-/// Build a service driven through the patrol tools; throwaway agent/merge/scheduling actors
-/// fill out the surface.
+/// Build a service driven through the patrol tools; throwaway agent/merge/scheduling/quota
+/// actors fill out the surface.
 fn service(patrol: PatrolHandle, scope: Scope, audit: Arc<dyn AuditSink>) -> McpService {
     let (merge_tx, _merge_rx) = mpsc::channel(16);
     let merge = gt_merge::actor::spawn(merge_tx);
@@ -38,7 +38,9 @@ fn service(patrol: PatrolHandle, scope: Scope, audit: Arc<dyn AuditSink>) -> Mcp
         gt_scheduling::actor::spawn(Arc::new(gt_beads::InMemoryBeads::default()), sched_tx, 4);
     let (orch_tx, _orch_rx) = mpsc::channel(16);
     let orch = gt_orchestration::actor::spawn(orch_tx);
-    McpService::new(agent_actor::spawn(8), merge, sched, patrol, orch, scope, audit)
+    let (quota_tx, _quota_rx) = mpsc::channel(16);
+    let quota = gt_quota::actor::spawn(quota_tx, std::collections::HashMap::new());
+    McpService::new(agent_actor::spawn(8), merge, sched, patrol, orch, quota, scope, audit)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -10,9 +10,10 @@ use std::collections::HashMap;
 
 use tokio::sync::{mpsc, oneshot};
 
-use gt_events::Envelope;
+use gt_events::{AppError, Command, Envelope};
 
-use crate::cost::{cost_units, ModelWeights};
+use crate::commands::QuotaCommand;
+use crate::cost::ModelWeights;
 use crate::events::QuotaEvent;
 use crate::expectations::predict;
 use crate::state::{Account, AccountRegistry, AccountWindow};
@@ -69,6 +70,16 @@ pub enum QuotaMsg {
     },
     /// Diagnostics: (live accounts, predictions emitted).
     Snapshot(oneshot::Sender<(usize, usize)>),
+    /// "Ask without doing": run `validate` against the current registry, no mutation/emit.
+    Validate {
+        cmd: QuotaCommand,
+        reply: oneshot::Sender<Result<(), AppError>>,
+    },
+    /// Apply the command: mutate the registry and emit the produced event to the relay.
+    Exec {
+        cmd: QuotaCommand,
+        reply: oneshot::Sender<Result<(), AppError>>,
+    },
 }
 
 #[derive(Clone)]
@@ -201,6 +212,30 @@ impl QuotaHandle {
         }
         rx.await.unwrap_or((0, 0))
     }
+
+    /// "Ask without doing": run `validate` against the current registry snapshot.
+    /// The answer is a snapshot; the actor revalidates on `exec`.
+    pub async fn validate(&self, cmd: QuotaCommand) -> Result<(), AppError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(QuotaMsg::Validate { cmd, reply })
+            .await
+            .map_err(|_| AppError::Other("quota actor gone".into()))?;
+        rx.await
+            .map_err(|_| AppError::Other("quota actor dropped reply".into()))?
+    }
+
+    /// Apply the command. The actor re-validates inside the same tick and emits the produced
+    /// `QuotaEvent` to the relay.
+    pub async fn exec(&self, cmd: QuotaCommand) -> Result<(), AppError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(QuotaMsg::Exec { cmd, reply })
+            .await
+            .map_err(|_| AppError::Other("quota actor gone".into()))?;
+        rx.await
+            .map_err(|_| AppError::Other("quota actor dropped reply".into()))?
+    }
 }
 
 /// Spawn the actor. `weights` defines the per-model normalization (see `cost.rs`);
@@ -213,6 +248,7 @@ pub fn spawn(
 
     tokio::spawn(async move {
         let mut registry = AccountRegistry::default();
+        registry.set_weights(weights);
         let mut predictions_emitted: usize = 0;
 
         while let Some(msg) = rx.recv().await {
@@ -230,28 +266,16 @@ pub fn spawn(
                     cache_creation,
                     now_secs,
                 } => {
-                    let cost =
-                        cost_units(&model, input, output, cache_read, cache_creation, &weights);
-                    if let Some(acc) = registry.get_mut(&account) {
-                        if let Some(w) = acc.window.as_mut() {
-                            w.consumed += cost.0;
-                        }
-                    }
-                    let rate = match registry.get(&account).and_then(|a| a.window.as_ref()) {
-                        Some(w) => {
-                            // `consumed / elapsed_minutes` (spec). 1-minute floor: a
-                            // rate-per-minute is meaningless over less than a minute and the
-                            // floor avoids the blow-up right when the window starts.
-                            let elapsed_min =
-                                ((now_secs.saturating_sub(w.started_at_secs)) as f64 / 60.0)
-                                    .max(1.0);
-                            w.consumed / elapsed_min
-                        }
-                        None => 0.0,
-                    };
-                    registry.observe_rate(&account, rate, now_secs);
-                    registry.observe_session_rate(&account, &session, cost.0, now_secs);
-
+                    registry.apply_sample(
+                        &account,
+                        &session,
+                        &model,
+                        input,
+                        output,
+                        cache_read,
+                        cache_creation,
+                        now_secs,
+                    );
                     let _ = events
                         .send(Envelope::root(QuotaEvent::TokensSampled {
                             account,
@@ -271,12 +295,7 @@ pub fn spawn(
                     resets_at_secs,
                     now_secs,
                 } => {
-                    if let Some(acc) = registry.get_mut(&account) {
-                        if let Some(w) = acc.window.as_mut() {
-                            w.consumed = (w.limit.saturating_sub(remaining)) as f64;
-                            w.resets_at_secs = resets_at_secs;
-                        }
-                    }
+                    registry.apply_probe(&account, remaining, resets_at_secs);
                     let _ = events
                         .send(Envelope::root(QuotaEvent::UsageProbed {
                             account,
@@ -372,9 +391,7 @@ pub fn spawn(
                     to_account,
                     now_secs,
                 } => {
-                    if let Some(a) = registry.get_mut(&from_account) {
-                        a.status = crate::state::AccountQuotaStatus::Cooldown;
-                    }
+                    registry.apply_rotation(&from_account);
                     let _ = events
                         .send(Envelope::root(QuotaEvent::Rotated {
                             from_account,
@@ -385,6 +402,22 @@ pub fn spawn(
                 }
                 QuotaMsg::Snapshot(reply) => {
                     let _ = reply.send((registry.accounts().count(), predictions_emitted));
+                }
+                QuotaMsg::Validate { cmd, reply } => {
+                    let _ = reply.send(cmd.validate(&registry));
+                }
+                QuotaMsg::Exec { cmd, reply } => {
+                    // execute() re-validates first → no TOCTOU within the actor tick. On
+                    // success it returns the event to emit (emit-on-apply).
+                    match cmd.execute(&mut registry) {
+                        Ok(event) => {
+                            let _ = events.send(Envelope::root(event)).await;
+                            let _ = reply.send(Ok(()));
+                        }
+                        Err(e) => {
+                            let _ = reply.send(Err(e));
+                        }
+                    }
                 }
             }
         }

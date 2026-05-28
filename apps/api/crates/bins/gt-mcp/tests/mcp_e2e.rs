@@ -32,6 +32,9 @@ async fn mcp_gate_validate_only_blocks_execute_full_scope_drives_state() {
     // This gate exercises only the agent tools; merge + scheduling + patrol + orch actors are
     // wired so the service carries its full domain surface. Keep the relay receivers alive so
     // the actors' sends don't error.
+    // This gate exercises only the agent tools; merge + scheduling + patrol + quota actors are
+    // wired so the service carries its full domain surface. Keep the relay receivers alive so the
+    // actors' sends don't error.
     let (merge_tx, _merge_rx) = tokio::sync::mpsc::channel(16);
     let merge = gt_merge::actor::spawn(merge_tx);
     let (sched_tx, _sched_rx) = tokio::sync::mpsc::channel(16);
@@ -41,6 +44,8 @@ async fn mcp_gate_validate_only_blocks_execute_full_scope_drives_state() {
     let patrol = gt_patrol::actor::spawn(patrol_tx);
     let (orch_tx, _orch_rx) = tokio::sync::mpsc::channel(16);
     let orch = gt_orchestration::actor::spawn(orch_tx);
+    let (quota_tx, _quota_rx) = tokio::sync::mpsc::channel(16);
+    let quota = gt_quota::actor::spawn(quota_tx, std::collections::HashMap::new());
 
     let watcher_audit = Arc::new(InMemoryAudit::new());
     let watcher = McpService::new(
@@ -49,6 +54,7 @@ async fn mcp_gate_validate_only_blocks_execute_full_scope_drives_state() {
         sched.clone(),
         patrol.clone(),
         orch.clone(),
+        quota.clone(),
         Scope::read_only("watcher"),
         Arc::clone(&watcher_audit) as Arc<dyn AuditSink>,
     );
@@ -60,6 +66,7 @@ async fn mcp_gate_validate_only_blocks_execute_full_scope_drives_state() {
         sched.clone(),
         patrol.clone(),
         orch.clone(),
+        quota.clone(),
         Scope::admin("admin"),
         Arc::clone(&admin_audit) as Arc<dyn AuditSink>,
     );

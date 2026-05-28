@@ -39,7 +39,9 @@ fn service(orch: OrchHandle, scope: Scope, audit: Arc<dyn AuditSink>) -> McpServ
         gt_scheduling::actor::spawn(Arc::new(gt_beads::InMemoryBeads::default()), sched_tx, 4);
     let (patrol_tx, _patrol_rx) = mpsc::channel(16);
     let patrol = gt_patrol::actor::spawn(patrol_tx);
-    McpService::new(agent_actor::spawn(8), merge, sched, patrol, orch, scope, audit)
+    let (quota_tx, _quota_rx) = mpsc::channel(16);
+    let quota = gt_quota::actor::spawn(quota_tx, std::collections::HashMap::new());
+    McpService::new(agent_actor::spawn(8), merge, sched, patrol, orch, quota, scope, audit)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

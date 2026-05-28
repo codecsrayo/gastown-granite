@@ -34,7 +34,7 @@ async fn drain(rx: &mut mpsc::Receiver<Envelope<SchedEvent>>) -> Vec<SchedEvent>
 }
 
 /// Build a service exposing the full domain surface but driven through the scheduling tools.
-/// Throwaway agent + merge + patrol + orch actors are wired alongside the scheduler under test.
+/// Throwaway agent + merge + patrol + orch + quota actors are wired alongside the scheduler.
 fn service(sched: SchedHandle, scope: Scope, audit: Arc<dyn AuditSink>) -> McpService {
     let (merge_tx, _merge_rx) = mpsc::channel(16);
     let merge = gt_merge::actor::spawn(merge_tx);
@@ -42,7 +42,9 @@ fn service(sched: SchedHandle, scope: Scope, audit: Arc<dyn AuditSink>) -> McpSe
     let patrol = gt_patrol::actor::spawn(patrol_tx);
     let (orch_tx, _orch_rx) = mpsc::channel(16);
     let orch = gt_orchestration::actor::spawn(orch_tx);
-    McpService::new(agent_actor::spawn(8), merge, sched, patrol, orch, scope, audit)
+    let (quota_tx, _quota_rx) = mpsc::channel(16);
+    let quota = gt_quota::actor::spawn(quota_tx, std::collections::HashMap::new());
+    McpService::new(agent_actor::spawn(8), merge, sched, patrol, orch, quota, scope, audit)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

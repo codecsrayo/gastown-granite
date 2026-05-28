@@ -29,6 +29,8 @@ use gt_patrol::actor::PatrolHandle;
 use gt_patrol::{CloseLease, Heartbeat, PatrolCommand, RegisterLease, Tick};
 use gt_scheduling::actor::SchedHandle;
 use gt_scheduling::{Enqueue, MarkDispatched, SchedCommand};
+use gt_quota::actor::QuotaHandle;
+use gt_quota::{ProbeWindow, QuotaCommand, RotateAccount, SampleTokens};
 
 use crate::audit::{AuditEvent, AuditSink, Outcome};
 use crate::auth::Scope;
@@ -44,6 +46,7 @@ struct Inner {
     sched: SchedHandle,
     patrol: PatrolHandle,
     orch: OrchHandle,
+    quota: QuotaHandle,
     scope: Scope,
     audit: Arc<dyn AuditSink>,
 }
@@ -57,6 +60,7 @@ impl McpService {
         sched: SchedHandle,
         patrol: PatrolHandle,
         orch: OrchHandle,
+        quota: QuotaHandle,
         scope: Scope,
         audit: Arc<dyn AuditSink>,
     ) -> Self {
@@ -67,6 +71,7 @@ impl McpService {
                 sched,
                 patrol,
                 orch,
+                quota,
                 scope,
                 audit,
             }),
@@ -689,5 +694,118 @@ impl McpService {
     ) -> Result<CallToolResult, McpError> {
         let json = serde_json::to_value(&args).expect("FailMember is Serialize");
         self.run_orch("orch.fail_member.execute", json, OrchCommand::Fail(args), false).await
+    }
+
+    /// Quota-domain twin of [`McpService::run`]: same scope + audit boundary, dispatching to
+    /// the quota actor.
+    pub async fn run_quota(
+        &self,
+        tool: &str,
+        arguments: serde_json::Value,
+        cmd: QuotaCommand,
+        validate_only: bool,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let domain_result = if validate_only {
+            self.inner.quota.validate(cmd).await
+        } else {
+            self.inner.quota.exec(cmd).await
+        };
+
+        let outcome = match &domain_result {
+            Ok(()) => Outcome::Ok,
+            Err(e) => Outcome::Failed { error: e.to_string() },
+        };
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments,
+            outcome,
+        });
+
+        match domain_result {
+            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
+            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "quota.sample.validate",
+        description = "Check whether recording a token usage sample would be accepted. No state change."
+    )]
+    async fn quota_sample_validate(
+        &self,
+        Parameters(args): Parameters<SampleTokens>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("SampleTokens is Serialize");
+        self.run_quota("quota.sample.validate", json, QuotaCommand::Sample(args), true).await
+    }
+
+    #[tool(
+        name = "quota.sample.execute",
+        description = "Record a per-session token usage sample; feeds consumption + rate EWMA. Emits quota.tokens_sampled."
+    )]
+    async fn quota_sample_execute(
+        &self,
+        Parameters(args): Parameters<SampleTokens>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("SampleTokens is Serialize");
+        self.run_quota("quota.sample.execute", json, QuotaCommand::Sample(args), false).await
+    }
+
+    #[tool(
+        name = "quota.probe.validate",
+        description = "Check whether reconciling against provider rate-limit headers would be accepted. No state change."
+    )]
+    async fn quota_probe_validate(
+        &self,
+        Parameters(args): Parameters<ProbeWindow>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("ProbeWindow is Serialize");
+        self.run_quota("quota.probe.validate", json, QuotaCommand::Probe(args), true).await
+    }
+
+    #[tool(
+        name = "quota.probe.execute",
+        description = "Reconcile the live window against provider remaining/resets. Emits quota.usage_probed."
+    )]
+    async fn quota_probe_execute(
+        &self,
+        Parameters(args): Parameters<ProbeWindow>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("ProbeWindow is Serialize");
+        self.run_quota("quota.probe.execute", json, QuotaCommand::Probe(args), false).await
+    }
+
+    #[tool(
+        name = "quota.rotate.validate",
+        description = "Check whether rotating off an account would be accepted. No state change."
+    )]
+    async fn quota_rotate_validate(
+        &self,
+        Parameters(args): Parameters<RotateAccount>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("RotateAccount is Serialize");
+        self.run_quota("quota.rotate.validate", json, QuotaCommand::Rotate(args), true).await
+    }
+
+    #[tool(
+        name = "quota.rotate.execute",
+        description = "Rotate off an account onto a healthy one; parks the source in cooldown. Emits quota.rotated."
+    )]
+    async fn quota_rotate_execute(
+        &self,
+        Parameters(args): Parameters<RotateAccount>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("RotateAccount is Serialize");
+        self.run_quota("quota.rotate.execute", json, QuotaCommand::Rotate(args), false).await
     }
 }
