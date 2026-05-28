@@ -33,15 +33,30 @@ async fn jsonl_audit_persists_invocations_to_log_and_replay_tolerates_them() {
     let _ = std::fs::remove_file(&log_path);
 
     let agent = actor::spawn(16);
-    // Agent-only gate; wire a merge actor so the service has its full surface (relay receiver
-    // kept alive so the actor's sends don't error).
+    // Agent-only gate; wire merge + scheduling actors so the service has its full surface
+    // (relay receivers kept alive so the actors' sends don't error).
     let (merge_tx, _merge_rx) = tokio::sync::mpsc::channel(16);
     let merge = gt_merge::actor::spawn(merge_tx);
+    let (sched_tx, _sched_rx) = tokio::sync::mpsc::channel(16);
+    let sched =
+        gt_scheduling::actor::spawn(Arc::new(gt_beads::InMemoryBeads::default()), sched_tx, 4);
     let audit: Arc<dyn AuditSink> =
         Arc::new(JsonlAudit::new(Arc::new(JsonlWriter::new(&log_path))));
 
-    let admin = McpService::new(agent.clone(), merge.clone(), Scope::admin("max"), Arc::clone(&audit));
-    let watcher = McpService::new(agent.clone(), merge.clone(), Scope::read_only("watcher"), Arc::clone(&audit));
+    let admin = McpService::new(
+        agent.clone(),
+        merge.clone(),
+        sched.clone(),
+        Scope::admin("max"),
+        Arc::clone(&audit),
+    );
+    let watcher = McpService::new(
+        agent.clone(),
+        merge.clone(),
+        sched.clone(),
+        Scope::read_only("watcher"),
+        Arc::clone(&audit),
+    );
 
     // admin executes a real add → Invoked { Ok }, persisted.
     let add = AddSession { id: "p1".into(), rig: "granite".into() };

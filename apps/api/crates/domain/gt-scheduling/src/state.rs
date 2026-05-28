@@ -29,6 +29,16 @@ impl Queue {
         Some(self.items.remove(idx).id)
     }
 
+    /// Drop a queued bead by id (it is no longer pending). Returns whether it was present.
+    pub fn remove(&mut self, id: &str) -> bool {
+        if let Some(idx) = self.items.iter().position(|q| q.id == id) {
+            self.items.remove(idx);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.items.len()
     }
@@ -64,6 +74,25 @@ impl CapacityGovernor {
 
     pub fn in_flight(&self) -> usize {
         self.in_flight
+    }
+}
+
+/// The dispatcher's owned in-memory state: the pending [`Queue`] plus the [`CapacityGovernor`].
+/// This is the `Command::State` the frontier commands ([`crate::commands`]) validate/execute
+/// against — pure and sync, no clock, no I/O. The actor owns one of these; the CAS-claim and
+/// the event emission stay at the async edge (the actor), never inside the command.
+#[derive(Debug)]
+pub struct SchedCore {
+    pub queue: Queue,
+    pub gov: CapacityGovernor,
+}
+
+impl SchedCore {
+    pub fn new(max: usize) -> Self {
+        Self {
+            queue: Queue::default(),
+            gov: CapacityGovernor::new(max),
+        }
     }
 }
 

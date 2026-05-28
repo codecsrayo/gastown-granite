@@ -23,6 +23,8 @@ use gt_agent::actor::AgentHandle;
 use gt_agent::{AddSession, AgentCommand, RemoveSession, TransitionSession};
 use gt_merge::actor::MergeHandle;
 use gt_merge::{CompleteMerge, FailMerge, MergeCommand, StartMerge, SubmitMerge};
+use gt_scheduling::actor::SchedHandle;
+use gt_scheduling::{Enqueue, MarkDispatched, SchedCommand};
 
 use crate::audit::{AuditEvent, AuditSink, Outcome};
 use crate::auth::Scope;
@@ -35,6 +37,7 @@ pub struct McpService {
 struct Inner {
     agent: AgentHandle,
     merge: MergeHandle,
+    sched: SchedHandle,
     scope: Scope,
     audit: Arc<dyn AuditSink>,
 }
@@ -44,6 +47,7 @@ impl McpService {
     pub fn new(
         agent: AgentHandle,
         merge: MergeHandle,
+        sched: SchedHandle,
         scope: Scope,
         audit: Arc<dyn AuditSink>,
     ) -> Self {
@@ -51,6 +55,7 @@ impl McpService {
             inner: Arc::new(Inner {
                 agent,
                 merge,
+                sched,
                 scope,
                 audit,
             }),
@@ -319,5 +324,107 @@ impl McpService {
     ) -> Result<CallToolResult, McpError> {
         let json = serde_json::to_value(&args).expect("FailMerge is Serialize");
         self.run_merge("merge.fail.execute", json, MergeCommand::Fail(args), false).await
+    }
+
+    /// Scheduling-domain twin of [`McpService::run`]: same scope + audit boundary, dispatching
+    /// to the dispatcher actor instead of the agent. A sibling per domain (not a generic) so
+    /// each dispatch stays a flat, readable method — the registry grows one `run_*` per domain.
+    pub async fn run_sched(
+        &self,
+        tool: &str,
+        arguments: serde_json::Value,
+        cmd: SchedCommand,
+        validate_only: bool,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let domain_result = if validate_only {
+            self.inner.sched.validate(cmd).await
+        } else {
+            self.inner.sched.exec(cmd).await
+        };
+
+        let outcome = match &domain_result {
+            Ok(()) => Outcome::Ok,
+            Err(e) => Outcome::Failed { error: e.to_string() },
+        };
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments,
+            outcome,
+        });
+
+        match domain_result {
+            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
+            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "scheduling.enqueue.validate",
+        description = "Check whether enqueueing a bead would be accepted. No state change."
+    )]
+    async fn scheduling_enqueue_validate(
+        &self,
+        Parameters(args): Parameters<Enqueue>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("Enqueue is Serialize");
+        self.run_sched("scheduling.enqueue.validate", json, SchedCommand::Enqueue(args), true).await
+    }
+
+    #[tool(
+        name = "scheduling.enqueue.execute",
+        description = "Enqueue a bead at a priority (0=P0..2=P2). The dispatcher pumps it when capacity frees."
+    )]
+    async fn scheduling_enqueue_execute(
+        &self,
+        Parameters(args): Parameters<Enqueue>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("Enqueue is Serialize");
+        self.run_sched("scheduling.enqueue.execute", json, SchedCommand::Enqueue(args), false).await
+    }
+
+    #[tool(
+        name = "scheduling.mark_dispatched.validate",
+        description = "Check whether manually assigning a bead to a worker would be accepted. No state change."
+    )]
+    async fn scheduling_mark_dispatched_validate(
+        &self,
+        Parameters(args): Parameters<MarkDispatched>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("MarkDispatched is Serialize");
+        self.run_sched(
+            "scheduling.mark_dispatched.validate",
+            json,
+            SchedCommand::MarkDispatched(args),
+            true,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "scheduling.mark_dispatched.execute",
+        description = "Manually assign a bead to a worker, consuming a capacity slot. Emits scheduling.dispatched."
+    )]
+    async fn scheduling_mark_dispatched_execute(
+        &self,
+        Parameters(args): Parameters<MarkDispatched>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("MarkDispatched is Serialize");
+        self.run_sched(
+            "scheduling.mark_dispatched.execute",
+            json,
+            SchedCommand::MarkDispatched(args),
+            false,
+        )
+        .await
     }
 }

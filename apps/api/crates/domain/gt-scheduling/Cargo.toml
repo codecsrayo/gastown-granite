@@ -9,6 +9,8 @@ gt-events = { path = "../../kernel/gt-events" }
 gt-beads = { path = "../../kernel/gt-beads" }
 tokio.workspace = true
 serde.workspace = true
+# JSON Schema derives for Command arguments — surfaced by gt-mcp.
+schemars.workspace = true
 
 [dev-dependencies]
 # El test e2e juega el rol de composition root: cablea DOS dominios (scheduling + agent).

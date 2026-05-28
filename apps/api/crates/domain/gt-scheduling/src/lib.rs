@@ -6,9 +6,11 @@
 //! No llama a otro dominio: integra por eventos (ver `docs/05-queues.md`).
 
 pub mod actor;
+pub mod commands;
 pub mod expectations;
 mod events;
 mod state;
 
+pub use commands::{Enqueue, MarkDispatched, SchedCommand};
 pub use events::SchedEvent;
-pub use state::{CapacityGovernor, Queue, SchedState};
+pub use state::{CapacityGovernor, Queue, SchedCore, SchedState};
