@@ -1,7 +1,10 @@
 //! `gt-mcp` binary entry. Boots the composition root (`bins/gt`) and serves the MCP
-//! service over stdio, sharing the root's `AgentHandle` so MCP tool calls drive the same
-//! session actor the root drives — not an isolated copy (Paso 6.f.3). Every invocation is
-//! persisted to the shared events.jsonl through the gt-audit writer (Paso 6.f.4).
+//! service over stdio or streamable-HTTP, sharing the root's `AgentHandle` so MCP tool
+//! calls drive the same session actor the root drives — not an isolated copy (Paso 6.f.3).
+//! Every invocation is persisted to the shared events.jsonl through the gt-audit writer
+//! (Paso 6.f.4); when `GT_PG_AUDIT_URL` is set the same records also land in Postgres.
+//!
+//! Persistence (hq-j9ou): `GT_DOLT_URL` swaps the in-memory bead repo for `DoltBeads`.
 
 use std::sync::Arc;
 
@@ -9,8 +12,10 @@ use rmcp::transport::stdio;
 use rmcp::ServiceExt;
 
 use gt_audit::JsonlWriter;
-use gt_beads::InMemoryBeads;
-use gt_root::{spawn, LogEffects, RootConfig, SystemClock};
+use gt_beads::{BeadRepository, InMemoryBeads};
+use gt_root::{spawn, LogEffects, RootConfig, RootHandle, SystemClock};
+use gt_store_dolt::DoltBeads;
+use gt_store_pg::PgAudit;
 
 use gt_mcp::{audit::AuditSink, auth::Scope, JsonlAudit, McpService, ScopeConfig};
 
@@ -19,11 +24,27 @@ async fn main() -> anyhow::Result<()> {
     let log_path =
         std::env::var("GT_EVENT_LOG").unwrap_or_else(|_| "/tmp/gt.events.jsonl".to_string());
 
-    // In-memory adapters keep the bin runnable end-to-end before the Dolt-backed read-side
-    // lands — same stand-in gt-web uses. Real adapters slot in here without touching the MCP
-    // service.
-    let beads = Arc::new(InMemoryBeads::default());
+    match std::env::var("GT_DOLT_URL").ok() {
+        Some(url) => {
+            let dolt = DoltBeads::connect(&url)?;
+            dolt.ensure_schema().await?;
+            eprintln!("[gt-mcp] beads: Dolt @ {url}");
+            serve(Arc::new(dolt), log_path).await
+        }
+        None => {
+            eprintln!("[gt-mcp] beads: in-memory (set GT_DOLT_URL for Dolt persistence)");
+            serve(Arc::new(InMemoryBeads::default()), log_path).await
+        }
+    }
+}
+
+async fn serve<R>(beads: Arc<R>, log_path: String) -> anyhow::Result<()>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    Arc<R>: BeadRepository + Clone + 'static,
+{
     let root = spawn(beads, LogEffects, SystemClock, &log_path, RootConfig::default());
+    let audit_task = spawn_pg_audit(&root).await;
 
     // Frontier audit lands in the same event log as the domain events. A second JsonlWriter on
     // the same path is safe: each append takes the file lock, so lines never interleave. The
@@ -73,6 +94,44 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    if let Some(task) = audit_task {
+        task.abort();
+    }
     root.shutdown();
     Ok(())
+}
+
+async fn spawn_pg_audit<R>(root: &RootHandle<R>) -> Option<tokio::task::JoinHandle<()>>
+where
+    R: BeadRepository + Clone + 'static,
+{
+    let url = std::env::var("GT_PG_AUDIT_URL").ok()?;
+    let audit = match PgAudit::connect(&url).await {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("[gt-mcp] PG audit disabled — connect failed: {e}");
+            return None;
+        }
+    };
+    if let Err(e) = gt_store_pg::ensure_schema(audit.pool()).await {
+        eprintln!("[gt-mcp] PG audit disabled — migrations failed: {e}");
+        return None;
+    }
+    eprintln!("[gt-mcp] audit: Postgres @ {url}");
+    let mut rx = root.subscribe_events();
+    Some(tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(rec) => {
+                    if let Err(e) = audit.append(&rec).await {
+                        eprintln!("[gt-mcp] PG audit append failed ({}): {e}", rec.kind);
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    eprintln!("[gt-mcp] PG audit lagged by {n} events (catching up)");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    }))
 }

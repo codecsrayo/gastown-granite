@@ -29,6 +29,9 @@ gt-orchestration = { path = "../../domain/gt-orchestration" }
 gt-quota = { path = "../../domain/gt-quota" }
 gt-beads = { path = "../../kernel/gt-beads" }
 gt-audit = { path = "../../kernel/gt-audit" }
+# Real persistence adapters: opt-in via env (GT_DOLT_URL / GT_PG_AUDIT_URL).
+gt-store-dolt = { path = "../../kernel/gt-store-dolt" }
+gt-store-pg = { path = "../../kernel/gt-store-pg" }
 
 tokio = { workspace = true, features = ["io-util", "io-std", "macros", "rt", "rt-multi-thread", "sync", "net"] }
 serde.workspace = true

@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 gt-events = { path = "../gt-events" }
 gt-beads = { path = "../gt-beads" }
+gt-audit = { path = "../gt-audit" }
 gt-quota = { path = "../../domain/gt-quota" }
 tokio.workspace = true
 time = { workspace = true, features = ["std", "formatting", "macros"] }
