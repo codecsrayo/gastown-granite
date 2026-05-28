@@ -84,6 +84,7 @@ es la especificación de referencia.
 | [07-frontend.md](07-frontend.md) | `gt-web`: API + SSE, snapshot vs stream |
 | [08-getting-started.md](08-getting-started.md) | Hoja de ruta de implementación: pasos, entregables y gates de validación |
 | [09-llm-integration.md](09-llm-integration.md) | Integración con modelos: `gt-mcp`, patrón `Command { validate, execute }`, scopes |
+| [10-go-rust-parity.md](10-go-rust-parity.md) | Auditoría Go ↔ Rust: cada `gt` command / daemon mapeado a route / MCP tool / RealEffects (COVERED/PARTIAL/MISSING + critical-path del flip + Roles/Dog kinds) |
 
 ### Features
 
