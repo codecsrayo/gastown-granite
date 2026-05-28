@@ -12,7 +12,7 @@ use gt_audit::JsonlWriter;
 use gt_beads::InMemoryBeads;
 use gt_root::{spawn, LogEffects, RootConfig, SystemClock};
 
-use gt_mcp::{audit::AuditSink, auth::Scope, JsonlAudit, McpService};
+use gt_mcp::{audit::AuditSink, auth::Scope, JsonlAudit, McpService, ScopeConfig};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -30,8 +30,20 @@ async fn main() -> anyhow::Result<()> {
     // `mcp.` prefix marks these as observability — domain replay skips it (`replay_gt`).
     let audit: Arc<dyn AuditSink> =
         Arc::new(JsonlAudit::new(Arc::new(JsonlWriter::new(&log_path))));
-    let scope =
-        Scope::admin(std::env::var("GT_MCP_ACTOR").unwrap_or_else(|_| "mcp-local".to_string()));
+
+    // Resolve this connection's scope from the per-actor config file (TOML or JSON). There is
+    // no hardcoded admin: with no `GT_MCP_SCOPE_CONFIG`, or an actor absent from it, the scope
+    // is closed (deny all) — Paso 6.f.10, deny by default.
+    let actor = std::env::var("GT_MCP_ACTOR").unwrap_or_else(|_| "mcp-local".to_string());
+    let scope = match std::env::var("GT_MCP_SCOPE_CONFIG") {
+        Ok(path) => ScopeConfig::load(&path)?.resolve(&actor),
+        Err(_) => {
+            eprintln!(
+                "[gt-mcp] GT_MCP_SCOPE_CONFIG unset; actor '{actor}' gets a closed scope (deny all)"
+            );
+            Scope::denied(&actor)
+        }
+    };
 
     // Share the root's domain actors, not isolated `actor::spawn`s. MCP tool calls drive the
     // same agent + merge + scheduling + patrol + orchestration actors the root drives, so their

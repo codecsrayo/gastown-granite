@@ -37,6 +37,8 @@ ulid = "1"
 time = { version = "0.3", features = ["std", "formatting"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# TOML parsing for gt-mcp's per-actor scope config (JSON handled via serde_json).
+toml = "0.8"
 fs2 = "0.4"
 # Cliente MySQL-wire para Dolt (:3307). Sin TLS (Dolt local), deps mínimas.
 mysql_async = { version = "0.34", default-features = false, features = ["minimal"] }
