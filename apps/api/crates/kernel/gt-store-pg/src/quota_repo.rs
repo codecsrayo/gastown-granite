@@ -148,10 +148,10 @@ impl QuotaRepository for PgQuota {
             None => None,
         };
         sqlx::query(
-            "INSERT INTO accounts (id, status, window)
+            "INSERT INTO accounts (id, status, window_json)
              VALUES ($1, $2, $3::jsonb)
              ON CONFLICT (id) DO UPDATE
-               SET status = EXCLUDED.status, window = EXCLUDED.window",
+               SET status = EXCLUDED.status, window_json = EXCLUDED.window_json",
         )
         .bind(&account.id)
         .bind(status_as_str(account.status))
@@ -163,14 +163,15 @@ impl QuotaRepository for PgQuota {
     }
 
     async fn get_account(&self, id: &str) -> Result<Option<Account>, AppError> {
-        let row = sqlx::query("SELECT status, window::text AS window FROM accounts WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_err)?;
+        let row =
+            sqlx::query("SELECT status, window_json::text AS window_json FROM accounts WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_err)?;
         Ok(row.map(|r| {
             let status: String = r.try_get("status").unwrap_or_else(|_| "healthy".into());
-            let window_raw: Option<String> = r.try_get("window").ok();
+            let window_raw: Option<String> = r.try_get("window_json").ok();
             Account {
                 id: id.to_string(),
                 status: status_from_str(&status),
