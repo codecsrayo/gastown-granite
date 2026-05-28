@@ -298,3 +298,50 @@ async fn multi_domain_flow_through_root_replays_byte_identical() {
     let _ = std::fs::remove_file(&log_path);
     root.shutdown();
 }
+
+/// Paso 6.f.4 gate: frontier-audit (`mcp.*`) events share the event log but carry no domain
+/// state. Domain replay must skip them so reconstructed state is byte-identical with or
+/// without the meta records interleaved — while the feed (prefix-agnostic) still folds them.
+#[test]
+fn replay_skips_meta_events_byte_identical() {
+    let spawned = EventRecord::from_envelope(&Envelope::root(AgentEvent::Spawned {
+        session: "p1".into(),
+        rig: "granite".into(),
+    }))
+    .unwrap();
+    let ended = EventRecord::from_envelope(&Envelope::root(AgentEvent::SessionEnd {
+        session: "p1".into(),
+    }))
+    .unwrap();
+
+    // A frontier-audit record interleaved between the two domain events.
+    let mcp = EventRecord {
+        event_id: ulid::Ulid::new().to_string(),
+        correlation_id: ulid::Ulid::new().to_string(),
+        causation_id: None,
+        ts: "2026-05-28T00:00:00Z".to_string(),
+        kind: "mcp.invoked".into(),
+        payload: serde_json::json!({
+            "kind": "invoked",
+            "actor": "max",
+            "tool": "agent.add.execute",
+            "arguments": {"id": "p1", "rig": "granite"},
+            "outcome": {"status": "ok"}
+        }),
+    };
+
+    let without_meta = vec![spawned.clone(), ended.clone()];
+    let with_meta = vec![spawned, mcp, ended];
+
+    let clean = replay_gt(&without_meta).unwrap();
+    let mixed = replay_gt(&with_meta).expect("meta event must not break domain replay");
+    assert_eq!(
+        clean.agent.fingerprint(),
+        mixed.agent.fingerprint(),
+        "mcp.* meta event must not perturb reconstructed domain state",
+    );
+
+    // The feed folds every record, meta included.
+    assert_eq!(mixed.feed.total_events, 3, "feed folds the meta record too");
+    assert_eq!(clean.feed.total_events, 2);
+}

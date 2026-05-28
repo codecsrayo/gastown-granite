@@ -71,6 +71,20 @@ gt_from!(Merge, MergeEvent);
 gt_from!(Quota, QuotaEvent);
 gt_from!(Orch, OrchEvent);
 
+/// Wire prefixes that ride in the event log but are **not** domain state: frontier-audit
+/// observability (e.g. `mcp.invoked` from `gt-mcp`). Domain replay skips them so reconstructed
+/// state stays byte-identical, while the feed still folds them (it is prefix-agnostic). Kept
+/// strict otherwise — a genuinely unknown prefix is still an error (`GtEvent::from_record`),
+/// which is what catches a mis-wired domain event.
+const META_PREFIXES: &[&str] = &["mcp"];
+
+/// Whether a record is a meta (non-domain) event that domain replay must skip.
+pub fn is_meta(rec: &EventRecord) -> bool {
+    rec.kind
+        .split_once('.')
+        .is_some_and(|(domain, _)| META_PREFIXES.contains(&domain))
+}
+
 impl GtEvent {
     /// Decode a type-erased [`EventRecord`] back into the typed `GtEvent`, routed by the
     /// domain prefix of its `kind` (`"scheduling."`, `"patrol."`, …). This is the inverse of
@@ -138,7 +152,13 @@ impl GtState {
 pub fn replay_gt(records: &[EventRecord]) -> Result<GtState, AppError> {
     let mut state = GtState::default();
     for rec in records {
+        // The feed is prefix-agnostic: it folds every record, including meta/frontier-audit.
         Curator::apply(&mut state.feed, rec);
+        // Meta events (`mcp.*`) carry no domain state — skip them so domain replay stays
+        // byte-identical whether or not frontier audit shares the log.
+        if is_meta(rec) {
+            continue;
+        }
         let event = GtEvent::from_record(rec)?;
         state.apply(&event);
     }

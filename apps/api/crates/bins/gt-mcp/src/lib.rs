@@ -10,6 +10,6 @@ pub mod audit;
 pub mod auth;
 pub mod service;
 
-pub use audit::{AuditEvent, AuditSink, InMemoryAudit, Outcome};
+pub use audit::{AuditEvent, AuditSink, InMemoryAudit, JsonlAudit, Outcome};
 pub use auth::Scope;
 pub use service::McpService;

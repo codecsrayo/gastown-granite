@@ -23,6 +23,7 @@ gt = { path = "../gt" }
 gt-events = { path = "../../kernel/gt-events" }
 gt-agent = { path = "../../domain/gt-agent" }
 gt-beads = { path = "../../kernel/gt-beads" }
+gt-audit = { path = "../../kernel/gt-audit" }
 
 tokio = { workspace = true, features = ["io-util", "io-std", "macros", "rt", "rt-multi-thread", "sync"] }
 serde.workspace = true
