@@ -21,14 +21,14 @@ use tokio::sync::mpsc;
 fn full_service(scope: Scope) -> McpService {
     let agent = agent_actor::spawn(16);
     let (merge_tx, _merge_rx) = mpsc::channel(16);
-    let merge = gt_merge::actor::spawn(merge_tx);
+    let merge = gt_merge::actor::spawn(gt_merge::InMemoryMergeRepo::default(), merge_tx);
     let (sched_tx, _sched_rx) = mpsc::channel(16);
     let sched =
         gt_scheduling::actor::spawn(Arc::new(gt_beads::InMemoryBeads::default()), sched_tx, 4);
     let (patrol_tx, _patrol_rx) = mpsc::channel(16);
-    let patrol = gt_patrol::actor::spawn(patrol_tx);
+    let patrol = gt_patrol::actor::spawn(gt_patrol::InMemoryPatrolRepo::default(), patrol_tx);
     let (orch_tx, _orch_rx) = mpsc::channel(16);
-    let orch = gt_orchestration::actor::spawn(orch_tx);
+    let orch = gt_orchestration::actor::spawn(gt_orchestration::InMemoryOrchRepo::default(), orch_tx);
     let (quota_tx, _quota_rx) = mpsc::channel(16);
     let quota = gt_quota::actor::spawn(quota_tx, HashMap::new());
     let audit: Arc<dyn AuditSink> = Arc::new(InMemoryAudit::new());

@@ -242,7 +242,7 @@ fn actor_agent() -> gt_agent::actor::AgentHandle {
 
 fn actor_merge() -> gt_merge::actor::MergeHandle {
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
-    gt_merge::actor::spawn(tx)
+    gt_merge::actor::spawn(gt_merge::InMemoryMergeRepo::default(), tx)
 }
 
 fn actor_sched() -> gt_scheduling::actor::SchedHandle {
@@ -252,10 +252,10 @@ fn actor_sched() -> gt_scheduling::actor::SchedHandle {
 
 fn actor_patrol() -> gt_patrol::actor::PatrolHandle {
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
-    gt_patrol::actor::spawn(tx)
+    gt_patrol::actor::spawn(gt_patrol::InMemoryPatrolRepo::default(), tx)
 }
 
 fn actor_orch() -> gt_orchestration::actor::OrchHandle {
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
-    gt_orchestration::actor::spawn(tx)
+    gt_orchestration::actor::spawn(gt_orchestration::InMemoryOrchRepo::default(), tx)
 }

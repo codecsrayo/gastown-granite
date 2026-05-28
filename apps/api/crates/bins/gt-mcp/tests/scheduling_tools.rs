@@ -37,11 +37,11 @@ async fn drain(rx: &mut mpsc::Receiver<Envelope<SchedEvent>>) -> Vec<SchedEvent>
 /// Throwaway agent + merge + patrol + orch + quota actors are wired alongside the scheduler.
 fn service(sched: SchedHandle, scope: Scope, audit: Arc<dyn AuditSink>) -> McpService {
     let (merge_tx, _merge_rx) = mpsc::channel(16);
-    let merge = gt_merge::actor::spawn(merge_tx);
+    let merge = gt_merge::actor::spawn(gt_merge::InMemoryMergeRepo::default(), merge_tx);
     let (patrol_tx, _patrol_rx) = mpsc::channel(16);
-    let patrol = gt_patrol::actor::spawn(patrol_tx);
+    let patrol = gt_patrol::actor::spawn(gt_patrol::InMemoryPatrolRepo::default(), patrol_tx);
     let (orch_tx, _orch_rx) = mpsc::channel(16);
-    let orch = gt_orchestration::actor::spawn(orch_tx);
+    let orch = gt_orchestration::actor::spawn(gt_orchestration::InMemoryOrchRepo::default(), orch_tx);
     let (quota_tx, _quota_rx) = mpsc::channel(16);
     let quota = gt_quota::actor::spawn(quota_tx, std::collections::HashMap::new());
     McpService::new(agent_actor::spawn(8), merge, sched, patrol, orch, quota, scope, audit)

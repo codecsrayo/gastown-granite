@@ -9,9 +9,15 @@
 mod beads_repo;
 mod commit;
 mod conn;
+mod merge_repo;
+mod orch_repo;
+mod patrol_repo;
 mod sessions_repo;
 
 pub use beads_repo::DoltBeads;
 pub use commit::{commit, diff_summary, rollback};
 pub use conn::connect;
+pub use merge_repo::DoltMerge;
+pub use orch_repo::DoltOrch;
+pub use patrol_repo::DoltPatrol;
 pub use sessions_repo::DoltSessions;

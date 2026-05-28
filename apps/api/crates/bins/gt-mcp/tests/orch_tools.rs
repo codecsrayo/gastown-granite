@@ -33,12 +33,12 @@ async fn drain(rx: &mut mpsc::Receiver<Envelope<OrchEvent>>) -> Vec<OrchEvent> {
 /// actors fill out the surface.
 fn service(orch: OrchHandle, scope: Scope, audit: Arc<dyn AuditSink>) -> McpService {
     let (merge_tx, _merge_rx) = mpsc::channel(16);
-    let merge = gt_merge::actor::spawn(merge_tx);
+    let merge = gt_merge::actor::spawn(gt_merge::InMemoryMergeRepo::default(), merge_tx);
     let (sched_tx, _sched_rx) = mpsc::channel(16);
     let sched =
         gt_scheduling::actor::spawn(Arc::new(gt_beads::InMemoryBeads::default()), sched_tx, 4);
     let (patrol_tx, _patrol_rx) = mpsc::channel(16);
-    let patrol = gt_patrol::actor::spawn(patrol_tx);
+    let patrol = gt_patrol::actor::spawn(gt_patrol::InMemoryPatrolRepo::default(), patrol_tx);
     let (quota_tx, _quota_rx) = mpsc::channel(16);
     let quota = gt_quota::actor::spawn(quota_tx, std::collections::HashMap::new());
     McpService::new(agent_actor::spawn(8), merge, sched, patrol, orch, quota, scope, audit)
@@ -47,7 +47,7 @@ fn service(orch: OrchHandle, scope: Scope, audit: Arc<dyn AuditSink>) -> McpServ
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn orch_tools_launch_handoff_close() {
     let (tx, mut rx) = mpsc::channel::<Envelope<OrchEvent>>(64);
-    let orch = orch_actor::spawn(tx);
+    let orch = orch_actor::spawn(gt_orchestration::InMemoryOrchRepo::default(), tx);
     let audit = Arc::new(InMemoryAudit::new());
     let svc = service(orch, Scope::admin("max"), Arc::clone(&audit) as Arc<dyn AuditSink>);
 
@@ -106,7 +106,7 @@ async fn orch_tools_launch_handoff_close() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn orch_fail_member_halts_and_scope_blocks_execute() {
     let (tx, mut rx) = mpsc::channel::<Envelope<OrchEvent>>(64);
-    let orch = orch_actor::spawn(tx);
+    let orch = orch_actor::spawn(gt_orchestration::InMemoryOrchRepo::default(), tx);
     let audit = Arc::new(InMemoryAudit::new());
     let admin = service(orch.clone(), Scope::admin("max"), Arc::clone(&audit) as Arc<dyn AuditSink>);
 

@@ -44,7 +44,16 @@ async fn boot_with_auth(
         .unwrap();
 
     let sessions = Arc::new(InMemorySessions::default());
-    let root = spawn(beads.clone(), NoopEffects, SystemClock, log, RootConfig::default());
+    let root = spawn(
+        beads.clone(),
+        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
+        Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
+        NoopEffects,
+        SystemClock,
+        log,
+        RootConfig::default(),
+    );
 
     let state = AppState {
         beads,

@@ -5,6 +5,11 @@
 //! Los eventos emitidos al log son los que el actor ya *aplicó* al estado interno: si la
 //! transición falla, no se publica nada (preserva la determinismo del replay — solo
 //! transiciones legales quedan grabadas).
+//!
+//! Persistence (hq-03aw.6): on every successful transition the actor mirrors the live slot
+//! into the injected [`MergeRepository`] (Dolt in prod, in-memory in tests). The event log
+//! stays authoritative — the repo is best-effort, errors are logged but never block the
+//! emit so replay byte-identico holds.
 
 use tokio::sync::{mpsc, oneshot};
 
@@ -12,6 +17,7 @@ use gt_events::{AppError, Command, Envelope};
 
 use crate::commands::MergeCommand;
 use crate::events::MergeEvent;
+use crate::repo::MergeRepository;
 use crate::state::{MergeBoard, MergeSlot};
 
 /// Mensajes al actor.
@@ -129,9 +135,23 @@ impl MergeHandle {
     }
 }
 
+/// Persist the live `slot` for `bead`. Best-effort: a Dolt outage is logged and the actor
+/// keeps emitting — the event log + replay reducer remain the source of truth.
+async fn persist<R: MergeRepository>(repo: &R, board: &MergeBoard, bead: &str) {
+    if let Some(slot) = board.get(bead) {
+        if let Err(e) = repo.upsert_slot(slot).await {
+            eprintln!("[gt-merge] persist slot {bead}: {e}");
+        }
+    }
+}
+
 /// Arranca el actor. `events` es el relay (mpsc) hacia el bus síncrono del composition
-/// root, que a su vez lo persiste en el audit log.
-pub fn spawn(events: mpsc::Sender<Envelope<MergeEvent>>) -> MergeHandle {
+/// root, que a su vez lo persiste en el audit log. `repo` mirrors each transition into the
+/// persistence port (Dolt in prod, in-memory otherwise).
+pub fn spawn<R>(repo: R, events: mpsc::Sender<Envelope<MergeEvent>>) -> MergeHandle
+where
+    R: MergeRepository + 'static,
+{
     let (tx, mut rx) = mpsc::channel::<MergeMsg>(64);
     tokio::spawn(async move {
         let mut board = MergeBoard::default();
@@ -139,6 +159,7 @@ pub fn spawn(events: mpsc::Sender<Envelope<MergeEvent>>) -> MergeHandle {
             match msg {
                 MergeMsg::Submit { bead, branch, channel_msg_id } => {
                     if board.submit(bead.clone(), branch.clone()).is_ok() {
+                        persist(&repo, &board, &bead).await;
                         let _ = events
                             .send(Envelope::root(MergeEvent::Ready {
                                 bead,
@@ -150,11 +171,13 @@ pub fn spawn(events: mpsc::Sender<Envelope<MergeEvent>>) -> MergeHandle {
                 }
                 MergeMsg::Start { bead } => {
                     if board.start(&bead).is_ok() {
+                        persist(&repo, &board, &bead).await;
                         let _ = events.send(Envelope::root(MergeEvent::Started { bead })).await;
                     }
                 }
                 MergeMsg::Complete { bead, sha } => {
                     if board.complete(&bead).is_ok() {
+                        persist(&repo, &board, &bead).await;
                         let _ = events
                             .send(Envelope::root(MergeEvent::Merged { bead, sha }))
                             .await;
@@ -162,6 +185,7 @@ pub fn spawn(events: mpsc::Sender<Envelope<MergeEvent>>) -> MergeHandle {
                 }
                 MergeMsg::Fail { bead, reason } => {
                     if board.fail(&bead).is_ok() {
+                        persist(&repo, &board, &bead).await;
                         let _ = events
                             .send(Envelope::root(MergeEvent::Failed { bead, reason }))
                             .await;
@@ -179,6 +203,9 @@ pub fn spawn(events: mpsc::Sender<Envelope<MergeEvent>>) -> MergeHandle {
                     // legal transitions reach the log.
                     match cmd.execute(&mut board) {
                         Ok(event) => {
+                            if let Some(bead) = event_bead(&event) {
+                                persist(&repo, &board, bead).await;
+                            }
                             let _ = events.send(Envelope::root(event)).await;
                             let _ = reply.send(Ok(()));
                         }
@@ -191,4 +218,13 @@ pub fn spawn(events: mpsc::Sender<Envelope<MergeEvent>>) -> MergeHandle {
         }
     });
     MergeHandle { tx }
+}
+
+fn event_bead(event: &MergeEvent) -> Option<&str> {
+    match event {
+        MergeEvent::Ready { bead, .. }
+        | MergeEvent::Started { bead }
+        | MergeEvent::Merged { bead, .. }
+        | MergeEvent::Failed { bead, .. } => Some(bead.as_str()),
+    }
 }

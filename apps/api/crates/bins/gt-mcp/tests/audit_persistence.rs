@@ -37,14 +37,14 @@ async fn jsonl_audit_persists_invocations_to_log_and_replay_tolerates_them() {
     // Agent-only gate; wire merge + scheduling + patrol + quota actors so the service has its
     // full surface (relay receivers kept alive so the actors' sends don't error).
     let (merge_tx, _merge_rx) = tokio::sync::mpsc::channel(16);
-    let merge = gt_merge::actor::spawn(merge_tx);
+    let merge = gt_merge::actor::spawn(gt_merge::InMemoryMergeRepo::default(), merge_tx);
     let (sched_tx, _sched_rx) = tokio::sync::mpsc::channel(16);
     let sched =
         gt_scheduling::actor::spawn(Arc::new(gt_beads::InMemoryBeads::default()), sched_tx, 4);
     let (patrol_tx, _patrol_rx) = tokio::sync::mpsc::channel(16);
-    let patrol = gt_patrol::actor::spawn(patrol_tx);
+    let patrol = gt_patrol::actor::spawn(gt_patrol::InMemoryPatrolRepo::default(), patrol_tx);
     let (orch_tx, _orch_rx) = tokio::sync::mpsc::channel(16);
-    let orch = gt_orchestration::actor::spawn(orch_tx);
+    let orch = gt_orchestration::actor::spawn(gt_orchestration::InMemoryOrchRepo::default(), orch_tx);
     let (quota_tx, _quota_rx) = tokio::sync::mpsc::channel(16);
     let quota = gt_quota::actor::spawn(quota_tx, std::collections::HashMap::new());
     let audit: Arc<dyn AuditSink> =

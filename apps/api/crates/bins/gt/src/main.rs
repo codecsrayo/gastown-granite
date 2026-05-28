@@ -21,8 +21,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gt_beads::{BeadRepository, InMemoryBeads};
+use gt_merge::{InMemoryMergeRepo, MergeRepository};
+use gt_orchestration::{InMemoryOrchRepo, OrchRepository};
+use gt_patrol::{InMemoryPatrolRepo, PatrolRepository};
 use gt_root::{spawn, RealEffects, RootConfig, RootHandle, SystemClock};
-use gt_store_dolt::DoltBeads;
+use gt_store_dolt::{DoltBeads, DoltMerge, DoltOrch, DoltPatrol};
 use gt_store_pg::{PgOutboxDrain, PgOutboxWriter};
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 
@@ -49,24 +52,78 @@ fn main() {
             Some(url) => {
                 let dolt = DoltBeads::connect(&url).expect("connect Dolt");
                 dolt.ensure_schema().await.expect("Dolt ensure_schema");
-                eprintln!("[gt] beads: Dolt @ {url}");
-                run(Arc::new(dolt), &log_path, gt_bin).await;
+                let dolt_merge = DoltMerge::connect(&url).expect("connect Dolt merge");
+                dolt_merge
+                    .ensure_schema()
+                    .await
+                    .expect("Dolt merge ensure_schema");
+                let dolt_patrol = DoltPatrol::connect(&url).expect("connect Dolt patrol");
+                dolt_patrol
+                    .ensure_schema()
+                    .await
+                    .expect("Dolt patrol ensure_schema");
+                let dolt_orch = DoltOrch::connect(&url).expect("connect Dolt orch");
+                dolt_orch
+                    .ensure_schema()
+                    .await
+                    .expect("Dolt orch ensure_schema");
+                eprintln!("[gt] beads + merge/patrol/orch: Dolt @ {url}");
+                run(
+                    Arc::new(dolt),
+                    Arc::new(dolt_merge),
+                    Arc::new(dolt_patrol),
+                    Arc::new(dolt_orch),
+                    &log_path,
+                    gt_bin,
+                )
+                .await;
             }
             None => {
-                eprintln!("[gt] beads: in-memory (set GT_DOLT_URL for Dolt persistence)");
-                run(Arc::new(InMemoryBeads::default()), &log_path, gt_bin).await;
+                eprintln!(
+                    "[gt] domain state: in-memory (set GT_DOLT_URL for Dolt persistence)"
+                );
+                run(
+                    Arc::new(InMemoryBeads::default()),
+                    Arc::new(InMemoryMergeRepo::default()),
+                    Arc::new(InMemoryPatrolRepo::default()),
+                    Arc::new(InMemoryOrchRepo::default()),
+                    &log_path,
+                    gt_bin,
+                )
+                .await;
             }
         }
     });
 }
 
-async fn run<R>(repo: Arc<R>, log_path: &str, gt_bin: PathBuf)
-where
+async fn run<R, MR, PR, OR>(
+    repo: Arc<R>,
+    merge_repo: Arc<MR>,
+    patrol_repo: Arc<PR>,
+    orch_repo: Arc<OR>,
+    log_path: &str,
+    gt_bin: PathBuf,
+) where
     R: BeadRepository + 'static,
     Arc<R>: BeadRepository + Clone + 'static,
+    MR: MergeRepository + 'static,
+    Arc<MR>: MergeRepository + 'static,
+    PR: PatrolRepository + 'static,
+    Arc<PR>: PatrolRepository + 'static,
+    OR: OrchRepository + 'static,
+    Arc<OR>: OrchRepository + 'static,
 {
     let (effects, quota_slot) = RealEffects::new(gt_bin);
-    let root = spawn(repo, effects, SystemClock, log_path, RootConfig::default());
+    let root = spawn(
+        repo,
+        merge_repo,
+        patrol_repo,
+        orch_repo,
+        effects,
+        SystemClock,
+        log_path,
+        RootConfig::default(),
+    );
     let _ = quota_slot.set(root.quota.clone());
 
     let pg_tasks = spawn_pg_outbox_pipeline(&root).await;

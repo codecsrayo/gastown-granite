@@ -15,15 +15,20 @@
 //! Isolation: this crate depends ONLY on the kernel (`gt-events`). It does not call
 //! `gt-scheduling`, `gt-merge` or `gt-beads`; cross-domain integration (slinging the next
 //! member, closing the convoy bead in Dolt) is the composition root's job, reacting to the
-//! emitted events — same integration-by-events pattern as Pasos 6.a/6.b. Persisting convoy
-//! progress to Dolt (the `[Dolt]` marker in `docs/02-tree.md`) is a follow-up adapter; the
-//! domain ships pure + replay-able first, like `gt-patrol` and `gt-merge`.
+//! emitted events — same integration-by-events pattern as Pasos 6.a/6.b.
+//!
+//! Persistence (hq-03aw.8 / epic hq-bdn8): the `[Dolt]` marker in `docs/02-tree.md` is now
+//! backed by [`OrchRepository`] — the actor mirrors each transition into the port (Dolt in
+//! prod, in-memory otherwise). Best-effort: the audit log + [`OrchState`] reducer remain the
+//! source of truth, so replay stays byte-identical.
 
 pub mod actor;
 pub mod commands;
 mod events;
+mod repo;
 mod state;
 
 pub use commands::{CompleteMember, FailMember, LaunchConvoy, OrchCommand};
 pub use events::OrchEvent;
+pub use repo::{InMemoryOrchRepo, OrchRepository};
 pub use state::{Convoy, ConvoyBoard, ConvoyState, Member, MemberState, OrchState};

@@ -15,8 +15,10 @@ pub mod actor;
 pub mod commands;
 pub mod refinery;
 mod events;
+mod repo;
 mod state;
 
 pub use commands::{CompleteMerge, FailMerge, MergeCommand, StartMerge, SubmitMerge};
 pub use events::{MergeEvent, MergeReadyPayload};
+pub use repo::{InMemoryMergeRepo, MergeRepository};
 pub use state::{BoardSnapshot, MergeBoard, MergeSlot, MergeSlotState, MergeState};

@@ -32,12 +32,12 @@ async fn drain(rx: &mut mpsc::Receiver<Envelope<PatrolEvent>>) -> Vec<PatrolEven
 /// actors fill out the surface.
 fn service(patrol: PatrolHandle, scope: Scope, audit: Arc<dyn AuditSink>) -> McpService {
     let (merge_tx, _merge_rx) = mpsc::channel(16);
-    let merge = gt_merge::actor::spawn(merge_tx);
+    let merge = gt_merge::actor::spawn(gt_merge::InMemoryMergeRepo::default(), merge_tx);
     let (sched_tx, _sched_rx) = mpsc::channel(16);
     let sched =
         gt_scheduling::actor::spawn(Arc::new(gt_beads::InMemoryBeads::default()), sched_tx, 4);
     let (orch_tx, _orch_rx) = mpsc::channel(16);
-    let orch = gt_orchestration::actor::spawn(orch_tx);
+    let orch = gt_orchestration::actor::spawn(gt_orchestration::InMemoryOrchRepo::default(), orch_tx);
     let (quota_tx, _quota_rx) = mpsc::channel(16);
     let quota = gt_quota::actor::spawn(quota_tx, std::collections::HashMap::new());
     McpService::new(agent_actor::spawn(8), merge, sched, patrol, orch, quota, scope, audit)
@@ -46,7 +46,7 @@ fn service(patrol: PatrolHandle, scope: Scope, audit: Arc<dyn AuditSink>) -> Mcp
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn patrol_tools_drive_shared_actor_register_then_tick_expires() {
     let (tx, mut rx) = mpsc::channel::<Envelope<PatrolEvent>>(64);
-    let patrol = patrol_actor::spawn(tx);
+    let patrol = patrol_actor::spawn(gt_patrol::InMemoryPatrolRepo::default(), tx);
 
     let audit = Arc::new(InMemoryAudit::new());
     let svc = service(patrol, Scope::admin("max"), Arc::clone(&audit) as Arc<dyn AuditSink>);
@@ -115,7 +115,7 @@ async fn patrol_tools_drive_shared_actor_register_then_tick_expires() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn patrol_heartbeat_prevents_expiry_and_scope_blocks_execute() {
     let (tx, mut rx) = mpsc::channel::<Envelope<PatrolEvent>>(64);
-    let patrol = patrol_actor::spawn(tx);
+    let patrol = patrol_actor::spawn(gt_patrol::InMemoryPatrolRepo::default(), tx);
     let audit = Arc::new(InMemoryAudit::new());
     let admin = service(
         patrol.clone(),

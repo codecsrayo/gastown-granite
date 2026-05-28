@@ -13,8 +13,11 @@ use rmcp::ServiceExt;
 
 use gt_audit::JsonlWriter;
 use gt_beads::{BeadRepository, InMemoryBeads};
+use gt_merge::InMemoryMergeRepo;
+use gt_orchestration::InMemoryOrchRepo;
+use gt_patrol::InMemoryPatrolRepo;
 use gt_root::{spawn, LogEffects, RootConfig, RootHandle, SystemClock};
-use gt_store_dolt::{DoltBeads, DoltSessions};
+use gt_store_dolt::{DoltBeads, DoltMerge, DoltOrch, DoltPatrol, DoltSessions};
 use gt_store_pg::PgAudit;
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 
@@ -35,28 +38,68 @@ async fn main() -> anyhow::Result<()> {
             dolt.ensure_schema().await?;
             let dolt_sessions = DoltSessions::connect(&url)?;
             dolt_sessions.ensure_schema().await?;
-            eprintln!("[gt-mcp] beads + sessions: Dolt @ {url}");
-            serve(Arc::new(dolt), Some(Arc::new(dolt_sessions)), log_path).await
+            let dolt_merge = DoltMerge::connect(&url)?;
+            dolt_merge.ensure_schema().await?;
+            let dolt_patrol = DoltPatrol::connect(&url)?;
+            dolt_patrol.ensure_schema().await?;
+            let dolt_orch = DoltOrch::connect(&url)?;
+            dolt_orch.ensure_schema().await?;
+            eprintln!("[gt-mcp] beads + sessions + merge/patrol/orch: Dolt @ {url}");
+            serve(
+                Arc::new(dolt),
+                Some(Arc::new(dolt_sessions)),
+                Arc::new(dolt_merge),
+                Arc::new(dolt_patrol),
+                Arc::new(dolt_orch),
+                log_path,
+            )
+            .await
         }
         None => {
             eprintln!(
-                "[gt-mcp] beads + sessions: in-memory (set GT_DOLT_URL for Dolt persistence)"
+                "[gt-mcp] domain state + sessions: in-memory (set GT_DOLT_URL for Dolt persistence)"
             );
-            serve(Arc::new(InMemoryBeads::default()), None, log_path).await
+            serve(
+                Arc::new(InMemoryBeads::default()),
+                None,
+                Arc::new(InMemoryMergeRepo::default()),
+                Arc::new(InMemoryPatrolRepo::default()),
+                Arc::new(InMemoryOrchRepo::default()),
+                log_path,
+            )
+            .await
         }
     }
 }
 
-async fn serve<R>(
+async fn serve<R, MR, PR, OR>(
     beads: Arc<R>,
     dolt_sessions: Option<Arc<DoltSessions>>,
+    merge_repo: Arc<MR>,
+    patrol_repo: Arc<PR>,
+    orch_repo: Arc<OR>,
     log_path: String,
 ) -> anyhow::Result<()>
 where
     R: BeadRepository + Send + Sync + 'static,
     Arc<R>: BeadRepository + Clone + 'static,
+    MR: gt_merge::MergeRepository + 'static,
+    Arc<MR>: gt_merge::MergeRepository + 'static,
+    PR: gt_patrol::PatrolRepository + 'static,
+    Arc<PR>: gt_patrol::PatrolRepository + 'static,
+    OR: gt_orchestration::OrchRepository + 'static,
+    Arc<OR>: gt_orchestration::OrchRepository + 'static,
 {
-    let root = spawn(beads, LogEffects, SystemClock, &log_path, RootConfig::default());
+    let root = spawn(
+        beads,
+        merge_repo,
+        patrol_repo,
+        orch_repo,
+        LogEffects,
+        SystemClock,
+        &log_path,
+        RootConfig::default(),
+    );
     let audit_task = spawn_pg_audit(&root).await;
 
     // Frontier audit lands in the same event log as the domain events. A second JsonlWriter on

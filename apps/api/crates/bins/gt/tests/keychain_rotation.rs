@@ -57,6 +57,9 @@ async fn real_probe_reaches_actor_and_rotation_flips_keychain_pointer() {
 
     let root = spawn(
         Arc::new(InMemoryBeads::default()),
+        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
+        Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
         LogEffects,
         SystemClock,
         &log_path,

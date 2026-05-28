@@ -16,8 +16,10 @@ pub mod actor;
 pub mod commands;
 pub mod expectations;
 mod events;
+mod repo;
 mod state;
 
 pub use commands::{CloseLease, Heartbeat, PatrolCommand, RegisterLease, Tick};
 pub use events::PatrolEvent;
-pub use state::{LeaseTracker, PatrolState};
+pub use repo::{InMemoryPatrolRepo, PatrolRepository};
+pub use state::{Lease, LeaseTracker, PatrolState};

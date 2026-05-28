@@ -30,11 +30,11 @@ use gt_events::{AppError, Envelope, EventKind};
 use gt_agent::actor::{self as agent_actor, AgentHandle};
 use gt_agent::AgentEvent;
 use gt_merge::actor::{self as merge_actor, MergeHandle};
-use gt_merge::MergeEvent;
+use gt_merge::{MergeEvent, MergeRepository};
 use gt_orchestration::actor::{self as orch_actor, OrchHandle};
-use gt_orchestration::OrchEvent;
+use gt_orchestration::{OrchEvent, OrchRepository};
 use gt_patrol::actor::{self as patrol_actor, PatrolHandle};
-use gt_patrol::PatrolEvent;
+use gt_patrol::{PatrolEvent, PatrolRepository};
 use gt_quota::actor::{self as quota_actor, QuotaHandle};
 use gt_quota::{InMemoryKeychain, Keychain, ModelWeights, QuotaEvent};
 use gt_scheduling::actor::{self as sched_actor, SchedHandle};
@@ -181,9 +181,14 @@ impl Default for RootConfig {
 
 /// Spawn the whole system: actors + the draining loop. `repo` is the Dolt-port (or its
 /// in-memory stand-in), `effects`/`clock` are the injected edges, `log_path` is the single
-/// audit log.
-pub fn spawn<R, FX, CK>(
+/// audit log. `merge_repo` / `patrol_repo` / `orch_repo` are the domain-state persistence
+/// ports introduced in epic hq-bdn8 — Dolt-backed when `GT_DOLT_URL` is set, in-memory
+/// otherwise.
+pub fn spawn<R, MR, PR, OR, FX, CK>(
     repo: R,
+    merge_repo: MR,
+    patrol_repo: PR,
+    orch_repo: OR,
     effects: FX,
     clock: CK,
     log_path: impl Into<PathBuf>,
@@ -191,6 +196,9 @@ pub fn spawn<R, FX, CK>(
 ) -> RootHandle<R>
 where
     R: BeadRepository + Clone + 'static,
+    MR: MergeRepository + 'static,
+    PR: PatrolRepository + 'static,
+    OR: OrchRepository + 'static,
     FX: Effects,
     CK: Clock,
 {
@@ -206,9 +214,9 @@ where
     let (agent_tx, agent_rx) = mpsc::channel::<Envelope<AgentEvent>>(256);
 
     let sched = sched_actor::spawn(repo.clone(), sched_tx, config.capacity);
-    let patrol = patrol_actor::spawn(patrol_tx);
-    let merge = merge_actor::spawn(merge_tx);
-    let orch = orch_actor::spawn(orch_tx);
+    let patrol = patrol_actor::spawn(patrol_repo, patrol_tx);
+    let merge = merge_actor::spawn(merge_repo, merge_tx);
+    let orch = orch_actor::spawn(orch_repo, orch_tx);
     let quota = quota_actor::spawn(quota_tx, config.model_weights);
     let agent = agent_actor::spawn(256);
 

@@ -31,7 +31,16 @@ async fn sling_spawns_subprocess_with_convoy_and_member() {
     let log = dir.join("events.jsonl");
 
     let (effects, quota_slot) = RealEffects::new(script.clone());
-    let root = spawn(repo, effects, SystemClock, &log, RootConfig::default());
+    let root = spawn(
+        repo,
+        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
+        Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
+        effects,
+        SystemClock,
+        &log,
+        RootConfig::default(),
+    );
     let _ = quota_slot.set(root.quota.clone());
 
     // Drive a real MemberDispatched through the orchestrator: the reactor forwards it to
@@ -61,7 +70,16 @@ async fn rotate_invokes_quota_command_chain_with_healthy_target() {
     let log = dir.join("events.jsonl");
 
     let (effects, quota_slot) = RealEffects::new(script);
-    let root = spawn(repo, effects, SystemClock, &log, RootConfig::default());
+    let root = spawn(
+        repo,
+        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
+        Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
+        effects,
+        SystemClock,
+        &log,
+        RootConfig::default(),
+    );
     let _ = quota_slot.set(root.quota.clone());
 
     // Two healthy accounts: "from" is the one the predictor flagged, "to" is the rotation
@@ -120,7 +138,16 @@ async fn rotate_with_no_healthy_target_is_a_noop() {
     let log = dir.join("events.jsonl");
 
     let (effects, quota_slot) = RealEffects::new(script);
-    let root = spawn(repo, effects, SystemClock, &log, RootConfig::default());
+    let root = spawn(
+        repo,
+        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
+        Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
+        effects,
+        SystemClock,
+        &log,
+        RootConfig::default(),
+    );
     let _ = quota_slot.set(root.quota.clone());
 
     // Only one account: no healthy target for rotation. The adapter must log and skip.

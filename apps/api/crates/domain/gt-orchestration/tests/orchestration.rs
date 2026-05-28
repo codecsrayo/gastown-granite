@@ -40,7 +40,7 @@ async fn convoy_drives_members_to_close_then_replay_matches() {
     let writer = JsonlWriter::new(&log_path);
 
     let (orch_tx, mut orch_rx) = mpsc::channel::<Envelope<OrchEvent>>(64);
-    let orch = orch_actor::spawn(orch_tx);
+    let orch = orch_actor::spawn(gt_orchestration::InMemoryOrchRepo::default(), orch_tx);
 
     // Record helper: drain one event, append it to the log, return its payload.
     macro_rules! take {
@@ -153,7 +153,7 @@ async fn convoy_member_failure_halts_then_replay_matches() {
     let writer = JsonlWriter::new(&log_path);
 
     let (orch_tx, mut orch_rx) = mpsc::channel::<Envelope<OrchEvent>>(64);
-    let orch = orch_actor::spawn(orch_tx);
+    let orch = orch_actor::spawn(gt_orchestration::InMemoryOrchRepo::default(), orch_tx);
 
     macro_rules! take {
         () => {{

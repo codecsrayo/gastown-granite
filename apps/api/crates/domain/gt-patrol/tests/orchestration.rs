@@ -32,7 +32,7 @@ async fn orchestrated_flow_with_stale_polecat_recovers_via_patrol() {
     // capacity = 1 so only one polecat in flight; forces the second dispatch to wait for
     // the lease to expire and free the slot.
     let dispatcher = sched::spawn(repo.clone(), sched_tx, 1);
-    let patroller = patrol::spawn(patrol_tx);
+    let patroller = patrol::spawn(gt_patrol::InMemoryPatrolRepo::default(), patrol_tx);
     let agent = agent_actor::spawn(32);
 
     let log_path = std::env::temp_dir()

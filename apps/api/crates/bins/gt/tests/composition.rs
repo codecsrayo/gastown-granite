@@ -128,6 +128,9 @@ async fn multi_domain_flow_through_root_replays_byte_identical() {
 
     let root = spawn(
         repo.clone(),
+        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
+        Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
         effects,
         clock.clone(),
         &log_path,

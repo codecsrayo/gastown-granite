@@ -8,6 +8,9 @@ rust-version.workspace = true
 gt-events = { path = "../gt-events" }
 gt-beads = { path = "../gt-beads" }
 gt-agent = { path = "../../domain/gt-agent" }
+gt-merge = { path = "../../domain/gt-merge" }
+gt-patrol = { path = "../../domain/gt-patrol" }
+gt-orchestration = { path = "../../domain/gt-orchestration" }
 mysql_async = { workspace = true }
 
 [dev-dependencies]

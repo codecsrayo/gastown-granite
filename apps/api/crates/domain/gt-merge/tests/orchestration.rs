@@ -43,7 +43,7 @@ async fn refinery_drives_slot_to_merged_then_replay_matches() {
     let channel = Channel::open(&root, "merge").unwrap();
 
     let (merge_tx, mut merge_rx) = mpsc::channel::<Envelope<MergeEvent>>(64);
-    let merge_handle = merge_actor::spawn(merge_tx);
+    let merge_handle = merge_actor::spawn(gt_merge::InMemoryMergeRepo::default(), merge_tx);
     refinery::spawn(channel.clone(), merge_handle.clone()).unwrap();
 
     let log_path = root.join("events.jsonl");
@@ -143,7 +143,7 @@ async fn refinery_failed_merge_records_failed_event_and_replay_matches() {
     let channel = Channel::open(&root, "merge").unwrap();
 
     let (merge_tx, mut merge_rx) = mpsc::channel::<Envelope<MergeEvent>>(64);
-    let merge_handle = merge_actor::spawn(merge_tx);
+    let merge_handle = merge_actor::spawn(gt_merge::InMemoryMergeRepo::default(), merge_tx);
     refinery::spawn(channel.clone(), merge_handle.clone()).unwrap();
 
     let log_path = root.join("events.jsonl");

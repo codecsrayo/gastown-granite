@@ -1,6 +1,10 @@
 //! Patrol actor: single owner of the live-lease tracker. The actor itself never reads the
 //! clock — the *edge* (an async tick task in the bin) reads it and passes `now_secs` on
 //! every `Heartbeat` / `Tick`. That keeps detection replay-able.
+//!
+//! Persistence (hq-03aw.7): each register/heartbeat/close/expire is mirrored into the
+//! injected [`PatrolRepository`]. Best-effort — write failures are logged, never blocking
+//! the relay. The audit log + [`crate::PatrolState`] reducer stay the source of truth.
 
 use tokio::sync::{mpsc, oneshot};
 
@@ -9,6 +13,7 @@ use gt_events::{AppError, Command, Envelope};
 use crate::commands::PatrolCommand;
 use crate::events::PatrolEvent;
 use crate::expectations::expired_leases;
+use crate::repo::PatrolRepository;
 use crate::state::LeaseTracker;
 
 pub enum PatrolMsg {
@@ -119,11 +124,29 @@ impl PatrolHandle {
     }
 }
 
+async fn persist_one<R: PatrolRepository>(repo: &R, tracker: &LeaseTracker, bead: &str) {
+    if let Some(lease) = tracker.get(bead) {
+        if let Err(e) = repo.upsert_lease(lease).await {
+            eprintln!("[gt-patrol] persist lease {bead}: {e}");
+        }
+    }
+}
+
+async fn delete_one<R: PatrolRepository>(repo: &R, bead: &str) {
+    if let Err(e) = repo.delete_lease(bead).await {
+        eprintln!("[gt-patrol] delete lease {bead}: {e}");
+    }
+}
+
 /// Spawn the patrol actor. `events` is the relay (`mpsc`) into the sync bus that the
 /// composition root drains. Every observation (Register/Heartbeat/Close) is mirrored to
 /// the log so replay reconstructs the same tracker state. `LeaseExpired` is emitted only
-/// from `Tick`, ordered by bead id for deterministic replay.
-pub fn spawn(events: mpsc::Sender<Envelope<PatrolEvent>>) -> PatrolHandle {
+/// from `Tick`, ordered by bead id for deterministic replay. `repo` mirrors the same
+/// lifecycle into the persistence port (Dolt in prod, in-memory otherwise).
+pub fn spawn<R>(repo: R, events: mpsc::Sender<Envelope<PatrolEvent>>) -> PatrolHandle
+where
+    R: PatrolRepository + 'static,
+{
     let (tx, mut rx) = mpsc::channel::<PatrolMsg>(64);
     tokio::spawn(async move {
         let mut tracker = LeaseTracker::default();
@@ -133,6 +156,7 @@ pub fn spawn(events: mpsc::Sender<Envelope<PatrolEvent>>) -> PatrolHandle {
             match msg {
                 PatrolMsg::Register { bead, worker, priority, now_secs } => {
                     tracker.register(bead.clone(), worker.clone(), priority, now_secs);
+                    persist_one(&repo, &tracker, &bead).await;
                     let _ = events
                         .send(Envelope::root(PatrolEvent::LeaseRegistered {
                             bead,
@@ -144,12 +168,16 @@ pub fn spawn(events: mpsc::Sender<Envelope<PatrolEvent>>) -> PatrolHandle {
                 }
                 PatrolMsg::Heartbeat { worker, now_secs } => {
                     tracker.heartbeat(&worker, now_secs);
+                    if let Err(e) = repo.heartbeat_worker(&worker, now_secs).await {
+                        eprintln!("[gt-patrol] persist heartbeat {worker}: {e}");
+                    }
                     let _ = events
                         .send(Envelope::root(PatrolEvent::Heartbeat { worker, now_secs }))
                         .await;
                 }
                 PatrolMsg::Close { bead } => {
                     tracker.close(&bead);
+                    delete_one(&repo, &bead).await;
                     let _ = events
                         .send(Envelope::root(PatrolEvent::LeaseClosed { bead }))
                         .await;
@@ -160,6 +188,7 @@ pub fn spawn(events: mpsc::Sender<Envelope<PatrolEvent>>) -> PatrolHandle {
                     let stale = expired_leases(&snap, now_secs, timeout_secs);
                     for lease in stale {
                         tracker.close(&lease.bead);
+                        delete_one(&repo, &lease.bead).await;
                         expired_emitted += 1;
                         let _ = events
                             .send(Envelope::root(PatrolEvent::LeaseExpired {
@@ -182,8 +211,22 @@ pub fn spawn(events: mpsc::Sender<Envelope<PatrolEvent>>) -> PatrolHandle {
                     match cmd.execute(&mut tracker) {
                         Ok(evs) => {
                             for ev in evs {
-                                if matches!(ev, PatrolEvent::LeaseExpired { .. }) {
-                                    expired_emitted += 1;
+                                match &ev {
+                                    PatrolEvent::LeaseRegistered { bead, .. } => {
+                                        persist_one(&repo, &tracker, bead).await;
+                                    }
+                                    PatrolEvent::Heartbeat { worker, now_secs } => {
+                                        if let Err(e) = repo.heartbeat_worker(worker, *now_secs).await {
+                                            eprintln!("[gt-patrol] persist heartbeat {worker}: {e}");
+                                        }
+                                    }
+                                    PatrolEvent::LeaseClosed { bead } => {
+                                        delete_one(&repo, bead).await;
+                                    }
+                                    PatrolEvent::LeaseExpired { bead, .. } => {
+                                        expired_emitted += 1;
+                                        delete_one(&repo, bead).await;
+                                    }
                                 }
                                 let _ = events.send(Envelope::root(ev)).await;
                             }

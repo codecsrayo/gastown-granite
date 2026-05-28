@@ -31,7 +31,7 @@ async fn mcp_drives_merge_slot_through_lifecycle_and_emits_events() {
     // The actor's relay: every applied transition is emitted here. We drain it at the end to
     // assert the exact event sequence the MCP calls produced.
     let (merge_tx, mut merge_rx) = tokio::sync::mpsc::channel::<Envelope<MergeEvent>>(16);
-    let merge = actor::spawn(merge_tx);
+    let merge = actor::spawn(gt_merge::InMemoryMergeRepo::default(), merge_tx);
 
     let watcher_audit = Arc::new(InMemoryAudit::new());
     let watcher = McpService::new(
@@ -200,13 +200,13 @@ fn actor_sched() -> gt_scheduling::actor::SchedHandle {
 /// A throwaway patrol actor so the service has its full surface; relay receiver dropped.
 fn actor_patrol() -> gt_patrol::actor::PatrolHandle {
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
-    gt_patrol::actor::spawn(tx)
+    gt_patrol::actor::spawn(gt_patrol::InMemoryPatrolRepo::default(), tx)
 }
 
 /// A throwaway orchestration actor so the service has its full surface; relay receiver dropped.
 fn actor_orch() -> gt_orchestration::actor::OrchHandle {
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
-    gt_orchestration::actor::spawn(tx)
+    gt_orchestration::actor::spawn(gt_orchestration::InMemoryOrchRepo::default(), tx)
 }
 
 /// A throwaway quota actor so the service has its full surface; relay receiver dropped.
