@@ -9,8 +9,10 @@ mod repo;
 mod state;
 
 pub mod actor;
+pub mod commands;
 pub mod supervisor;
 
+pub use commands::{AddSession, AgentCommand, RemoveSession, TransitionSession};
 pub use events::AgentEvent;
 pub use repo::{InMemorySessions, SessionQueries};
 pub use state::{Session, SessionRegistry, SessionState};
