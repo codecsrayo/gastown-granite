@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use serde::Serialize;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 
 use gt_audit::{EventRecord, EventStore, JsonlWriter};
@@ -103,6 +103,11 @@ pub struct RootHandle<R: BeadRepository + Clone> {
     pub repo: R,
     log_path: PathBuf,
     dead_count: Arc<AtomicUsize>,
+    /// Broadcast hub for every appended [`EventRecord`]. Read-side consumers (notably
+    /// `gt-web`'s SSE) call [`RootHandle::subscribe_events`] per connection. The reactor is
+    /// the single writer; readers that lag get `Lagged` and resync from the snapshot, exactly
+    /// like the doc's bus -> broadcast -> SSE bridge (`docs/07-frontend.md`).
+    events: broadcast::Sender<EventRecord>,
     join: JoinHandle<()>,
 }
 
@@ -118,6 +123,22 @@ impl<R: BeadRepository + Clone> RootHandle<R> {
         self.dead_count.load(Ordering::SeqCst)
     }
 
+    /// Subscribe to the live event stream. Each subscriber gets its own [`broadcast::Receiver`];
+    /// drop it to unsubscribe. Used by `gt-web` to feed an SSE connection.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<EventRecord> {
+        self.events.subscribe()
+    }
+
+    /// Clone of the broadcast sender — `gt-web` needs it so each request can subscribe lazily.
+    pub fn events_sender(&self) -> broadcast::Sender<EventRecord> {
+        self.events.clone()
+    }
+
+    /// Number of current live subscribers — useful for tests and `/health`-style endpoints.
+    pub fn event_subscribers(&self) -> usize {
+        self.events.receiver_count()
+    }
+
     /// Stop the loop. The actors stop when their handles drop.
     pub fn shutdown(self) {
         self.join.abort();
@@ -130,6 +151,8 @@ pub struct RootConfig {
     pub capacity: usize,
     /// Per-model cost weights for the quota domain (empty = identity fallback).
     pub model_weights: HashMap<String, ModelWeights>,
+    /// Ring size of the event broadcast hub. Default 1024 matches `docs/07-frontend.md`.
+    pub event_buffer: usize,
 }
 
 impl Default for RootConfig {
@@ -137,6 +160,7 @@ impl Default for RootConfig {
         Self {
             capacity: 4,
             model_weights: HashMap::new(),
+            event_buffer: 1024,
         }
     }
 }
@@ -175,6 +199,7 @@ where
     let agent = agent_actor::spawn(256);
 
     let dead_count = Arc::new(AtomicUsize::new(0));
+    let (events_tx, _) = broadcast::channel::<EventRecord>(config.event_buffer.max(1));
 
     let mut reactor = Reactor {
         sched: sched.clone(),
@@ -187,6 +212,7 @@ where
         prio: HashMap::new(),
         dead: Vec::new(),
         dead_count: dead_count.clone(),
+        events: events_tx.clone(),
     };
 
     let mut sched_rx = sched_rx;
@@ -221,6 +247,7 @@ where
         repo,
         log_path,
         dead_count,
+        events: events_tx,
         join,
     }
 }
@@ -242,6 +269,9 @@ struct Reactor<R, FX, CK> {
     /// kernel's [`DeadLetterEntry`] type so nothing is silently dropped.
     dead: Vec<DeadLetterEntry<GtEvent>>,
     dead_count: Arc<AtomicUsize>,
+    /// Live broadcast fan-out. Each appended record is also sent here so SSE subscribers see
+    /// it; a send error simply means no listeners — not a failure (it is normal during boot).
+    events: broadcast::Sender<EventRecord>,
 }
 
 impl<R, FX, CK> Reactor<R, FX, CK>
@@ -261,6 +291,9 @@ where
                 if let Err(e) = self.writer.append(&rec) {
                     self.dead_error(env.kind(), e);
                 }
+                // Fan-out to live subscribers (SSE). Ignored if there are none; the log
+                // remains the source of truth and the snapshot endpoints still cover replay.
+                let _ = self.events.send(rec);
             }
             Err(e) => self.dead_error(env.kind(), e),
         }

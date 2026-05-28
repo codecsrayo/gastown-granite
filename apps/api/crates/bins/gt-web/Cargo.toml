@@ -1,0 +1,38 @@
+[package]
+name = "gt-web"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+# Backend-only API + SSE for the browser frontend (docs/07-frontend.md). NOT the dashboard
+# UI — that lives in apps/town under its own SvelteKit plan. The crate is the read-side
+# composition root: it cables the running root's event broadcast into SSE and exposes the
+# snapshot endpoints over Axum. Generic over the bead/session ports — same isolation rule
+# as the rest of the workspace.
+[lib]
+name = "gt_web"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gt-web"
+path = "src/main.rs"
+
+[dependencies]
+# The composition root: gt-web subscribes to its event broadcast.
+gt = { path = "../gt" }
+gt-audit = { path = "../../kernel/gt-audit" }
+gt-beads = { path = "../../kernel/gt-beads" }
+gt-events = { path = "../../kernel/gt-events" }
+gt-agent = { path = "../../domain/gt-agent" }
+
+axum = "0.7"
+tokio = { workspace = true, features = ["signal", "net"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+ulid.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
+tokio = { workspace = true, features = ["signal", "net", "macros", "rt-multi-thread"] }

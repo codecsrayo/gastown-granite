@@ -209,7 +209,28 @@ Mismo patrón aplicado en orden:
    completion + convoy launch → handoff → close`), y verifica que `GtState` reconstruido
    por `replay_gt` es **byte-idéntico** al replay por prefijo dominio a dominio (preserva
    el gate del Paso 3 sin perder la unificación).
-6. **`gt-web`** (cuando ya hay datos significativos que exponer — ahora sí los hay).
+6. **`gt-web`** ✅ DONE — `bins/gt-web` (Axum backend, lado lectura). El crate cablea
+   `gt-agent::SessionQueries`, `gt-beads::BeadRepository` y el broadcast del root en cuatro
+   endpoints HTTP — exactamente las dos naturalezas de dato del `docs/07-frontend.md`:
+   snapshot (`GET /api/sessions`, `GET /api/beads?status=…`) y stream (`GET /api/stream`
+   como SSE), más el comando de escritura `POST /api/nudge` que publica
+   `AgentEvent::Heartbeat` en el relay del agente (CQRS: lectura/escritura separadas, el
+   navegador nunca habla con Dolt/Postgres directo). El puente bus→broadcast→SSE vive
+   dentro del root (Paso 6.e extendido): el reactor que ya es **el único escritor** del log
+   también `tx.send(rec)` a un `tokio::sync::broadcast<EventRecord>`; los SSE consumidores
+   llaman `RootHandle::subscribe_events()` y reciben byte-idéntico al log (regla "shared
+   `EventRecord`"). Aislamiento: `gt-web` depende de `bins/gt`, `gt-agent`, `gt-beads`,
+   `gt-audit` y `gt-events`; no toca ningún otro dominio. Genérico sobre `R: BeadRepository`
+   y `SQ: SessionQueries` — la prod plug-uea adaptadores Dolt/PG, los tests in-memory; el
+   DTO traduce a JSON estable (`SessionDto`, `BeadDto`) sin filtrar tipos internos. Para
+   ese acople el puerto `SessionQueries` migró a RPITIT con `+ Send` (mismo estilo que
+   `BeadRepository`), porque `axum` exige futuros `Send`. Crate: `crates/bins/gt-web`.
+   Gates: `snapshot_endpoints_serve_dto_rows` (REST + 400 ante `status` desconocido),
+   `sse_stream_delivers_event_driven_through_root` (evento empujado por el relay del root
+   aparece como frame `agent.spawned` en el SSE) y `nudge_emits_heartbeat_visible_via_sse`
+   (CQRS end-to-end: `POST /api/nudge` → log → broadcast → SSE → cliente). **Alcance
+   explícito**: este crate es BACKEND only — la UI del navegador (`internal/web/`,
+   `dashboard.js`, etc.) NO se migra; ese trabajo vive en `apps/town` bajo SvelteKit.
 7. **`gt-feed`** + adaptador final para el log.
 
 Cada uno repite la receta: enum owned, actor, repo trait, test con repo in-memory,
@@ -220,6 +241,7 @@ adaptador con BD real, los dos tests deben pasar, replay reconstruye.
 - **No empezar por `gt-quota`.** El `keychain` platform-specific consume un día sin
   validar nada arquitectónico.
 - **No empezar por `gt-web`.** No hay datos que exponer; queda como pieza ornamental.
+  *(Histórico — los Pasos 6.a–6.f ya entregaron los datos suficientes y `gt-web` aterrizó.)*
 - **No portear el schema completo de Dolt antes del Paso 2.** La forma del repo va a
   cambiar cuando se use; congelar especulativamente cuesta caro.
 - **No saltarse el gate del Paso 3.** El replay determinista es lo que justifica el núcleo

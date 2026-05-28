@@ -21,6 +21,7 @@ members = [
     "crates/domain/gt-quota",
     "crates/domain/gt-orchestration",
     "crates/bins/gt",
+    "crates/bins/gt-web",
 ]
 
 [workspace.package]
