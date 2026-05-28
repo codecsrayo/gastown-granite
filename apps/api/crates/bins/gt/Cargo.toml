@@ -30,6 +30,10 @@ gt-quota = { path = "../../domain/gt-quota" }
 gt-orchestration = { path = "../../domain/gt-orchestration" }
 # Pure consumer projection of the audit log; the root folds it into `GtState.feed`.
 gt-feed = { path = "../../domain/gt-feed" }
+# Real persistence adapters wired in by the bin when env URLs are set; otherwise the bin
+# falls back to the in-memory port for host runs without Dolt/Postgres.
+gt-store-dolt = { path = "../../kernel/gt-store-dolt" }
+gt-store-pg = { path = "../../kernel/gt-store-pg" }
 # `signal` (ctrl_c) is bin-only; the workspace tokio set stays minimal for the libs.
 tokio = { workspace = true, features = ["signal"] }
 serde.workspace = true

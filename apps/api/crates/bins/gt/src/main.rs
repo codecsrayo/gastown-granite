@@ -1,17 +1,20 @@
 //! `gt` binary — the thin boot. Per `docs/01-architecture.md`, the **single** tokio runtime
 //! is created here, in `bins/`; the domain crates never create one, they receive handles.
 //!
-//! This wires the in-memory repo + the logging effects/system clock as a runnable skeleton.
-//! Swapping in the Dolt adapter (`gt-store-dolt`) and the real subprocess/rotation effects is
-//! an edge follow-up; the composition wiring they plug into is what this crate delivers.
+//! Persistence (hq-j9ou): when `GT_DOLT_URL` is set, the bead repo is the real Dolt-backed
+//! `gt-store-dolt::DoltBeads`; otherwise the bin falls back to the in-memory port so host
+//! runs without a Dolt server still work end-to-end. When `GT_PG_AUDIT_URL` is set, the
+//! same boot also spawns the Postgres audit relay (canonical EventStore per docs/04).
+//! The local `.events.jsonl` keeps writing in both modes as a spill/fallback.
 
 use std::sync::Arc;
 
-use gt_beads::InMemoryBeads;
-use gt_root::{spawn, LogEffects, RootConfig, SystemClock};
+use gt_beads::{BeadRepository, InMemoryBeads};
+use gt_root::{spawn, LogEffects, RootConfig, RootHandle, SystemClock};
+use gt_store_dolt::DoltBeads;
+use gt_store_pg::PgAudit;
 
 fn main() {
-    // One runtime for the whole process.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -21,22 +24,79 @@ fn main() {
         let log_path = std::env::var("GT_EVENT_LOG")
             .unwrap_or_else(|_| "/tmp/gt.events.jsonl".to_string());
 
-        let repo = Arc::new(InMemoryBeads::default());
-        let root = spawn(
-            repo,
-            LogEffects,
-            SystemClock,
-            &log_path,
-            RootConfig::default(),
-        );
-
-        eprintln!("[gt] composition root up — event log: {}", root.log_path().display());
-        eprintln!("[gt] (edges: scheduler/patrol/merge/quota/orchestration actors live; drive via handles)");
-
-        // Idle until interrupted: the actors and the draining loop run in the background;
-        // the real edges (timers, probes, the channel watcher, the API) push work in.
-        let _ = tokio::signal::ctrl_c().await;
-        eprintln!("[gt] shutting down (dead-letters: {})", root.dead_letters());
-        root.shutdown();
+        match std::env::var("GT_DOLT_URL").ok() {
+            Some(url) => {
+                let dolt = DoltBeads::connect(&url).expect("connect Dolt");
+                dolt.ensure_schema().await.expect("Dolt ensure_schema");
+                eprintln!("[gt] beads: Dolt @ {url}");
+                run(Arc::new(dolt), &log_path).await;
+            }
+            None => {
+                eprintln!("[gt] beads: in-memory (set GT_DOLT_URL for Dolt persistence)");
+                run(Arc::new(InMemoryBeads::default()), &log_path).await;
+            }
+        }
     });
+}
+
+async fn run<R>(repo: Arc<R>, log_path: &str)
+where
+    R: BeadRepository + 'static,
+    Arc<R>: BeadRepository + Clone + 'static,
+{
+    let root = spawn(repo, LogEffects, SystemClock, log_path, RootConfig::default());
+
+    let audit_task = spawn_pg_audit(&root).await;
+
+    eprintln!(
+        "[gt] composition root up — event log: {}",
+        root.log_path().display()
+    );
+    eprintln!("[gt] (edges: scheduler/patrol/merge/quota/orchestration actors live; drive via handles)");
+
+    let _ = tokio::signal::ctrl_c().await;
+    eprintln!("[gt] shutting down (dead-letters: {})", root.dead_letters());
+    if let Some(task) = audit_task {
+        task.abort();
+    }
+    root.shutdown();
+}
+
+/// If `GT_PG_AUDIT_URL` is set, drain every appended `EventRecord` into the Postgres audit
+/// table. Returns the spawned task so the bin can abort it on shutdown. The relay is
+/// idempotent (`INSERT ... ON CONFLICT DO NOTHING` on `event_id`), so a transient PG outage
+/// + restart is at-least-once → exactly-once at the store.
+async fn spawn_pg_audit<R>(root: &RootHandle<R>) -> Option<tokio::task::JoinHandle<()>>
+where
+    R: BeadRepository + Clone + 'static,
+{
+    let url = std::env::var("GT_PG_AUDIT_URL").ok()?;
+    let audit = match PgAudit::connect(&url).await {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("[gt] PG audit disabled — connect failed: {e}");
+            return None;
+        }
+    };
+    if let Err(e) = gt_store_pg::ensure_schema(audit.pool()).await {
+        eprintln!("[gt] PG audit disabled — migrations failed: {e}");
+        return None;
+    }
+    eprintln!("[gt] audit: Postgres @ {url}");
+    let mut rx = root.subscribe_events();
+    Some(tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(rec) => {
+                    if let Err(e) = audit.append(&rec).await {
+                        eprintln!("[gt] PG audit append failed ({}): {e}", rec.kind);
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    eprintln!("[gt] PG audit lagged by {n} events (catching up)");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    }))
 }

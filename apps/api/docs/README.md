@@ -56,9 +56,10 @@ es la especificación de referencia.
 > | 6.f.1 | `gt-mcp` vertical slice (Command retrofit on gt-agent + stdio JSON-RPC, scope auth, audit) | DONE | — | hq-b6pi |
 > | 6.f.2 | `gt-mcp` swap to official `rmcp` SDK (schemars-derived schemas, `#[tool_router]`) | DONE | — | hq-c3hb |
 > | 6.g | `gt-feed` (consumidor puro: Curator/Problems/View, replay byte-idéntico, wired en `GtState.feed` via `replay_gt`) | DONE | — | hq-mc72.8 |
+> | 6.f.13 | v1 operational: persistence wired in bins (DoltBeads + PgAudit opt-in via env) | DONE | — | hq-j9ou |
 > | 6.h+ | resto de `gt-mcp` (otros dominios), adaptadores edge real | PLANEADO | — | — |
 >
-> Estado global: **Paso 6.g (`gt-feed` consumidor puro) DONE** (al 2026-05-27). Mantén esta tabla viva.
+> Estado global: **Paso 6.f.13 (persistencia real cableada en bins) DONE** (al 2026-05-28). Mantén esta tabla viva.
 
 ---
 

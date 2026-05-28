@@ -24,6 +24,9 @@ gt-audit = { path = "../../kernel/gt-audit" }
 gt-beads = { path = "../../kernel/gt-beads" }
 gt-events = { path = "../../kernel/gt-events" }
 gt-agent = { path = "../../domain/gt-agent" }
+# Real persistence adapters: opt-in via env (GT_DOLT_URL / GT_PG_AUDIT_URL).
+gt-store-dolt = { path = "../../kernel/gt-store-dolt" }
+gt-store-pg = { path = "../../kernel/gt-store-pg" }
 
 axum = "0.7"
 tokio = { workspace = true, features = ["signal", "net"] }
