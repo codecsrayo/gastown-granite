@@ -285,17 +285,23 @@ func (c *AgentBeadsCheck) Fix(ctx *CheckContext) error {
 			return nil
 		}
 
-		// Not in issues or open wisps — check if it exists but is CLOSED
-		if issue, err := bd.Show(id); err == nil && issue != nil {
+		// Not in issues or open wisps — check if it exists but is CLOSED.
+		// Agent beads live in the town DB, but the bd instance passed here may be
+		// rig-level. Routing would send Show/Update to the rig DB where the bead
+		// doesn't exist (ErrNotFound), causing CreateAgentBead to fail on the
+		// UNIQUE constraint and leaving the bead closed forever. ForAgentBead()
+		// bypasses prefix routing and targets the town DB directly.
+		agentBd := bd.ForAgentBead()
+		if issue, err := agentBd.Show(id); err == nil && issue != nil {
 			// Bead exists but is closed — REOPEN it instead of recreating
 			if issue.Status == "closed" {
 				openStatus := "open"
-				if err := bd.Update(id, beads.UpdateOptions{Status: &openStatus}); err != nil {
+				if err := agentBd.Update(id, beads.UpdateOptions{Status: &openStatus}); err != nil {
 					return fmt.Errorf("reopening closed agent bead %s: %w", id, err)
 				}
 				// Also ensure it has the gt:agent label
 				if !beads.HasLabel(issue, "gt:agent") {
-					_ = bd.Update(id, beads.UpdateOptions{AddLabels: []string{"gt:agent"}})
+					_ = agentBd.Update(id, beads.UpdateOptions{AddLabels: []string{"gt:agent"}})
 				}
 				return nil
 			}

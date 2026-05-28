@@ -285,6 +285,243 @@ esac
 	}
 }
 
+// TestAgentBeadsExistCheck_FixReopensClosedBead verifies that Fix() reopens a
+// closed agent bead when the polecat worktree is present, instead of trying to
+// create a duplicate. This tests the convergence requirement: after --fix, the
+// agent-beads-exist check should pass.
+func TestAgentBeadsExistCheck_FixReopensClosedBead(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	beadsDir := filepath.Join(tmpDir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	routesContent := `{"prefix":"gs-","path":"gastown/mayor/rig"}` + "\n"
+	if err := os.WriteFile(filepath.Join(beadsDir, "routes.jsonl"), []byte(routesContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "gastown", "mayor", "rig", ".beads"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Polecat directory present (worktree alive)
+	if err := os.MkdirAll(filepath.Join(tmpDir, "gastown", "polecats", "scout", ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	logFile := filepath.Join(tmpDir, "bd.log")
+	binDir := filepath.Join(tmpDir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	bdScript := filepath.Join(binDir, "bd")
+	// fake bd: list returns no open beads, show returns a closed bead for the
+	// polecat ID, update records the call, create would indicate a bug.
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+
+logfile="` + logFile + `"
+
+args=()
+for arg in "$@"; do
+  if [[ "$arg" == --allow-stale ]]; then
+    continue
+  fi
+  args+=("$arg")
+done
+
+cmd=""
+idx=0
+for i in "${!args[@]}"; do
+  if [[ "${args[$i]}" != -* ]]; then
+    cmd="${args[$i]}"
+    idx=$i
+    break
+  fi
+done
+
+if [[ -z "$cmd" ]]; then
+  exit 0
+fi
+
+rest=("${args[@]:$((idx + 1))}")
+
+case "$cmd" in
+  list)
+    printf '[]\n'
+    ;;
+  mol)
+    if [[ "${rest[0]:-}" == "wisp" && "${rest[1]:-}" == "list" ]]; then
+      printf '{"wisps":[]}\n'
+      exit 0
+    fi
+    exit 1
+    ;;
+  show)
+    # Find the bead ID argument (first non-flag)
+    bid=""
+    for arg in "${rest[@]}"; do
+      if [[ "$arg" != -* ]]; then
+        bid="$arg"
+        break
+      fi
+    done
+    if [[ "$bid" == "gs-gastown-polecat-scout" ]]; then
+      printf '[{"id":"gs-gastown-polecat-scout","status":"closed","labels":["gt:agent"],"title":"Polecat scout"}]\n'
+    else
+      exit 1
+    fi
+    ;;
+  create)
+    id=""
+    title=""
+    for arg in "${rest[@]}"; do
+      case "$arg" in
+        --id=*) id="${arg#--id=}" ;;
+        --title=*) title="${arg#--title=}" ;;
+      esac
+    done
+    printf 'create %s\n' "$id" >> "$logfile"
+    printf '{"id":"%s","title":"%s","status":"open","labels":["gt:agent"]}\n' "$id" "$title"
+    ;;
+  update)
+    if [[ ${#rest[@]} -gt 0 ]]; then
+      printf 'update %s\n' "${rest[0]}" >> "$logfile"
+    fi
+    printf '{}'
+    printf '\n'
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`
+	if err := os.WriteFile(bdScript, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fmt.Sprintf("%s%c%s", binDir, os.PathListSeparator, os.Getenv("PATH")))
+
+	check := NewAgentBeadsCheck()
+	ctx := &CheckContext{TownRoot: tmpDir, RigName: "gastown"}
+	if err := check.Fix(ctx); err != nil {
+		t.Logf("Fix() returned error (may be expected for non-polecat beads): %v", err)
+	}
+
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("reading fake bd log: %v", err)
+	}
+	log := string(data)
+
+	if strings.Contains(log, "create gs-gastown-polecat-scout") {
+		t.Errorf("Fix() must not create a duplicate of a closed bead; log: %q", log)
+	}
+	if !strings.Contains(log, "update gs-gastown-polecat-scout") {
+		t.Errorf("Fix() must reopen closed bead via update; log: %q", log)
+	}
+}
+
+// TestAgentBeadsExistCheck_AbsentWorktreeNotMissing verifies that a closed agent
+// bead for a polecat whose worktree directory does not exist is NOT reported as
+// missing by the check. "bead closed + worktree absent → not counted missing".
+func TestAgentBeadsExistCheck_AbsentWorktreeNotMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	beadsDir := filepath.Join(tmpDir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	routesContent := `{"prefix":"gs-","path":"gastown/mayor/rig"}` + "\n"
+	if err := os.WriteFile(filepath.Join(beadsDir, "routes.jsonl"), []byte(routesContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "gastown", "mayor", "rig", ".beads"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// NO polecat directory — worktree is absent (simulate nuked polecat)
+
+	binDir := filepath.Join(tmpDir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	bdScript := filepath.Join(binDir, "bd")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+
+args=()
+for arg in "$@"; do
+  if [[ "$arg" == --allow-stale ]]; then
+    continue
+  fi
+  args+=("$arg")
+done
+
+cmd=""
+idx=0
+for i in "${!args[@]}"; do
+  if [[ "${args[$i]}" != -* ]]; then
+    cmd="${args[$i]}"
+    idx=$i
+    break
+  fi
+done
+
+if [[ -z "$cmd" ]]; then
+  exit 0
+fi
+
+rest=("${args[@]:$((idx + 1))}")
+
+case "$cmd" in
+  list)
+    printf '[]\n'
+    ;;
+  mol)
+    if [[ "${rest[0]:-}" == "wisp" && "${rest[1]:-}" == "list" ]]; then
+      printf '{"wisps":[]}\n'
+      exit 0
+    fi
+    exit 1
+    ;;
+  show)
+    # The closed polecat bead exists in the DB but the worktree is absent.
+    bid=""
+    for arg in "${rest[@]}"; do
+      if [[ "$arg" != -* ]]; then
+        bid="$arg"
+        break
+      fi
+    done
+    if [[ "$bid" == "gs-gastown-polecat-scout" ]]; then
+      printf '[{"id":"gs-gastown-polecat-scout","status":"closed","labels":["gt:agent"],"title":"Polecat scout"}]\n'
+    else
+      exit 1
+    fi
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`
+	if err := os.WriteFile(bdScript, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fmt.Sprintf("%s%c%s", binDir, os.PathListSeparator, os.Getenv("PATH")))
+
+	check := NewAgentBeadsCheck()
+	ctx := &CheckContext{TownRoot: tmpDir, RigName: "gastown"}
+	result := check.Run(ctx)
+
+	// The closed polecat bead for absent worktree must NOT appear in missing
+	for _, detail := range result.Details {
+		if detail == "gs-gastown-polecat-scout" {
+			t.Errorf("closed bead for absent polecat worktree must not be counted missing, got details: %v", result.Details)
+		}
+	}
+	t.Logf("Result: status=%v, message=%s, details=%v", result.Status, result.Message, result.Details)
+}
+
 // TestListCrewWorkers_FiltersWorktrees verifies that listCrewWorkers skips
 // git worktrees (directories where .git is a file) and only returns canonical
 // crew workers (where .git is a directory). This is the fix for GH#2767.
