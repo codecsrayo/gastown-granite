@@ -20,6 +20,7 @@ use gt_audit::EventRecord;
 use gt_events::{AppError, EventKind};
 
 use gt_agent::{AgentEvent, SessionRegistry};
+use gt_feed::{Curator, FeedState};
 use gt_merge::{MergeEvent, MergeState};
 use gt_orchestration::{OrchEvent, OrchState};
 use gt_patrol::{PatrolEvent, PatrolState};
@@ -96,6 +97,11 @@ impl GtEvent {
 /// The aggregate state of the whole system: one field per domain reducer. Each field is
 /// rebuilt only from its own domain's events (folded by [`GtState::apply`]); the domains
 /// stay isolated even inside the unifier.
+///
+/// `feed` is the type-erased projection (`gt-feed`, Paso 6.g): a pure consumer of the log,
+/// independent of every domain reducer. It is rebuilt by [`replay_gt`] from the raw
+/// `EventRecord`s, not from `GtEvent` — that keeps `gt-feed` decoupled from the typed enum
+/// and lets it observe events whose domain prefix is unknown to the unifier.
 #[derive(Debug, Default)]
 pub struct GtState {
     pub agent: SessionRegistry,
@@ -104,6 +110,7 @@ pub struct GtState {
     pub merge: MergeState,
     pub quota: QuotaState,
     pub orch: OrchState,
+    pub feed: FeedState,
 }
 
 impl GtState {
@@ -124,9 +131,14 @@ impl GtState {
 /// Rebuild the entire system state from the single audit log. Decodes each record into a
 /// `GtEvent` by its domain prefix and folds it. Same input → same `GtState`, byte-for-byte:
 /// the Paso 3 determinism gate, now across all domains at once.
+///
+/// The feed projection is folded in the same loop straight from the raw record — it is the
+/// type-erased view the TUI consumes, and folding it here makes the Paso 6.g gate ride along
+/// with the existing replay: same log → same `GtState.feed`.
 pub fn replay_gt(records: &[EventRecord]) -> Result<GtState, AppError> {
     let mut state = GtState::default();
     for rec in records {
+        Curator::apply(&mut state.feed, rec);
         let event = GtEvent::from_record(rec)?;
         state.apply(&event);
     }

@@ -28,9 +28,12 @@ gt-patrol = { path = "../../domain/gt-patrol" }
 gt-merge = { path = "../../domain/gt-merge" }
 gt-quota = { path = "../../domain/gt-quota" }
 gt-orchestration = { path = "../../domain/gt-orchestration" }
+# Pure consumer projection of the audit log; the root folds it into `GtState.feed`.
+gt-feed = { path = "../../domain/gt-feed" }
 # `signal` (ctrl_c) is bin-only; the workspace tokio set stays minimal for the libs.
 tokio = { workspace = true, features = ["signal"] }
 serde.workspace = true
 
 [dev-dependencies]
 ulid.workspace = true
+serde_json.workspace = true

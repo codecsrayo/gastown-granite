@@ -274,6 +274,27 @@ async fn multi_domain_flow_through_root_replays_byte_identical() {
             .unwrap_or_else(|e| panic!("record {} did not decode through GtEvent: {e}", r.kind));
     }
 
+    // --- Paso 6.g gate: gt-feed projection rebuilds byte-identically -------------------
+    // The feed is a pure consumer (`docs/02-tree.md` L129-134) and lives in `GtState.feed`.
+    // Two replays of the same log must yield identical `FeedState`s, and the unified replay
+    // must agree with a standalone `Curator::fold` over the same records.
+    let feed_unified = replay_gt(&records).unwrap().feed;
+    let feed_again = replay_gt(&records).unwrap().feed;
+    assert_eq!(feed_unified, feed_again, "feed must replay deterministically");
+    let feed_standalone = gt_feed::Curator::fold(&records);
+    assert_eq!(
+        feed_unified, feed_standalone,
+        "unified feed must match standalone Curator::fold",
+    );
+    assert_eq!(
+        feed_unified.total_events as usize,
+        records.len(),
+        "feed total must cover every record",
+    );
+    let feed_a = serde_json::to_string(&feed_unified).unwrap();
+    let feed_b = serde_json::to_string(&feed_again).unwrap();
+    assert_eq!(feed_a, feed_b, "serialized FeedState must be byte-identical");
+
     let _ = std::fs::remove_file(&log_path);
     root.shutdown();
 }
