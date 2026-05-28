@@ -20,6 +20,7 @@ members = [
     "crates/domain/gt-merge",
     "crates/domain/gt-quota",
     "crates/domain/gt-orchestration",
+    "crates/domain/gt-feed",
     "crates/bins/gt",
     "crates/bins/gt-web",
     "crates/bins/gt-mcp",

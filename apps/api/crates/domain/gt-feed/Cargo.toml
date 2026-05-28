@@ -1,0 +1,16 @@
+[package]
+name = "gt-feed"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+# CONSUMIDOR PURO del log de eventos. Solo depende del kernel (gt-audit / gt-events).
+# No conoce dominios — opera sobre EventRecord type-erased (kind + payload JSON).
+[dependencies]
+gt-audit = { path = "../../kernel/gt-audit" }
+gt-events = { path = "../../kernel/gt-events" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+time.workspace = true
