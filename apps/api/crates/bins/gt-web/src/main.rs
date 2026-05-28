@@ -33,13 +33,16 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gt_agent::{InMemorySessions, SessionQueries};
+use gt_agent::{InMemorySessions, SessionQueries, SessionWriter};
 use gt_audit::JsonlWriter;
 use gt_beads::{BeadRepository, InMemoryBeads};
 use gt_merge::{InMemoryMergeRepo, MergeRepository};
 use gt_orchestration::{InMemoryOrchRepo, OrchRepository};
 use gt_patrol::{InMemoryPatrolRepo, PatrolRepository};
-use gt_root::{spawn, RealEffects, RootConfig, RootHandle, SystemClock};
+use gt_root::{
+    load_state, spawn_hydrated, spawn_sessions_projector, RealEffects, RootConfig, RootHandle,
+    SystemClock,
+};
 use gt_store_dolt::{DoltBeads, DoltMerge, DoltOrch, DoltPatrol, DoltSessions};
 use gt_store_pg::PgAudit;
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
@@ -184,7 +187,7 @@ async fn serve<R, SQ, MR, PR, OR>(
 ) where
     R: BeadRepository + Send + Sync + 'static,
     Arc<R>: BeadRepository + Clone + 'static,
-    SQ: SessionQueries + Send + Sync + 'static,
+    SQ: SessionQueries + SessionWriter + Send + Sync + 'static,
     MR: MergeRepository + 'static,
     Arc<MR>: MergeRepository + 'static,
     PR: PatrolRepository + 'static,
@@ -193,7 +196,28 @@ async fn serve<R, SQ, MR, PR, OR>(
     Arc<OR>: OrchRepository + 'static,
 {
     let (effects, quota_slot) = RealEffects::new(gt_bin);
-    let root = spawn(
+
+    // Boot hydration (hq-8iur.1) — match the gt bin so a gt-web restart restores the same
+    // in-flight state from the shared event log before serving the read-side.
+    let hydration = match load_state(log_path) {
+        Ok(h) => {
+            eprintln!(
+                "[gt-web] hydrated from {} records: {} merge slots, {} patrol leases, {} convoys, {} accounts",
+                h.records_folded,
+                h.state.merge.board.len(),
+                h.state.patrol.tracker.len(),
+                h.state.orch.convoys.len(),
+                h.state.quota.accounts.len(),
+            );
+            h
+        }
+        Err(e) => {
+            eprintln!("[gt-web] hydration skipped — log load failed: {e}");
+            Default::default()
+        }
+    };
+
+    let root = spawn_hydrated(
         beads.clone(),
         merge_repo,
         patrol_repo,
@@ -202,8 +226,14 @@ async fn serve<R, SQ, MR, PR, OR>(
         SystemClock,
         log_path,
         RootConfig::default(),
+        hydration,
     );
     let _ = quota_slot.set(root.quota.clone());
+
+    // Sessions write-path (hq-8iur.2): mirror AgentEvent lifecycle into the same sessions
+    // store the read-side serves. Idempotent upserts make running it here (and in the `gt`
+    // bin) safe — at-least-once delivery, REPLACE/UPDATE by id.
+    let sessions_projector = spawn_sessions_projector(&root, sessions.clone());
 
     let audit_task = pg_audit.as_ref().map(|a| {
         let rx = root.subscribe_events();
@@ -239,8 +269,10 @@ async fn serve<R, SQ, MR, PR, OR>(
 
     eprintln!("[gt-web] HTTP listener stopped — draining background tasks");
     // Stop the reactor first: that drops its broadcast Sender, which signals the audit
-    // consumer to drain and exit cleanly via `RecvError::Closed`.
+    // consumer and the sessions projector to drain and exit cleanly via `RecvError::Closed`.
     root.shutdown();
+    // Both background consumers exit on broadcast `Closed` — await, never abort (hq-8iur.5).
+    let _ = sessions_projector.await;
     if let Some(task) = audit_task {
         let _ = task.await;
     }

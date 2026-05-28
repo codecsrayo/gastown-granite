@@ -187,9 +187,24 @@ pub fn spawn<R>(repo: R, events: mpsc::Sender<Envelope<OrchEvent>>) -> OrchHandl
 where
     R: OrchRepository + 'static,
 {
+    spawn_hydrated(repo, events, ConvoyBoard::default())
+}
+
+/// Boot hydration (hq-8iur.1): same as [`spawn`] but seeds the actor with a pre-built
+/// [`ConvoyBoard`]. The composition root passes the board reconstructed by `replay_gt` so a
+/// restart preserves convoy progress (members already done, who is active) without
+/// re-emitting events.
+pub fn spawn_hydrated<R>(
+    repo: R,
+    events: mpsc::Sender<Envelope<OrchEvent>>,
+    initial: ConvoyBoard,
+) -> OrchHandle
+where
+    R: OrchRepository + 'static,
+{
     let (tx, mut rx) = mpsc::channel::<OrchMsg>(64);
     tokio::spawn(async move {
-        let mut board = ConvoyBoard::default();
+        let mut board = initial;
 
         while let Some(msg) = rx.recv().await {
             match msg {

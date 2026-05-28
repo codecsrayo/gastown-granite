@@ -152,9 +152,23 @@ pub fn spawn<R>(repo: R, events: mpsc::Sender<Envelope<MergeEvent>>) -> MergeHan
 where
     R: MergeRepository + 'static,
 {
+    spawn_hydrated(repo, events, MergeBoard::default())
+}
+
+/// Boot hydration (hq-8iur.1): same as [`spawn`] but seeds the actor with a pre-built
+/// [`MergeBoard`]. The composition root passes the board reconstructed by `replay_gt` so a
+/// restart restores in-flight merge slots before the actor starts processing edge messages.
+pub fn spawn_hydrated<R>(
+    repo: R,
+    events: mpsc::Sender<Envelope<MergeEvent>>,
+    initial: MergeBoard,
+) -> MergeHandle
+where
+    R: MergeRepository + 'static,
+{
     let (tx, mut rx) = mpsc::channel::<MergeMsg>(64);
     tokio::spawn(async move {
-        let mut board = MergeBoard::default();
+        let mut board = initial;
         while let Some(msg) = rx.recv().await {
             match msg {
                 MergeMsg::Submit { bead, branch, channel_msg_id } => {

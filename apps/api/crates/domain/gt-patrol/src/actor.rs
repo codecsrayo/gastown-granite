@@ -147,10 +147,26 @@ pub fn spawn<R>(repo: R, events: mpsc::Sender<Envelope<PatrolEvent>>) -> PatrolH
 where
     R: PatrolRepository + 'static,
 {
+    spawn_hydrated(repo, events, LeaseTracker::default(), 0)
+}
+
+/// Boot hydration (hq-8iur.1): same as [`spawn`] but seeds the actor with a pre-built
+/// [`LeaseTracker`] and the count of `LeaseExpired` events emitted in the prior run (so the
+/// snapshot counter stays continuous across a restart). The composition root passes both
+/// from the reducer rebuilt by `replay_gt`.
+pub fn spawn_hydrated<R>(
+    repo: R,
+    events: mpsc::Sender<Envelope<PatrolEvent>>,
+    initial: LeaseTracker,
+    expired_seen: usize,
+) -> PatrolHandle
+where
+    R: PatrolRepository + 'static,
+{
     let (tx, mut rx) = mpsc::channel::<PatrolMsg>(64);
     tokio::spawn(async move {
-        let mut tracker = LeaseTracker::default();
-        let mut expired_emitted: usize = 0;
+        let mut tracker = initial;
+        let mut expired_emitted: usize = expired_seen;
 
         while let Some(msg) = rx.recv().await {
             match msg {

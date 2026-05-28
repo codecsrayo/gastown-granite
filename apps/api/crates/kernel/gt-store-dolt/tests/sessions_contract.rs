@@ -4,15 +4,39 @@
 //!   2. `DoltSessions` — against a real Dolt server when `GT_DOLT_URL` is set (validated
 //!      inside the container). If one passes and the other does not, the port is wrong.
 
-use gt_agent::{InMemorySessions, Session, SessionQueries, SessionState};
+use gt_agent::{DogKind, InMemorySessions, Session, SessionQueries, SessionRole, SessionState};
 use gt_store_dolt::DoltSessions;
 
 fn fixture() -> Vec<Session> {
     vec![
-        Session { id: "p1".into(), rig: "granite".into(), state: SessionState::Spawned },
-        Session { id: "p2".into(), rig: "granite".into(), state: SessionState::Working },
-        Session { id: "p3".into(), rig: "basalt".into(),  state: SessionState::Done },
-        Session { id: "p4".into(), rig: "basalt".into(),  state: SessionState::Killed },
+        Session {
+            id: "p1".into(),
+            rig: "granite".into(),
+            state: SessionState::Spawned,
+            role: SessionRole::Dog(DogKind::Witness),
+            crew: None,
+        },
+        Session {
+            id: "p2".into(),
+            rig: "granite".into(),
+            state: SessionState::Working,
+            role: SessionRole::Polecat,
+            crew: Some("atom".into()),
+        },
+        Session {
+            id: "p3".into(),
+            rig: "basalt".into(),
+            state: SessionState::Done,
+            role: SessionRole::Polecat,
+            crew: None,
+        },
+        Session {
+            id: "p4".into(),
+            rig: "basalt".into(),
+            state: SessionState::Killed,
+            role: SessionRole::Mayor,
+            crew: None,
+        },
     ]
 }
 
@@ -22,8 +46,11 @@ fn assert_active(active: Vec<Session>) {
     assert_eq!(active.len(), 2, "Done/Killed must be filtered out");
     assert_eq!(active[0].id, "p1");
     assert_eq!(active[0].state, SessionState::Spawned);
+    assert_eq!(active[0].role, SessionRole::Dog(DogKind::Witness), "role round-trips");
     assert_eq!(active[1].id, "p2");
     assert_eq!(active[1].state, SessionState::Working);
+    assert_eq!(active[1].role, SessionRole::Polecat);
+    assert_eq!(active[1].crew.as_deref(), Some("atom"), "crew round-trips");
 }
 
 #[tokio::test]

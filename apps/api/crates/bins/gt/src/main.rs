@@ -33,8 +33,11 @@ use gt_beads::{BeadRepository, InMemoryBeads};
 use gt_merge::{InMemoryMergeRepo, MergeRepository};
 use gt_orchestration::{InMemoryOrchRepo, OrchRepository};
 use gt_patrol::{InMemoryPatrolRepo, PatrolRepository};
-use gt_root::{spawn, RealEffects, RootConfig, RootHandle, SystemClock};
-use gt_store_dolt::{DoltBeads, DoltMerge, DoltOrch, DoltPatrol};
+use gt_root::{
+    load_state, spawn_hydrated, spawn_sessions_projector, RealEffects, RootConfig, RootHandle,
+    SystemClock,
+};
+use gt_store_dolt::{DoltBeads, DoltMerge, DoltOrch, DoltPatrol, DoltSessions};
 use gt_store_pg::{PgOutboxDrain, PgOutboxWriter};
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 
@@ -76,12 +79,20 @@ fn main() {
                     .ensure_schema()
                     .await
                     .expect("Dolt orch ensure_schema");
-                eprintln!("[gt] beads + merge/patrol/orch: Dolt @ {url}");
+                // Sessions write-path target (hq-8iur.2): the projector mirrors AgentEvent
+                // lifecycle into this canonical table — the same one the read-side serves.
+                let dolt_sessions = DoltSessions::connect(&url).expect("connect Dolt sessions");
+                dolt_sessions
+                    .ensure_schema()
+                    .await
+                    .expect("Dolt sessions ensure_schema");
+                eprintln!("[gt] beads + sessions + merge/patrol/orch: Dolt @ {url}");
                 run(
                     Arc::new(dolt),
                     Arc::new(dolt_merge),
                     Arc::new(dolt_patrol),
                     Arc::new(dolt_orch),
+                    Some(Arc::new(dolt_sessions)),
                     &log_path,
                     gt_bin,
                 )
@@ -96,6 +107,8 @@ fn main() {
                     Arc::new(InMemoryMergeRepo::default()),
                     Arc::new(InMemoryPatrolRepo::default()),
                     Arc::new(InMemoryOrchRepo::default()),
+                    // No sessions read-side in headless in-memory mode — skip the projector.
+                    None,
                     &log_path,
                     gt_bin,
                 )
@@ -110,6 +123,7 @@ async fn run<R, MR, PR, OR>(
     merge_repo: Arc<MR>,
     patrol_repo: Arc<PR>,
     orch_repo: Arc<OR>,
+    sessions_writer: Option<Arc<DoltSessions>>,
     log_path: &str,
     gt_bin: PathBuf,
 ) where
@@ -123,7 +137,29 @@ async fn run<R, MR, PR, OR>(
     Arc<OR>: OrchRepository + 'static,
 {
     let (effects, quota_slot) = RealEffects::new(gt_bin);
-    let root = spawn(
+
+    // Boot hydration (hq-8iur.1): fold the audit log into per-domain state before spawning,
+    // so a restart restores in-flight merge slots / patrol leases / convoy progress / quota
+    // status without re-emitting events. A missing log file is treated as a fresh install.
+    let hydration = match load_state(log_path) {
+        Ok(h) => {
+            eprintln!(
+                "[gt] hydrated from {} records: {} merge slots, {} patrol leases, {} convoys, {} accounts",
+                h.records_folded,
+                h.state.merge.board.len(),
+                h.state.patrol.tracker.len(),
+                h.state.orch.convoys.len(),
+                h.state.quota.accounts.len(),
+            );
+            h
+        }
+        Err(e) => {
+            eprintln!("[gt] hydration skipped — log load failed: {e}");
+            Default::default()
+        }
+    };
+
+    let root = spawn_hydrated(
         repo,
         merge_repo,
         patrol_repo,
@@ -132,10 +168,15 @@ async fn run<R, MR, PR, OR>(
         SystemClock,
         log_path,
         RootConfig::default(),
+        hydration,
     );
     let _ = quota_slot.set(root.quota.clone());
 
     let pipeline = spawn_pg_outbox_pipeline(&root).await;
+
+    // Sessions write-path (hq-8iur.2): when Dolt is wired, mirror AgentEvent lifecycle into
+    // the sessions table so the read-side (`gt-web`) owns the truth, replacing `gt sling`.
+    let sessions_task = sessions_writer.map(|w| spawn_sessions_projector(&root, w));
 
     eprintln!(
         "[gt] composition root up — event log: {}",
@@ -150,9 +191,14 @@ async fn run<R, MR, PR, OR>(
         root.dead_letters()
     );
     // Stop the reactor first — that drops its broadcast Sender, which is the only way the
-    // outbox writer receives `Closed`. Once root.shutdown returns, no new EventRecords are
-    // produced and the pipeline can drain to completion deterministically.
+    // outbox writer (and the sessions projector) receive `Closed`. Once root.shutdown returns,
+    // no new EventRecords are produced and the consumers drain to completion deterministically.
     root.shutdown();
+    // The sessions projector exits naturally on broadcast `Closed` — await it instead of
+    // aborting, matching the no-data-loss discipline of the outbox pipeline (hq-8iur.5).
+    if let Some(task) = sessions_task {
+        let _ = task.await;
+    }
     if let Some(pipeline) = pipeline {
         pipeline.shutdown_graceful().await;
     }

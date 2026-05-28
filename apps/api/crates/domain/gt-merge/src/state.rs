@@ -118,6 +118,17 @@ impl MergeBoard {
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
     }
+
+    /// Rebuild a live board from the replay reducer's snapshot (boot hydration, hq-8iur.1).
+    /// The audit log is authoritative: the actor seeds its owned state from the result of
+    /// `replay_gt` so a restart restores in-flight merge slots without re-emitting events.
+    pub fn from_state(state: &MergeState) -> Self {
+        let mut board = MergeBoard::default();
+        for slot in state.board.slots() {
+            board.slots.insert(slot.bead.clone(), slot.clone());
+        }
+        board
+    }
 }
 
 /// Replay reducer: re-corre el log y reconstruye el board + listas de terminados. Puro y

@@ -12,21 +12,29 @@ use gt_agent::{AgentEvent, SessionQueries};
 use gt_beads::{BeadRepository, BeadStatus};
 use gt_events::Envelope;
 
-use crate::dto::{BeadDto, BeadsQuery, NudgeRequest, NudgeResponse, SessionDto};
+use crate::dto::{BeadDto, BeadsQuery, NudgeRequest, NudgeResponse, SessionDto, SessionsQuery};
 use crate::state::AppState;
 use crate::stream::sse_from_receiver;
 
-/// `GET /api/sessions` — snapshot of active sessions. The reader port lives in `gt-agent`;
-/// the dashboard fetches this once and then patches rows via the SSE stream.
+/// `GET /api/sessions[?role=polecat]` — snapshot of active sessions, optionally filtered by
+/// role (hq-8iur.7). The reader port lives in `gt-agent`; the dashboard fetches this once and
+/// then patches rows via the SSE stream. An unknown `role` value yields an empty result (it
+/// matches no session) rather than an error — the filter is a view, not a command.
 pub async fn list_sessions<R, SQ>(
     State(state): State<AppState<R, SQ>>,
+    Query(q): Query<SessionsQuery>,
 ) -> Result<Json<Vec<SessionDto>>, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
 {
     let rows = state.sessions.active_sessions().await.map_err(AppError::from)?;
-    Ok(Json(rows.into_iter().map(Into::into).collect()))
+    let dtos = rows.into_iter().map(SessionDto::from);
+    let filtered: Vec<SessionDto> = match q.role {
+        Some(role) => dtos.filter(|d| d.role == role).collect(),
+        None => dtos.collect(),
+    };
+    Ok(Json(filtered))
 }
 
 /// `GET /api/beads?status=pending` — snapshot of beads in one status.

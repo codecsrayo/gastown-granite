@@ -257,12 +257,26 @@ pub fn spawn(
     events: mpsc::Sender<Envelope<QuotaEvent>>,
     weights: HashMap<String, ModelWeights>,
 ) -> QuotaHandle {
+    spawn_hydrated(events, weights, AccountRegistry::default(), 0)
+}
+
+/// Boot hydration (hq-8iur.1): same as [`spawn`] but seeds the actor with a pre-built
+/// [`AccountRegistry`] and the count of `BlockPredicted` events emitted in the prior run.
+/// The composition root passes both from the reducer rebuilt by `replay_gt`. `weights` are
+/// applied on top so per-model normalization config can change across restarts independently
+/// of the durable registry.
+pub fn spawn_hydrated(
+    events: mpsc::Sender<Envelope<QuotaEvent>>,
+    weights: HashMap<String, ModelWeights>,
+    initial: AccountRegistry,
+    predictions_seen: usize,
+) -> QuotaHandle {
     let (tx, mut rx) = mpsc::channel::<QuotaMsg>(64);
 
     tokio::spawn(async move {
-        let mut registry = AccountRegistry::default();
+        let mut registry = initial;
         registry.set_weights(weights);
-        let mut predictions_emitted: usize = 0;
+        let mut predictions_emitted: usize = predictions_seen;
 
         while let Some(msg) = rx.recv().await {
             match msg {

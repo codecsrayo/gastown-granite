@@ -14,5 +14,5 @@ pub mod supervisor;
 
 pub use commands::{AddSession, AgentCommand, RemoveSession, TransitionSession};
 pub use events::AgentEvent;
-pub use repo::{InMemorySessions, SessionQueries};
-pub use state::{Session, SessionRegistry, SessionState};
+pub use repo::{InMemorySessions, SessionQueries, SessionWriter};
+pub use state::{DogKind, Session, SessionRegistry, SessionRole, SessionState};

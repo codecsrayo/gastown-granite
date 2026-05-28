@@ -3,7 +3,7 @@
 //! **byte-idéntico** al de la corrida en vivo. Si fallara, hay impureza filtrada al núcleo
 //! (reloj/random/async); es lo que justifica el núcleo síncrono.
 
-use gt_agent::{AgentEvent, SessionRegistry};
+use gt_agent::{AgentEvent, SessionRegistry, SessionRole};
 use gt_audit::{read_all, replay, EventRecord, EventStore, JsonlWriter};
 use gt_events::Envelope;
 
@@ -14,6 +14,8 @@ fn make_events() -> Vec<AgentEvent> {
         evs.push(AgentEvent::Spawned {
             session: format!("p{i:02}"),
             rig: "granite".into(),
+            role: SessionRole::Polecat,
+            crew: None,
         });
     }
     for i in 0..30 {

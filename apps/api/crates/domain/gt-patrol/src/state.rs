@@ -66,6 +66,17 @@ impl LeaseTracker {
         out.sort_by(|a, b| a.bead.cmp(&b.bead));
         out
     }
+
+    /// Rebuild a live tracker from the replay reducer's snapshot (boot hydration, hq-8iur.1).
+    /// The event log is authoritative; the actor seeds itself from `replay_gt` so restart
+    /// keeps live leases without re-emitting events.
+    pub fn from_state(state: &PatrolState) -> Self {
+        let mut tracker = LeaseTracker::default();
+        for l in state.tracker.leases() {
+            tracker.by_bead.insert(l.bead.clone(), l.clone());
+        }
+        tracker
+    }
 }
 
 /// Replay reducer: rebuilds the live-lease set from the log. Pure, total.

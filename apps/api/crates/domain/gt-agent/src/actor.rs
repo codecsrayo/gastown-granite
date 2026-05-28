@@ -95,9 +95,17 @@ impl AgentHandle {
 
 /// Arranca el actor y devuelve su handle. El mailbox es bounded (contrapresión correcta).
 pub fn spawn(buffer: usize) -> AgentHandle {
+    spawn_hydrated(buffer, SessionRegistry::default())
+}
+
+/// Boot hydration (hq-8iur.1): same as [`spawn`] but seeds the actor with a pre-built
+/// [`SessionRegistry`]. The composition root passes the registry reconstructed by
+/// `replay_gt` so a restart restores live sessions without re-emitting events. Because the
+/// replay reducer IS the live owner type for this domain, no conversion is needed.
+pub fn spawn_hydrated(buffer: usize, initial: SessionRegistry) -> AgentHandle {
     let (tx, mut rx) = mpsc::channel::<AgentMsg>(buffer);
     tokio::spawn(async move {
-        let mut reg = SessionRegistry::default();
+        let mut reg = initial;
         while let Some(msg) = rx.recv().await {
             match msg {
                 AgentMsg::Add(s) => reg.add(s),

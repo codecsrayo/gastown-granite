@@ -22,25 +22,25 @@ use serde::Serialize;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 
-use gt_audit::{EventRecord, EventStore, JsonlWriter};
+use gt_audit::{read_all, EventRecord, EventStore, JsonlWriter};
 use gt_beads::{BeadRepository, BeadStatus};
 use gt_bus::DeadLetterEntry;
 use gt_events::{AppError, Envelope, EventKind};
 
 use gt_agent::actor::{self as agent_actor, AgentHandle};
-use gt_agent::AgentEvent;
+use gt_agent::{AgentEvent, Session, SessionState, SessionWriter};
 use gt_merge::actor::{self as merge_actor, MergeHandle};
-use gt_merge::{MergeEvent, MergeRepository};
+use gt_merge::{MergeBoard, MergeEvent, MergeRepository};
 use gt_orchestration::actor::{self as orch_actor, OrchHandle};
-use gt_orchestration::{OrchEvent, OrchRepository};
+use gt_orchestration::{ConvoyBoard, OrchEvent, OrchRepository};
 use gt_patrol::actor::{self as patrol_actor, PatrolHandle};
-use gt_patrol::{PatrolEvent, PatrolRepository};
+use gt_patrol::{LeaseTracker, PatrolEvent, PatrolRepository};
 use gt_quota::actor::{self as quota_actor, QuotaHandle};
-use gt_quota::{InMemoryKeychain, Keychain, ModelWeights, QuotaEvent};
+use gt_quota::{AccountRegistry, InMemoryKeychain, Keychain, ModelWeights, QuotaEvent};
 use gt_scheduling::actor::{self as sched_actor, SchedHandle};
 use gt_scheduling::SchedEvent;
 
-use crate::event::GtEvent;
+use crate::event::{replay_gt, GtEvent, GtState};
 
 /// Wall-clock at the edge. The core never reads it; the root stamps `now_secs` onto the
 /// messages it sends to the actors (e.g. registering a lease), and that value then travels
@@ -184,6 +184,10 @@ impl Default for RootConfig {
 /// audit log. `merge_repo` / `patrol_repo` / `orch_repo` are the domain-state persistence
 /// ports introduced in epic hq-bdn8 — Dolt-backed when `GT_DOLT_URL` is set, in-memory
 /// otherwise.
+///
+/// Thin wrapper over [`spawn_hydrated`] with empty initial state: bookkeeping starts fresh
+/// (no boot hydration). Production binaries should call [`spawn_hydrated`] with the
+/// reducer rebuilt from the audit log to survive restarts (hq-8iur.1).
 pub fn spawn<R, MR, PR, OR, FX, CK>(
     repo: R,
     merge_repo: MR,
@@ -193,6 +197,130 @@ pub fn spawn<R, MR, PR, OR, FX, CK>(
     clock: CK,
     log_path: impl Into<PathBuf>,
     config: RootConfig,
+) -> RootHandle<R>
+where
+    R: BeadRepository + Clone + 'static,
+    MR: MergeRepository + 'static,
+    PR: PatrolRepository + 'static,
+    OR: OrchRepository + 'static,
+    FX: Effects,
+    CK: Clock,
+{
+    spawn_hydrated(
+        repo,
+        merge_repo,
+        patrol_repo,
+        orch_repo,
+        effects,
+        clock,
+        log_path,
+        config,
+        HydrationState::default(),
+    )
+}
+
+/// Rebuild the per-actor seed state from the audit log at `log_path` (boot hydration,
+/// hq-8iur.1). Reads every record via [`gt_audit::read_all`] and folds them through
+/// `replay_gt` — the same deterministic reducer that powers the Step 3 gate. Returns an
+/// empty state if the log file doesn't exist (fresh install).
+///
+/// The result is passed to [`spawn_hydrated`] so the actors start with merge slots, patrol
+/// leases, convoy progress and quota account status restored before serving — without
+/// re-emitting any of the events to the log.
+pub fn load_state(log_path: impl AsRef<Path>) -> Result<HydrationState, AppError> {
+    let records = read_all(log_path.as_ref())?;
+    let state = replay_gt(&records)?;
+    Ok(HydrationState {
+        records_folded: records.len(),
+        state,
+    })
+}
+
+/// Aggregate of every actor's seed state plus a small bit of telemetry (how many records
+/// were folded to produce it). Built by [`load_state`], consumed by [`spawn_hydrated`].
+#[derive(Debug, Default)]
+pub struct HydrationState {
+    pub records_folded: usize,
+    pub state: GtState,
+}
+
+/// Sessions write-path projector (hq-8iur.2). Subscribes to the root's broadcast and mirrors
+/// every `AgentEvent` lifecycle transition into the canonical sessions store via the
+/// [`SessionWriter`] port — so the read-side (`SessionQueries`) owns the truth instead of the
+/// Go `gt sling` writer. The reactor is the single log writer; this consumer is read-only of
+/// the broadcast, never publishing back (CQRS, `docs/07-frontend.md`).
+///
+/// Writes are idempotent: `Spawned` re-upserts the row (role/crew included, hq-8iur.7),
+/// `SessionEnd`/`Killed` update the state by id, `Heartbeat` is liveness only and touches no
+/// row. A write failure is logged and skipped — the audit log remains authoritative and a
+/// later event re-converges the row.
+pub fn spawn_sessions_projector<R, W>(root: &RootHandle<R>, writer: Arc<W>) -> JoinHandle<()>
+where
+    R: BeadRepository + Clone + 'static,
+    W: SessionWriter + 'static,
+{
+    let mut rx = root.subscribe_events();
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(rec) => {
+                    if !rec.kind.starts_with("agent.") {
+                        continue;
+                    }
+                    let ev: AgentEvent = match rec.decode() {
+                        Ok(e) => e,
+                        Err(e) => {
+                            eprintln!("[gt] sessions projector decode failed ({}): {e}", rec.kind);
+                            continue;
+                        }
+                    };
+                    let res = match ev {
+                        AgentEvent::Spawned { session, rig, role, crew } => {
+                            writer
+                                .upsert(&Session::with_role(session, rig, role, crew))
+                                .await
+                        }
+                        AgentEvent::SessionEnd { session } => {
+                            writer.set_state(&session, SessionState::Done).await
+                        }
+                        AgentEvent::Killed { session, .. } => {
+                            writer.set_state(&session, SessionState::Killed).await
+                        }
+                        // Liveness only — no row change (mirrors `SessionRegistry::apply`).
+                        AgentEvent::Heartbeat { .. } => Ok(()),
+                    };
+                    if let Err(e) = res {
+                        eprintln!("[gt] sessions projector write failed ({}): {e}", rec.kind);
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    eprintln!("[gt] sessions projector lagged by {n} events (catching up)");
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    })
+}
+
+/// Spawn the whole system with explicit boot hydration (hq-8iur.1). The actors are seeded
+/// with the live owner types reconstructed from `hydration.state`, so an audit-log fold
+/// rebuilds in-flight merge slots / patrol leases / convoy progress / quota account status
+/// **before** the actor starts processing edge messages.
+///
+/// Scheduling is deliberately not hydrated: its in-flight count and queue depth depend on
+/// cross-domain `capacity_freed` signals that are not represented in the log (the durable
+/// truth for pending work is Dolt's `pending` beads, which the edge re-pumps via Enqueue).
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_hydrated<R, MR, PR, OR, FX, CK>(
+    repo: R,
+    merge_repo: MR,
+    patrol_repo: PR,
+    orch_repo: OR,
+    effects: FX,
+    clock: CK,
+    log_path: impl Into<PathBuf>,
+    config: RootConfig,
+    hydration: HydrationState,
 ) -> RootHandle<R>
 where
     R: BeadRepository + Clone + 'static,
@@ -213,12 +341,31 @@ where
     let (quota_tx, quota_rx) = mpsc::channel::<Envelope<QuotaEvent>>(256);
     let (agent_tx, agent_rx) = mpsc::channel::<Envelope<AgentEvent>>(256);
 
+    // Convert the replay reducer state into each actor's live owner type. The conversions
+    // live inside the domain crates (Ports & Adapters: the live-vs-replay distinction is a
+    // domain concern). For agent the reducer IS the owner type — move it in directly.
+    let GtState {
+        agent: agent_state,
+        sched: _,
+        patrol: patrol_state,
+        merge: merge_state,
+        quota: quota_state,
+        orch: orch_state,
+        feed: _,
+    } = hydration.state;
+    let merge_initial = MergeBoard::from_state(&merge_state);
+    let patrol_initial = LeaseTracker::from_state(&patrol_state);
+    let patrol_expired_seen = patrol_state.expired.len();
+    let orch_initial = ConvoyBoard::from_state(&orch_state);
+    let quota_initial = AccountRegistry::from_state(&quota_state);
+    let quota_predictions_seen = quota_state.predictions.len();
+
     let sched = sched_actor::spawn(repo.clone(), sched_tx, config.capacity);
-    let patrol = patrol_actor::spawn(patrol_repo, patrol_tx);
-    let merge = merge_actor::spawn(merge_repo, merge_tx);
-    let orch = orch_actor::spawn(orch_repo, orch_tx);
-    let quota = quota_actor::spawn(quota_tx, config.model_weights);
-    let agent = agent_actor::spawn(256);
+    let patrol = patrol_actor::spawn_hydrated(patrol_repo, patrol_tx, patrol_initial, patrol_expired_seen);
+    let merge = merge_actor::spawn_hydrated(merge_repo, merge_tx, merge_initial);
+    let orch = orch_actor::spawn_hydrated(orch_repo, orch_tx, orch_initial);
+    let quota = quota_actor::spawn_hydrated(quota_tx, config.model_weights, quota_initial, quota_predictions_seen);
+    let agent = agent_actor::spawn_hydrated(256, agent_state);
 
     let dead_count = Arc::new(AtomicUsize::new(0));
     let (events_tx, _) = broadcast::channel::<EventRecord>(config.event_buffer.max(1));

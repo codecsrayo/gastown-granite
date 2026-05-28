@@ -18,19 +18,118 @@ pub enum SessionState {
     Killed,
 }
 
+/// Kind of dog (a town/rig supervisory agent). Enumerated from the Go source
+/// (`internal/session/identity.go` + `internal/config/roles/`): deacon, overseer, witness,
+/// refinery, plus the bare `dog`. `Sheriff` is reserved for the GitHub-sheriff agent that
+/// the parity audit (hq-8iur.3) is folding in. Coordinate new kinds there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DogKind {
+    #[default]
+    Witness,
+    Refinery,
+    Deacon,
+    Overseer,
+    Sheriff,
+    /// The bare `dog` role (generic supervisory agent).
+    Dog,
+}
+
+/// Role of an agent session. `Crew` is deliberately NOT a role: it is the claude agent
+/// running *inside* a polecat right now, carried as [`Session::crew`]. Mirrors the Go
+/// `Role` constants minus `crew` (which is an attribute, not a session kind).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionRole {
+    Mayor,
+    Dog(DogKind),
+    Polecat,
+}
+
+impl Default for SessionRole {
+    /// Legacy sessions (pre-8.7 events without a role, and `gt sling` rows) are polecats.
+    fn default() -> Self {
+        SessionRole::Polecat
+    }
+}
+
+impl SessionRole {
+    /// Flat canonical string for the Dolt `role` column, the `/api/sessions` DTO and the
+    /// `?role=` filter. Matches the Go role names so the two runtimes agree during cutover.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SessionRole::Mayor => "mayor",
+            SessionRole::Polecat => "polecat",
+            SessionRole::Dog(DogKind::Witness) => "witness",
+            SessionRole::Dog(DogKind::Refinery) => "refinery",
+            SessionRole::Dog(DogKind::Deacon) => "deacon",
+            SessionRole::Dog(DogKind::Overseer) => "overseer",
+            SessionRole::Dog(DogKind::Sheriff) => "sheriff",
+            SessionRole::Dog(DogKind::Dog) => "dog",
+        }
+    }
+
+    /// Parse the flat canonical string back into a role. Unknown strings → `None`.
+    pub fn parse(s: &str) -> Option<SessionRole> {
+        Some(match s {
+            "mayor" => SessionRole::Mayor,
+            "polecat" => SessionRole::Polecat,
+            "witness" => SessionRole::Dog(DogKind::Witness),
+            "refinery" => SessionRole::Dog(DogKind::Refinery),
+            "deacon" => SessionRole::Dog(DogKind::Deacon),
+            "overseer" => SessionRole::Dog(DogKind::Overseer),
+            "sheriff" => SessionRole::Dog(DogKind::Sheriff),
+            "dog" => SessionRole::Dog(DogKind::Dog),
+            _ => return None,
+        })
+    }
+
+    pub fn is_dog(&self) -> bool {
+        matches!(self, SessionRole::Dog(_))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
     pub rig: String,
     pub state: SessionState,
+    /// What kind of agent this session is (mayor/dog/polecat). Defaults to polecat for
+    /// legacy events that predate role tracking (hq-8iur.7).
+    #[serde(default)]
+    pub role: SessionRole,
+    /// The claude crew member running inside a polecat right now. Only meaningful for
+    /// polecats; `None` for mayor/dogs.
+    #[serde(default)]
+    pub crew: Option<String>,
 }
 
 impl Session {
+    /// Backwards-compatible constructor: a polecat session with no crew attribution. Real
+    /// roles arrive via [`Session::with_role`] (the supervisor/sling edge).
     pub fn new(id: impl Into<String>, rig: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             rig: rig.into(),
             state: SessionState::Spawned,
+            role: SessionRole::Polecat,
+            crew: None,
+        }
+    }
+
+    /// Full constructor carrying the role and (polecat-only) crew attribution.
+    pub fn with_role(
+        id: impl Into<String>,
+        rig: impl Into<String>,
+        role: SessionRole,
+        crew: Option<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            rig: rig.into(),
+            state: SessionState::Spawned,
+            role,
+            crew,
         }
     }
 
@@ -114,8 +213,13 @@ impl SessionRegistry {
     /// total → reconstrucción determinista del estado desde el log (gate del Paso 3).
     pub fn apply(&mut self, event: &AgentEvent) {
         match event {
-            AgentEvent::Spawned { session, rig } => {
-                self.add(Session::new(session.clone(), rig.clone()));
+            AgentEvent::Spawned { session, rig, role, crew } => {
+                self.add(Session::with_role(
+                    session.clone(),
+                    rig.clone(),
+                    *role,
+                    crew.clone(),
+                ));
             }
             AgentEvent::Heartbeat { .. } => {} // no cambia el registro
             AgentEvent::SessionEnd { session } => {
@@ -137,7 +241,16 @@ impl SessionRegistry {
         let mut rows: Vec<String> = self
             .sessions
             .values()
-            .map(|s| format!("{}:{}:{:?}", s.id, s.rig, s.state))
+            .map(|s| {
+                format!(
+                    "{}:{}:{:?}:{}:{}",
+                    s.id,
+                    s.rig,
+                    s.state,
+                    s.role.as_str(),
+                    s.crew.as_deref().unwrap_or("-"),
+                )
+            })
             .collect();
         rows.sort();
         rows.join("|")

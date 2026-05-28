@@ -247,6 +247,20 @@ impl AccountRegistry {
             a.status = AccountQuotaStatus::Cooldown;
         }
     }
+
+    /// Rebuild a live registry from the replay reducer (boot hydration, hq-8iur.1). The
+    /// event log captures status transitions (Limited/Cooldown/Blocked) so they survive
+    /// restart; EWMA rates and the live `consumed` re-converge from the next edge probe
+    /// (`apply_probe` reconciles `consumed = limit - remaining` from the provider headers).
+    /// Window initialization arrives outside the event log via `QuotaMsg::UpsertAccount` —
+    /// the edge replays it on next probe.
+    pub fn from_state(state: &QuotaState) -> Self {
+        let mut registry = AccountRegistry::default();
+        for (id, account) in &state.accounts {
+            registry.accounts.insert(id.clone(), account.clone());
+        }
+        registry
+    }
 }
 
 /// Pure reducer: rebuilds the consolidated state from the log. Used as the Step 3 gate

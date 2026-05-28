@@ -258,6 +258,17 @@ impl ConvoyBoard {
     pub fn is_empty(&self) -> bool {
         self.convoys.is_empty()
     }
+
+    /// Rebuild a live convoy board from the replay reducer (boot hydration, hq-8iur.1). The
+    /// event log is authoritative; the actor seeds itself from `replay_gt` so restart keeps
+    /// in-flight convoy progress without re-emitting events.
+    pub fn from_state(state: &OrchState) -> Self {
+        let mut board = ConvoyBoard::default();
+        for (id, convoy) in &state.convoys {
+            board.convoys.insert(id.clone(), convoy.clone());
+        }
+        board
+    }
 }
 
 /// Replay reducer: re-runs the log and rebuilds the convoy board + the handoff/outcome

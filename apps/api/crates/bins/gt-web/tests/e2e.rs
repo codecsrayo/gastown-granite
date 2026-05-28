@@ -10,7 +10,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use tokio::net::TcpListener;
 
-use gt_agent::{AgentEvent, InMemorySessions, Session};
+use gt_agent::{AgentEvent, InMemorySessions, Session, SessionRole};
 use gt_beads::{Bead, BeadRepository, BeadStatus, InMemoryBeads};
 use gt_events::Envelope;
 use gt_root::{root::Effects, spawn, RootConfig, SystemClock};
@@ -144,6 +144,8 @@ async fn sse_stream_delivers_event_driven_through_root() {
         .send(Envelope::root(AgentEvent::Spawned {
             session: "polecat-1".into(),
             rig: "granite".into(),
+            role: SessionRole::Polecat,
+            crew: None,
         }))
         .await
         .expect("agent relay");

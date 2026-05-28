@@ -7,12 +7,15 @@ use serde::{Deserialize, Serialize};
 use gt_agent::{Session, SessionState};
 use gt_beads::{Bead, BeadStatus};
 
-/// One row of `GET /api/sessions`.
+/// One row of `GET /api/sessions`. `role`/`crew` (hq-8iur.7) expose the agent kind and the
+/// crew running inside a polecat as the flat canonical strings the frontend can filter on.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionDto {
     pub id: String,
     pub rig: String,
     pub state: String,
+    pub role: String,
+    pub crew: Option<String>,
 }
 
 impl From<Session> for SessionDto {
@@ -27,8 +30,16 @@ impl From<Session> for SessionDto {
                 SessionState::Killed => "killed",
             }
             .to_string(),
+            role: s.role.as_str().to_string(),
+            crew: s.crew,
         }
     }
+}
+
+/// Query for `GET /api/sessions?role=polecat`. Absent = all active sessions (no role filter).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SessionsQuery {
+    pub role: Option<String>,
 }
 
 /// One row of `GET /api/beads`. Mirrors the columns the dashboard already reads.
