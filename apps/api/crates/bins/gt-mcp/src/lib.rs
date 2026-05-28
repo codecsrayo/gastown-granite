@@ -8,6 +8,7 @@
 
 pub mod audit;
 pub mod auth;
+pub mod http;
 pub mod service;
 
 pub use audit::{AuditEvent, AuditSink, InMemoryAudit, JsonlAudit, Outcome};
