@@ -14,11 +14,11 @@ use rmcp::ServiceExt;
 use gt_audit::JsonlWriter;
 use gt_beads::{BeadRepository, InMemoryBeads};
 use gt_root::{spawn, LogEffects, RootConfig, RootHandle, SystemClock};
-use gt_store_dolt::DoltBeads;
+use gt_store_dolt::{DoltBeads, DoltSessions};
 use gt_store_pg::PgAudit;
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 
-use gt_mcp::{audit::AuditSink, auth::Scope, JsonlAudit, McpService, ScopeConfig};
+use gt_mcp::{audit::AuditSink, auth::Scope, JsonlAudit, McpService, ScopeConfig, SessionsRead};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -33,17 +33,25 @@ async fn main() -> anyhow::Result<()> {
         Some(url) => {
             let dolt = DoltBeads::connect(&url)?;
             dolt.ensure_schema().await?;
-            eprintln!("[gt-mcp] beads: Dolt @ {url}");
-            serve(Arc::new(dolt), log_path).await
+            let dolt_sessions = DoltSessions::connect(&url)?;
+            dolt_sessions.ensure_schema().await?;
+            eprintln!("[gt-mcp] beads + sessions: Dolt @ {url}");
+            serve(Arc::new(dolt), Some(Arc::new(dolt_sessions)), log_path).await
         }
         None => {
-            eprintln!("[gt-mcp] beads: in-memory (set GT_DOLT_URL for Dolt persistence)");
-            serve(Arc::new(InMemoryBeads::default()), log_path).await
+            eprintln!(
+                "[gt-mcp] beads + sessions: in-memory (set GT_DOLT_URL for Dolt persistence)"
+            );
+            serve(Arc::new(InMemoryBeads::default()), None, log_path).await
         }
     }
 }
 
-async fn serve<R>(beads: Arc<R>, log_path: String) -> anyhow::Result<()>
+async fn serve<R>(
+    beads: Arc<R>,
+    dolt_sessions: Option<Arc<DoltSessions>>,
+    log_path: String,
+) -> anyhow::Result<()>
 where
     R: BeadRepository + Send + Sync + 'static,
     Arc<R>: BeadRepository + Clone + 'static,
@@ -74,8 +82,17 @@ where
     // Share the root's domain actors, not isolated `actor::spawn`s. MCP tool calls drive the
     // same agent + merge + scheduling + patrol + orchestration + quota actors the root drives,
     // so their events land in the shared log.
-    let service = McpService::new(
+    //
+    // Sessions read-side (hq-u955): when `GT_DOLT_URL` is set the `gt://agent/sessions`
+    // resource reads the canonical Dolt table (the one `gt sling` writes to); otherwise it
+    // falls back to the actor snapshot — same path the tests cover.
+    let sessions = match dolt_sessions {
+        Some(d) => SessionsRead::Dolt(d),
+        None => SessionsRead::Actor(root.agent.clone()),
+    };
+    let service = McpService::with_sessions(
         root.agent.clone(),
+        sessions,
         root.merge.clone(),
         root.sched.clone(),
         root.patrol.clone(),

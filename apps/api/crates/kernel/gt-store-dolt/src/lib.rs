@@ -9,7 +9,9 @@
 mod beads_repo;
 mod commit;
 mod conn;
+mod sessions_repo;
 
 pub use beads_repo::DoltBeads;
 pub use commit::{commit, diff_summary, rollback};
 pub use conn::connect;
+pub use sessions_repo::DoltSessions;

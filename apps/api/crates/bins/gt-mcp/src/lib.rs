@@ -13,4 +13,4 @@ pub mod service;
 
 pub use audit::{AuditEvent, AuditSink, InMemoryAudit, JsonlAudit, Outcome};
 pub use auth::{Scope, ScopeConfig, ScopeSpec};
-pub use service::McpService;
+pub use service::{McpService, SessionsRead};

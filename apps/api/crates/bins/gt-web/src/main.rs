@@ -17,11 +17,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gt_agent::InMemorySessions;
+use gt_agent::{InMemorySessions, SessionQueries};
 use gt_audit::JsonlWriter;
 use gt_beads::{BeadRepository, InMemoryBeads};
 use gt_root::{spawn, RealEffects, RootConfig, RootHandle, SystemClock};
-use gt_store_dolt::DoltBeads;
+use gt_store_dolt::{DoltBeads, DoltSessions};
 use gt_store_pg::PgAudit;
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 use gt_web::{router, AppState, AuthConfig, JsonlWebAudit, WebAuditSink};
@@ -62,13 +62,29 @@ fn main() {
             Some(url) => {
                 let dolt = DoltBeads::connect(&url).expect("connect Dolt");
                 dolt.ensure_schema().await.expect("Dolt ensure_schema");
-                eprintln!("[gt-web] beads: Dolt @ {url}");
-                serve(Arc::new(dolt), &log_path, &bind, gt_bin, auth).await;
+                let dolt_sessions = DoltSessions::connect(&url).expect("connect Dolt sessions");
+                dolt_sessions
+                    .ensure_schema()
+                    .await
+                    .expect("Dolt sessions ensure_schema");
+                eprintln!("[gt-web] beads + sessions: Dolt @ {url}");
+                serve(
+                    Arc::new(dolt),
+                    Arc::new(dolt_sessions),
+                    &log_path,
+                    &bind,
+                    gt_bin,
+                    auth,
+                )
+                .await;
             }
             None => {
-                eprintln!("[gt-web] beads: in-memory (set GT_DOLT_URL for Dolt persistence)");
+                eprintln!(
+                    "[gt-web] beads + sessions: in-memory (set GT_DOLT_URL for Dolt persistence)"
+                );
                 serve(
                     Arc::new(InMemoryBeads::default()),
+                    Arc::new(InMemorySessions::default()),
                     &log_path,
                     &bind,
                     gt_bin,
@@ -80,8 +96,9 @@ fn main() {
     });
 }
 
-async fn serve<R>(
+async fn serve<R, SQ>(
     beads: Arc<R>,
+    sessions: Arc<SQ>,
     log_path: &str,
     bind: &str,
     gt_bin: PathBuf,
@@ -89,8 +106,8 @@ async fn serve<R>(
 ) where
     R: BeadRepository + Send + Sync + 'static,
     Arc<R>: BeadRepository + Clone + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
 {
-    let sessions = Arc::new(InMemorySessions::default());
 
     let (effects, quota_slot) = RealEffects::new(gt_bin);
     let root = spawn(

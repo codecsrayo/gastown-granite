@@ -27,7 +27,8 @@ use rmcp::{
 use gt_events::AppError;
 
 use gt_agent::actor::AgentHandle;
-use gt_agent::{AddSession, AgentCommand, RemoveSession, TransitionSession};
+use gt_agent::{AddSession, AgentCommand, RemoveSession, Session, SessionQueries, TransitionSession};
+use gt_store_dolt::DoltSessions;
 use gt_merge::actor::MergeHandle;
 use gt_merge::{CompleteMerge, FailMerge, MergeCommand, StartMerge, SubmitMerge};
 use gt_orchestration::actor::OrchHandle;
@@ -42,6 +43,32 @@ use gt_quota::{ProbeWindow, QuotaCommand, RotateAccount, SampleTokens};
 use crate::audit::{AuditEvent, AuditSink, Outcome};
 use crate::auth::Scope;
 
+/// Read-side backend for the `gt://agent/sessions` resource. The actor variant keeps the
+/// historical behavior (in-memory snapshot from `AgentHandle`); the Dolt variant reads the
+/// canonical `sessions` table — the same one polecats write via `gt sling` (Paso 6.h epic A,
+/// hq-u955). Enum dispatch keeps the non-`dyn` rule of `docs/01-architecture.md` intact while
+/// allowing tests to keep the actor backend without changing their constructor calls.
+#[derive(Clone)]
+pub enum SessionsRead {
+    Actor(AgentHandle),
+    Dolt(Arc<DoltSessions>),
+}
+
+impl SessionsRead {
+    pub async fn snapshot(&self) -> Vec<Session> {
+        match self {
+            Self::Actor(h) => h.snapshot().await,
+            Self::Dolt(d) => match d.active_sessions().await {
+                Ok(rows) => rows,
+                Err(e) => {
+                    eprintln!("[gt-mcp] dolt sessions read failed: {e}");
+                    Vec::new()
+                }
+            },
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct McpService {
     inner: Arc<Inner>,
@@ -49,6 +76,7 @@ pub struct McpService {
 
 struct Inner {
     agent: AgentHandle,
+    sessions: SessionsRead,
     merge: MergeHandle,
     sched: SchedHandle,
     patrol: PatrolHandle,
@@ -71,9 +99,29 @@ impl McpService {
         scope: Scope,
         audit: Arc<dyn AuditSink>,
     ) -> Self {
+        let sessions = SessionsRead::Actor(agent.clone());
+        Self::with_sessions(agent, sessions, merge, sched, patrol, orch, quota, scope, audit)
+    }
+
+    /// Same as [`McpService::new`] but lets the caller override the sessions read-side
+    /// (Paso 6.h epic A, hq-u955). `main.rs` passes [`SessionsRead::Dolt`] when
+    /// `GT_DOLT_URL` is set; tests keep the default actor backend via [`McpService::new`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_sessions(
+        agent: AgentHandle,
+        sessions: SessionsRead,
+        merge: MergeHandle,
+        sched: SchedHandle,
+        patrol: PatrolHandle,
+        orch: OrchHandle,
+        quota: QuotaHandle,
+        scope: Scope,
+        audit: Arc<dyn AuditSink>,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 agent,
+                sessions,
                 merge,
                 sched,
                 patrol,
@@ -846,7 +894,7 @@ impl McpService {
     pub async fn read_resource_json(&self, uri: &str) -> Result<serde_json::Value, AppError> {
         match uri {
             "gt://agent/sessions" => {
-                let sessions = self.inner.agent.snapshot().await;
+                let sessions = self.inner.sessions.snapshot().await;
                 serde_json::to_value(&sessions)
                     .map_err(|e| AppError::Other(format!("encode sessions: {e}")))
             }
