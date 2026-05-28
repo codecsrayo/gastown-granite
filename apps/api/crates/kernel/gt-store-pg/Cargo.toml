@@ -12,5 +12,8 @@ tokio.workspace = true
 time = { workspace = true, features = ["std", "formatting", "macros"] }
 serde_json.workspace = true
 # Cliente Postgres nativo: pool + runtime tokio, sin TLS (Postgres local en container).
-# `query`/`query_as` runtime (sin macros) para no requerir DB en build-time.
-sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "time"] }
+# Consultas runtime con `sqlx::query`/`sqlx::query_as` — NO se usan los macros chequeados
+# en compilación (`query!`/`query_as!`), que sí requerirían DB en build-time.
+# `macros` habilita el macro `sqlx::migrate!()`, que embebe los .sql leyendo solo el
+# directorio en build-time (no DB). `migrate` habilita el `Migrator` runtime.
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "time", "migrate", "macros"] }

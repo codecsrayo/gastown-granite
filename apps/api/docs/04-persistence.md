@@ -67,7 +67,21 @@ Adaptadores:
 | Crate | Implementa | Detalle |
 |---|---|---|
 | `gt-store-dolt` | `BeadRepository` (todos los dominios bead) | cliente MySQL-wire (:3307), `commit`/`diff`/`rollback`, `wasteland_sync` |
-| `gt-store-pg` | `AccountRepository` · `EventStore` | SeaORM/sqlx, `outbox`, tabla de eventos `JSONB` (audit) + proyecciones de feed |
+| `gt-store-pg` | `AccountRepository` · `EventStore` | sqlx (runtime `query`/`query_as`, sin macros chequeados en compilación), `outbox`, tabla de eventos `JSONB` (audit) + proyecciones de feed |
+
+> **Sin ORM (decisión).** El puerto del dominio es un trait con structs planos; meter un
+> ORM (p. ej. SeaORM) obligaría a mantener entidades-ORM **en el adaptador** + mapeo a
+> los structs del dominio (las entidades no pueden vivir en el dominio sin romper la regla
+> de dependencias). Mismo mapeo que ya se hace a mano, más una dep pesada y un acople de
+> build hacia herramientas extra. La carga real (INSERT append-only + rollups `SUM` + JSONB)
+> rinde mejor con SQL crudo. Si el read-model de `gt-feed` crece relacionalmente complejo,
+> se revisita.
+>
+> **Migraciones.** Schema versionado con `sqlx::migrate!("./migrations")`: el macro embebe
+> los `.sql` leyendo solo el directorio en build-time (no requiere DB viva, igual que la
+> elección de runtime queries). En runtime el `Migrator` registra cada versión aplicada en
+> `_sqlx_migrations` y la valida por checksum — **nunca editar un archivo aplicado**, se
+> agrega uno nuevo. `ensure_schema(pool)` ahora corre esa cadena, idempotente entre boots.
 
 ## Reglas de consistencia (2 motores)
 

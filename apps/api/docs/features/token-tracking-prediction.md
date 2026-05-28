@@ -195,6 +195,11 @@ GROUP BY account_id;
   `BlockPredicted` por ventana.
 - `QuotaRepository` (puerto): `token_usage` append-only, sumas por cuenta y por sesión, sin
   `UPDATE` de contadores. `gt-store-pg::PgQuota` lo implementa con `sqlx` (sin macros).
+- **Schema versionado con `sqlx::migrate!`.** El DDL inicial (`accounts` + `token_usage` +
+  índices) vive en `crates/kernel/gt-store-pg/migrations/20260527000001_init_quota.sql`;
+  `ensure_schema(pool)` corre la cadena en cada boot, idempotente, con checksum por
+  archivo. La materialized view `account_window_usage` entra como migración nueva cuando
+  haya datos reales — los archivos aplicados no se editan.
 - Gates verdes: contrato in-memory + Postgres (`GT_PG_URL`), rotación predictiva antes de
   `AccountLimited` con replay byte-idéntico, y reset de ventana que rehabilita la predicción.
 
