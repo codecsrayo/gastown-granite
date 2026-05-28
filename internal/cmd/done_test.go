@@ -1565,6 +1565,86 @@ func TestSyncGuardWithUncommittedChanges(t *testing.T) {
 	}
 }
 
+// TestBranchPushedWithWorkCheck verifies the remoteAhead guard in done.go (gg-rn5).
+//
+// Root cause: BranchPushedToRemote returned (true, 0) for an empty branch at
+// origin/main — same SHA as main, 0 unpushed commits. Without the remoteAhead
+// check, branchPushedWithWork was set to true, allowing gt done to complete
+// with 0 commits and mark the bead "Merged" with no code changes.
+//
+// Fix: CommitsAhead("origin/main", "origin/<branch>") must be > 0 for the branch
+// to be treated as having actual work.
+func TestBranchPushedWithWorkCheck(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
+	t.Setenv("GIT_CONFIG_VALUE_0", "always")
+
+	// Set up a bare "remote" repo
+	remote := filepath.Join(tmp, "remote.git")
+	testRunGit(t, tmp, "init", "--bare", "--initial-branch", "main", remote)
+
+	// Create a local clone
+	local := filepath.Join(tmp, "local")
+	testRunGit(t, tmp, "clone", remote, local)
+	testRunGit(t, local, "config", "user.email", "test@test.com")
+	testRunGit(t, local, "config", "user.name", "Test User")
+
+	// Initial commit on main
+	if err := os.WriteFile(filepath.Join(local, "README.md"), []byte("# Test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	testRunGit(t, local, "add", ".")
+	testRunGit(t, local, "commit", "-m", "initial commit")
+	testRunGit(t, local, "push", "origin", "main")
+
+	g := gitpkg.NewGit(local)
+
+	t.Run("empty polecat branch at origin/main SHA → remoteAhead=0 → not valid work", func(t *testing.T) {
+		// Create a polecat branch with NO additional commits (same SHA as main)
+		testRunGit(t, local, "checkout", "-b", "polecat/test/gg-abc@xyz")
+		testRunGit(t, local, "push", "origin", "polecat/test/gg-abc@xyz")
+		testRunGit(t, local, "checkout", "main")
+
+		// The core branchPushedWithWork guard: remoteAhead must be > 0
+		remoteAhead, err := g.CommitsAhead("origin/main", "origin/polecat/test/gg-abc@xyz")
+		if err != nil {
+			t.Fatalf("CommitsAhead: %v", err)
+		}
+		if remoteAhead != 0 {
+			t.Errorf("expected remoteAhead=0 for empty branch, got %d", remoteAhead)
+		}
+		// branchPushedWithWork would be false → gt done returns an error
+		branchPushedWithWork := remoteAhead > 0
+		if branchPushedWithWork {
+			t.Error("empty branch at origin/main should not be treated as pushed work")
+		}
+	})
+
+	t.Run("polecat branch with real commits → remoteAhead>0 → valid work", func(t *testing.T) {
+		testRunGit(t, local, "checkout", "-b", "polecat/test/gg-def@xyz")
+		if err := os.WriteFile(filepath.Join(local, "fix.go"), []byte("package main\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		testRunGit(t, local, "add", ".")
+		testRunGit(t, local, "commit", "-m", "fix: implement gg-def")
+		testRunGit(t, local, "push", "origin", "polecat/test/gg-def@xyz")
+		testRunGit(t, local, "checkout", "main")
+
+		remoteAhead, err := g.CommitsAhead("origin/main", "origin/polecat/test/gg-def@xyz")
+		if err != nil {
+			t.Fatalf("CommitsAhead: %v", err)
+		}
+		if remoteAhead == 0 {
+			t.Error("branch with real commits should have remoteAhead>0")
+		}
+		branchPushedWithWork := remoteAhead > 0
+		if !branchPushedWithWork {
+			t.Error("branch with real commits should be treated as pushed work")
+		}
+	})
+}
+
 func testRunGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	fullArgs := append([]string{"-c", "protocol.file.allow=always"}, args...)
