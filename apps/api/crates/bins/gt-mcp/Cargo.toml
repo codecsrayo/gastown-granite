@@ -5,9 +5,10 @@ version.workspace = true
 rust-version.workspace = true
 
 # MCP server sibling of gt-web (docs/09-llm-integration.md). Exposes domain Commands as
-# tools for LLM clients over stdio JSON-RPC. The library half is a thin dispatch layer
-# (tool registry, scope auth, audit sink) so the binary stays tiny and tests drive the
-# dispatch directly without spawning the binary.
+# tools for LLM clients via the official Model Context Protocol Rust SDK (rmcp). The
+# library half (registry, scope, audit, McpService) is a thin frontier on top of the
+# domain actor handles; tests drive `McpService::run` directly so they cover the same
+# scope/audit/dispatch path the rmcp tool router uses at runtime.
 [lib]
 name = "gt_mcp"
 path = "src/lib.rs"
@@ -24,6 +25,9 @@ tokio = { workspace = true, features = ["io-util", "io-std", "macros", "rt", "rt
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+schemars.workspace = true
+rmcp.workspace = true
+anyhow.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util", "sync"] }

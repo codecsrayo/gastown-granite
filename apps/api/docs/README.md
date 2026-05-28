@@ -54,10 +54,11 @@ es la especificación de referencia.
 > | 6.e | `bins/gt` composition root (GtEvent unifier, actores/relays/dead-letter) | DONE | — | hq-mc72.6 |
 > | 6.f | `gt-web` (API+SSE backend: snapshot + bus->broadcast stream) | DONE | — | hq-mc72.7 |
 > | 6.f.1 | `gt-mcp` vertical slice (Command retrofit on gt-agent + stdio JSON-RPC, scope auth, audit) | DONE | — | hq-b6pi |
+> | 6.f.2 | `gt-mcp` swap to official `rmcp` SDK (schemars-derived schemas, `#[tool_router]`) | DONE | — | hq-c3hb |
 > | 6.g | `gt-feed` (last domain + final audit-log adapter) | IN_PROGRESS | Brayan | hq-mc72.8 |
 > | 6.h+ | resto de `gt-mcp` (otros dominios), adaptadores edge real | PLANEADO | — | — |
 >
-> Estado global: **Paso 6.f.1 (`gt-mcp` vertical slice sobre gt-agent) DONE** (al 2026-05-27). Mantén esta tabla viva.
+> Estado global: **Paso 6.f.2 (`gt-mcp` sobre `rmcp` SDK oficial) DONE** (al 2026-05-27). Mantén esta tabla viva.
 
 ---
 

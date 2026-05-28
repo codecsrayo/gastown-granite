@@ -44,6 +44,12 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process
 # Cross-process file watcher: gt-channel uses it for *.event mailboxes (await MERGE_READY).
 # Default backend = inotify on Linux; no polling unless explicitly requested.
 notify = "6"
+# JSON Schema derives for `Command` arguments — gt-mcp publishes them via rmcp.
+schemars = "1"
+# Official Model Context Protocol Rust SDK. gt-mcp uses the stdio transport, server
+# feature flag, and procedural macros; other crates do not pull this in.
+rmcp = { version = "1.7", features = ["server", "macros", "transport-io"] }
+anyhow = "1"
 
 # Perfil dev rápido (sin requerir mold/lld para que compile en cualquier host).
 [profile.dev]
