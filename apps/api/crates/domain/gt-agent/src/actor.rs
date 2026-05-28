@@ -3,11 +3,18 @@
 
 use tokio::sync::{mpsc, oneshot};
 
-use gt_events::AppError;
+use gt_events::{AppError, Command};
 
+use crate::commands::AgentCommand;
 use crate::state::{Session, SessionRegistry, SessionState};
 
-/// Mensajes al actor. `Snapshot`/`Transition` responden por un `oneshot`.
+/// Mensajes al actor.
+///
+/// `Validate`/`Exec` son el camino tipado de [`Command`] (ver `docs/09-llm-integration.md`):
+/// `Validate` inspecciona el estado sin mutarlo; `Exec` re-valida y aplica en la misma
+/// vuelta del actor — sin `.await` entre validate y execute — para cerrar la ventana
+/// TOCTOU. Los clientes externos (`gt-mcp`) entran por aquí; los productores internos
+/// pueden seguir usando `Add`/`Remove`/`Transition` por compatibilidad con el Paso 2.
 pub enum AgentMsg {
     Add(Session),
     Remove(String),
@@ -17,6 +24,14 @@ pub enum AgentMsg {
         reply: oneshot::Sender<Result<(), AppError>>,
     },
     Snapshot(oneshot::Sender<Vec<Session>>),
+    Validate {
+        cmd: AgentCommand,
+        reply: oneshot::Sender<Result<(), AppError>>,
+    },
+    Exec {
+        cmd: AgentCommand,
+        reply: oneshot::Sender<Result<(), AppError>>,
+    },
 }
 
 /// Handle clonable para hablarle al actor.
@@ -54,6 +69,28 @@ impl AgentHandle {
         }
         rx.await.unwrap_or_default()
     }
+
+    /// "Ask without doing": run `validate` against the current state snapshot.
+    /// The answer is a snapshot; the actor revalidates on `exec`.
+    pub async fn validate(&self, cmd: AgentCommand) -> Result<(), AppError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(AgentMsg::Validate { cmd, reply })
+            .await
+            .map_err(|_| AppError::Other("actor gone".into()))?;
+        rx.await.map_err(|_| AppError::Other("actor dropped reply".into()))?
+    }
+
+    /// Apply the command. The actor re-validates inside the same tick, so the result
+    /// reflects the state at execution time, not the snapshot used by a prior `validate`.
+    pub async fn exec(&self, cmd: AgentCommand) -> Result<(), AppError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(AgentMsg::Exec { cmd, reply })
+            .await
+            .map_err(|_| AppError::Other("actor gone".into()))?;
+        rx.await.map_err(|_| AppError::Other("actor dropped reply".into()))?
+    }
 }
 
 /// Arranca el actor y devuelve su handle. El mailbox es bounded (contrapresión correcta).
@@ -72,6 +109,13 @@ pub fn spawn(buffer: usize) -> AgentHandle {
                 }
                 AgentMsg::Snapshot(reply) => {
                     let _ = reply.send(reg.snapshot());
+                }
+                AgentMsg::Validate { cmd, reply } => {
+                    let _ = reply.send(cmd.validate(&reg));
+                }
+                AgentMsg::Exec { cmd, reply } => {
+                    // execute() re-validates first → no TOCTOU within the actor tick.
+                    let _ = reply.send(cmd.execute(&mut reg));
                 }
             }
         }

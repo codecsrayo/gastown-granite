@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use gt_events::AppError;
 
 use crate::events::AgentEvent;
 
 /// Ciclo de vida de una sesión. Las transiciones ilegales se rechazan (error semántico
 /// atrapado por el tipo, ver `docs/06-observability.md`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SessionState {
     Spawned,
     Working,
@@ -14,7 +17,7 @@ pub enum SessionState {
     Killed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
     pub rig: String,

@@ -1,0 +1,29 @@
+[package]
+name = "gt-mcp"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+# MCP server sibling of gt-web (docs/09-llm-integration.md). Exposes domain Commands as
+# tools for LLM clients over stdio JSON-RPC. The library half is a thin dispatch layer
+# (tool registry, scope auth, audit sink) so the binary stays tiny and tests drive the
+# dispatch directly without spawning the binary.
+[lib]
+name = "gt_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gt-mcp"
+path = "src/main.rs"
+
+[dependencies]
+gt-events = { path = "../../kernel/gt-events" }
+gt-agent = { path = "../../domain/gt-agent" }
+
+tokio = { workspace = true, features = ["io-util", "io-std", "macros", "rt", "rt-multi-thread", "sync"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util", "sync"] }
