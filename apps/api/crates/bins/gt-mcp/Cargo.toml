@@ -22,6 +22,7 @@ path = "src/main.rs"
 gt = { path = "../gt" }
 gt-events = { path = "../../kernel/gt-events" }
 gt-agent = { path = "../../domain/gt-agent" }
+gt-merge = { path = "../../domain/gt-merge" }
 gt-beads = { path = "../../kernel/gt-beads" }
 gt-audit = { path = "../../kernel/gt-audit" }
 

@@ -10,6 +10,8 @@ gt-channel = { path = "../../kernel/gt-channel" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# JSON Schema derives for Command arguments — surfaced by gt-mcp.
+schemars.workspace = true
 
 [dev-dependencies]
 # El gate test cablea el flujo entero (refinery+actor+channel) y reconstruye con replay.

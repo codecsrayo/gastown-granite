@@ -12,9 +12,11 @@
 //! tras Merged, liberar capacidad) es trabajo del composition root vía eventos.
 
 pub mod actor;
+pub mod commands;
 pub mod refinery;
 mod events;
 mod state;
 
+pub use commands::{CompleteMerge, FailMerge, MergeCommand, StartMerge, SubmitMerge};
 pub use events::{MergeEvent, MergeReadyPayload};
 pub use state::{BoardSnapshot, MergeBoard, MergeSlot, MergeSlotState, MergeState};

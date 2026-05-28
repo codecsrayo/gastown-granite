@@ -8,11 +8,20 @@
 
 use tokio::sync::{mpsc, oneshot};
 
-use gt_events::Envelope;
+use gt_events::{AppError, Command, Envelope};
 
+use crate::commands::MergeCommand;
 use crate::events::MergeEvent;
 use crate::state::{MergeBoard, MergeSlot};
 
+/// Mensajes al actor.
+///
+/// `Validate`/`Exec` son el camino tipado de [`Command`] (ver `docs/09-llm-integration.md`):
+/// `Validate` inspecciona el board sin mutarlo; `Exec` re-valida, aplica la transición y
+/// emite al relay el `MergeEvent` que el command produjo — todo en la misma vuelta del actor,
+/// sin `.await` entre validate y execute, cerrando la ventana TOCTOU. Los clientes externos
+/// (`gt-mcp`) entran por aquí; los productores internos (refinery, root) siguen usando
+/// `Submit`/`Start`/`Complete`/`Fail` (fire-and-forget) por compatibilidad con el Paso 6.b.
 pub enum MergeMsg {
     /// Refinery tradujo un `MERGE_READY` del channel. Crea el slot en `Ready`.
     Submit {
@@ -28,6 +37,16 @@ pub enum MergeMsg {
     Fail { bead: String, reason: String },
     /// Snapshot diagnóstico del board.
     Snapshot(oneshot::Sender<Vec<MergeSlot>>),
+    /// "Ask without doing": corre `validate` contra el board actual, sin mutar ni emitir.
+    Validate {
+        cmd: MergeCommand,
+        reply: oneshot::Sender<Result<(), AppError>>,
+    },
+    /// Aplica el command: re-valida, transiciona y emite el evento producido al relay.
+    Exec {
+        cmd: MergeCommand,
+        reply: oneshot::Sender<Result<(), AppError>>,
+    },
 }
 
 #[derive(Clone)]
@@ -83,6 +102,31 @@ impl MergeHandle {
         }
         rx.await.unwrap_or_default()
     }
+
+    /// "Ask without doing": run `validate` against the current board snapshot.
+    /// The answer is a snapshot; the actor revalidates on `exec`.
+    pub async fn validate(&self, cmd: MergeCommand) -> Result<(), AppError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(MergeMsg::Validate { cmd, reply })
+            .await
+            .map_err(|_| AppError::Other("merge actor gone".into()))?;
+        rx.await
+            .map_err(|_| AppError::Other("merge actor dropped reply".into()))?
+    }
+
+    /// Apply the command. The actor re-validates inside the same tick and emits the produced
+    /// `MergeEvent` to the relay, so the result reflects state at execution time, not the
+    /// snapshot a prior `validate` saw.
+    pub async fn exec(&self, cmd: MergeCommand) -> Result<(), AppError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(MergeMsg::Exec { cmd, reply })
+            .await
+            .map_err(|_| AppError::Other("merge actor gone".into()))?;
+        rx.await
+            .map_err(|_| AppError::Other("merge actor dropped reply".into()))?
+    }
 }
 
 /// Arranca el actor. `events` es el relay (mpsc) hacia el bus síncrono del composition
@@ -125,6 +169,23 @@ pub fn spawn(events: mpsc::Sender<Envelope<MergeEvent>>) -> MergeHandle {
                 }
                 MergeMsg::Snapshot(reply) => {
                     let _ = reply.send(board.snapshot());
+                }
+                MergeMsg::Validate { cmd, reply } => {
+                    let _ = reply.send(cmd.validate(&board));
+                }
+                MergeMsg::Exec { cmd, reply } => {
+                    // execute() re-validates first → no TOCTOU within the actor tick. On
+                    // success it returns the event to emit, preserving emit-on-apply: only
+                    // legal transitions reach the log.
+                    match cmd.execute(&mut board) {
+                        Ok(event) => {
+                            let _ = events.send(Envelope::root(event)).await;
+                            let _ = reply.send(Ok(()));
+                        }
+                        Err(e) => {
+                            let _ = reply.send(Err(e));
+                        }
+                    }
                 }
             }
         }

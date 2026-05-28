@@ -29,10 +29,15 @@ use gt_mcp::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_gate_validate_only_blocks_execute_full_scope_drives_state() {
     let agent = actor::spawn(16);
+    // This gate exercises only the agent tools; a merge actor is wired so the service carries
+    // its full domain surface. Keep the relay receiver alive so the actor's sends don't error.
+    let (merge_tx, _merge_rx) = tokio::sync::mpsc::channel(16);
+    let merge = gt_merge::actor::spawn(merge_tx);
 
     let watcher_audit = Arc::new(InMemoryAudit::new());
     let watcher = McpService::new(
         agent.clone(),
+        merge.clone(),
         Scope::read_only("watcher"),
         Arc::clone(&watcher_audit) as Arc<dyn AuditSink>,
     );
@@ -40,6 +45,7 @@ async fn mcp_gate_validate_only_blocks_execute_full_scope_drives_state() {
     let admin_audit = Arc::new(InMemoryAudit::new());
     let admin = McpService::new(
         agent.clone(),
+        merge.clone(),
         Scope::admin("admin"),
         Arc::clone(&admin_audit) as Arc<dyn AuditSink>,
     );
