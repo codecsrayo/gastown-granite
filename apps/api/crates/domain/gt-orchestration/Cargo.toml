@@ -8,6 +8,8 @@ rust-version.workspace = true
 gt-events = { path = "../../kernel/gt-events" }
 tokio.workspace = true
 serde.workspace = true
+# JSON Schema derives for Command arguments — surfaced by gt-mcp.
+schemars.workspace = true
 
 [dev-dependencies]
 # The gate test plays the composition-root role (wires actor + records + replays).

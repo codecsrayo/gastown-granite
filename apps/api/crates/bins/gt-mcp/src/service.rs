@@ -23,6 +23,8 @@ use gt_agent::actor::AgentHandle;
 use gt_agent::{AddSession, AgentCommand, RemoveSession, TransitionSession};
 use gt_merge::actor::MergeHandle;
 use gt_merge::{CompleteMerge, FailMerge, MergeCommand, StartMerge, SubmitMerge};
+use gt_orchestration::actor::OrchHandle;
+use gt_orchestration::{CompleteMember, FailMember, LaunchConvoy, OrchCommand};
 use gt_patrol::actor::PatrolHandle;
 use gt_patrol::{CloseLease, Heartbeat, PatrolCommand, RegisterLease, Tick};
 use gt_scheduling::actor::SchedHandle;
@@ -41,17 +43,20 @@ struct Inner {
     merge: MergeHandle,
     sched: SchedHandle,
     patrol: PatrolHandle,
+    orch: OrchHandle,
     scope: Scope,
     audit: Arc<dyn AuditSink>,
 }
 
 #[tool_router(server_handler)]
 impl McpService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         agent: AgentHandle,
         merge: MergeHandle,
         sched: SchedHandle,
         patrol: PatrolHandle,
+        orch: OrchHandle,
         scope: Scope,
         audit: Arc<dyn AuditSink>,
     ) -> Self {
@@ -61,6 +66,7 @@ impl McpService {
                 merge,
                 sched,
                 patrol,
+                orch,
                 scope,
                 audit,
             }),
@@ -569,5 +575,119 @@ impl McpService {
     ) -> Result<CallToolResult, McpError> {
         let json = serde_json::to_value(&args).expect("Tick is Serialize");
         self.run_patrol("patrol.tick.execute", json, PatrolCommand::Tick(args), false).await
+    }
+
+    /// Orchestration-domain twin of [`McpService::run`]: same scope + audit boundary,
+    /// dispatching to the convoy actor. A launch/complete can emit several events (the
+    /// handoff); the actor relays them — `run_orch` reports the single ok/err of the dispatch.
+    pub async fn run_orch(
+        &self,
+        tool: &str,
+        arguments: serde_json::Value,
+        cmd: OrchCommand,
+        validate_only: bool,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let domain_result = if validate_only {
+            self.inner.orch.validate(cmd).await
+        } else {
+            self.inner.orch.exec(cmd).await
+        };
+
+        let outcome = match &domain_result {
+            Ok(()) => Outcome::Ok,
+            Err(e) => Outcome::Failed { error: e.to_string() },
+        };
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments,
+            outcome,
+        });
+
+        match domain_result {
+            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
+            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "orch.launch_convoy.validate",
+        description = "Check whether creating + launching a convoy would be accepted. No state change."
+    )]
+    async fn orch_launch_convoy_validate(
+        &self,
+        Parameters(args): Parameters<LaunchConvoy>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("LaunchConvoy is Serialize");
+        self.run_orch("orch.launch_convoy.validate", json, OrchCommand::Launch(args), true).await
+    }
+
+    #[tool(
+        name = "orch.launch_convoy.execute",
+        description = "Create + launch a convoy and dispatch its first member. Emits convoy_created/launched/member_dispatched."
+    )]
+    async fn orch_launch_convoy_execute(
+        &self,
+        Parameters(args): Parameters<LaunchConvoy>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("LaunchConvoy is Serialize");
+        self.run_orch("orch.launch_convoy.execute", json, OrchCommand::Launch(args), false).await
+    }
+
+    #[tool(
+        name = "orch.complete_member.validate",
+        description = "Check whether completing a convoy member would be accepted. No state change."
+    )]
+    async fn orch_complete_member_validate(
+        &self,
+        Parameters(args): Parameters<CompleteMember>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("CompleteMember is Serialize");
+        self.run_orch("orch.complete_member.validate", json, OrchCommand::Complete(args), true).await
+    }
+
+    #[tool(
+        name = "orch.complete_member.execute",
+        description = "Mark a convoy member done; hands off the next member or closes the convoy."
+    )]
+    async fn orch_complete_member_execute(
+        &self,
+        Parameters(args): Parameters<CompleteMember>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("CompleteMember is Serialize");
+        self.run_orch("orch.complete_member.execute", json, OrchCommand::Complete(args), false).await
+    }
+
+    #[tool(
+        name = "orch.fail_member.validate",
+        description = "Check whether failing a convoy member would be accepted. No state change."
+    )]
+    async fn orch_fail_member_validate(
+        &self,
+        Parameters(args): Parameters<FailMember>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("FailMember is Serialize");
+        self.run_orch("orch.fail_member.validate", json, OrchCommand::Fail(args), true).await
+    }
+
+    #[tool(
+        name = "orch.fail_member.execute",
+        description = "Mark a convoy member failed; halts the convoy (emits convoy_failed)."
+    )]
+    async fn orch_fail_member_execute(
+        &self,
+        Parameters(args): Parameters<FailMember>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("FailMember is Serialize");
+        self.run_orch("orch.fail_member.execute", json, OrchCommand::Fail(args), false).await
     }
 }

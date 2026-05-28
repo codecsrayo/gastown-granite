@@ -20,8 +20,10 @@
 //! domain ships pure + replay-able first, like `gt-patrol` and `gt-merge`.
 
 pub mod actor;
+pub mod commands;
 mod events;
 mod state;
 
+pub use commands::{CompleteMember, FailMember, LaunchConvoy, OrchCommand};
 pub use events::OrchEvent;
 pub use state::{Convoy, ConvoyBoard, ConvoyState, Member, MemberState, OrchState};
