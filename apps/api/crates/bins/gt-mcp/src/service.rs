@@ -11,6 +11,7 @@
 //! without depending on the wire transport. The transport is exercised by `main.rs`
 //! via `rmcp::transport::stdio`.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -162,6 +163,73 @@ impl CreateBead {
     }
 }
 
+/// Edge that creates rigs by shelling out to the `gt` CLI (hq-mc72.11). gt-mcp has no rig
+/// domain — rigs are a Gas Town CLI concept (`gt rig add`), not orchestrator state — so this
+/// is a bin-level effect, the same shape as `RealEffects::sling` running `gt sling`. Args are
+/// passed directly to `Command` (never a shell), so a crafted `name`/`git_url` cannot inject.
+#[derive(Clone)]
+pub struct RigCreator {
+    /// Path to the `gt` binary (or just `gt` to resolve on PATH).
+    pub gt_bin: PathBuf,
+}
+
+impl RigCreator {
+    /// Run `gt rig add <name> <git_url> [--prefix <prefix>]`, returning stdout on success or
+    /// the captured stderr on failure. Blocks until `gt rig add` finishes (it clones a repo).
+    async fn create(&self, args: &CreateRig) -> Result<String, AppError> {
+        let mut cmd = tokio::process::Command::new(&self.gt_bin);
+        cmd.arg("rig").arg("add").arg(&args.name).arg(&args.git_url);
+        if let Some(prefix) = &args.prefix {
+            cmd.arg("--prefix").arg(prefix);
+        }
+        let out = cmd
+            .output()
+            .await
+            .map_err(|e| AppError::Other(format!("spawn `{} rig add`: {e}", self.gt_bin.display())))?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        } else {
+            Err(AppError::Other(format!(
+                "gt rig add failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )))
+        }
+    }
+}
+
+/// Input for the `rig.create` tool (hq-mc72.11). Creates a Gas Town rig via `gt rig add`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct CreateRig {
+    /// Rig name. Restricted to `[A-Za-z0-9_-]` (it becomes a directory + CLI argument).
+    pub name: String,
+    /// Git URL (or local `file://` path) to clone as the rig's canonical repo.
+    pub git_url: String,
+    /// Beads issue prefix. Defaults to one derived from the name when omitted.
+    #[serde(default)]
+    pub prefix: Option<String>,
+}
+
+impl CreateRig {
+    fn validate(&self) -> Result<(), AppError> {
+        if self.name.is_empty() {
+            return Err(AppError::Validation("rig name is empty".into()));
+        }
+        if !self
+            .name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err(AppError::Validation(
+                "rig name must be [A-Za-z0-9_-]".into(),
+            ));
+        }
+        if self.git_url.is_empty() {
+            return Err(AppError::Validation("git_url is empty".into()));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub struct McpService {
     inner: Arc<Inner>,
@@ -182,6 +250,9 @@ struct Inner {
     /// publish `Spawned` here itself for the event to reach the log/broadcast/projector.
     /// `None` in tests built via [`McpService::new`]; `main.rs` wires the root's relay.
     agent_events: Option<mpsc::Sender<Envelope<AgentEvent>>>,
+    /// Edge that creates rigs via `gt rig add` (hq-mc72.11). `None` in tests (the `rig.create`
+    /// tool then reports "rig creation not configured"); `main.rs` wires it from `GT_BIN`.
+    rig_creator: Option<RigCreator>,
 }
 
 #[tool_router]
@@ -199,7 +270,7 @@ impl McpService {
     ) -> Self {
         let sessions = SessionsRead::Actor(agent.clone());
         Self::with_sessions(
-            agent, sessions, merge, sched, patrol, orch, quota, scope, audit, None,
+            agent, sessions, merge, sched, patrol, orch, quota, scope, audit, None, None,
         )
     }
 
@@ -220,6 +291,7 @@ impl McpService {
         scope: Scope,
         audit: Arc<dyn AuditSink>,
         agent_events: Option<mpsc::Sender<Envelope<AgentEvent>>>,
+        rig_creator: Option<RigCreator>,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -233,6 +305,7 @@ impl McpService {
                 scope,
                 audit,
                 agent_events,
+                rig_creator,
             }),
         }
     }
@@ -691,6 +764,77 @@ impl McpService {
         Parameters(args): Parameters<CreateBead>,
     ) -> Result<CallToolResult, McpError> {
         self.run_create_bead("scheduling.create_bead.execute", args, false).await
+    }
+
+    /// Scope check + (validate | `gt rig add`) + audit for `rig.create` (hq-mc72.11). Rigs are
+    /// a `gt` CLI concept, not orchestrator state, so this runs the external CLI through
+    /// [`RigCreator`] and emits no domain event — only the frontier audit. `execute` fails
+    /// cleanly when no [`RigCreator`] is wired (tests / a server started without `GT_BIN`).
+    pub async fn run_rig_create(
+        &self,
+        tool: &str,
+        args: CreateRig,
+        validate_only: bool,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let json = serde_json::to_value(&args).expect("CreateRig is Serialize");
+        let domain_result: Result<String, AppError> = if validate_only {
+            args.validate().map(|()| "ok".to_string())
+        } else {
+            match (args.validate(), &self.inner.rig_creator) {
+                (Ok(()), Some(creator)) => creator.create(&args).await,
+                (Ok(()), None) => Err(AppError::Other(
+                    "rig creation not configured (no GT_BIN on this server)".into(),
+                )),
+                (Err(e), _) => Err(e),
+            }
+        };
+
+        let outcome = match &domain_result {
+            Ok(_) => Outcome::Ok,
+            Err(e) => Outcome::Failed { error: e.to_string() },
+        };
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments: json,
+            outcome,
+        });
+
+        match domain_result {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "rig.create.validate",
+        description = "Check whether creating a rig would be accepted (name charset + non-empty git_url). No state change."
+    )]
+    async fn rig_create_validate(
+        &self,
+        Parameters(args): Parameters<CreateRig>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_rig_create("rig.create.validate", args, true).await
+    }
+
+    #[tool(
+        name = "rig.create.execute",
+        description = "Create a Gas Town rig by cloning a repo (runs `gt rig add <name> <git_url>`). Not event-logged."
+    )]
+    async fn rig_create_execute(
+        &self,
+        Parameters(args): Parameters<CreateRig>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_rig_create("rig.create.execute", args, false).await
     }
 
     /// Patrol-domain twin of [`McpService::run`]: same scope + audit boundary, dispatching to
