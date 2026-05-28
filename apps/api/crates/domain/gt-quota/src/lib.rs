@@ -17,6 +17,8 @@
 pub mod actor;
 pub mod commands;
 pub mod expectations;
+pub mod keychain;
+pub mod probe;
 pub mod repo;
 
 mod cost;
@@ -28,6 +30,8 @@ pub use commands::{ProbeWindow, QuotaCommand, RotateAccount, SampleTokens};
 pub use cost::{cost_units, Cost, ModelWeights};
 pub use events::QuotaEvent;
 pub use expectations::{predict, Prediction};
+pub use keychain::{CredentialRecord, InMemoryKeychain, Keychain};
+pub use probe::{parse_anthropic_ratelimit, RatelimitHeaders};
 pub use repo::{InMemoryQuota, QuotaRepository, UsageSample};
 pub use state::{
     Account, AccountQuotaStatus, AccountRegistry, AccountWindow, Ewma, QuotaState, WindowKind,

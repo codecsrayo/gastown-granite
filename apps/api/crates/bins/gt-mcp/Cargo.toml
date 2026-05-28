@@ -21,6 +21,7 @@ path = "src/main.rs"
 # The composition root: gt-mcp shares its agent actor instead of spawning an isolated one.
 gt = { path = "../gt" }
 gt-events = { path = "../../kernel/gt-events" }
+gt-telemetry = { path = "../../kernel/gt-telemetry" }
 gt-agent = { path = "../../domain/gt-agent" }
 gt-scheduling = { path = "../../domain/gt-scheduling" }
 gt-merge = { path = "../../domain/gt-merge" }

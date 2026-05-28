@@ -49,6 +49,7 @@ where
         .route("/api/beads", get(routes::list_beads::<R, SQ>))
         .route("/api/nudge", post(routes::nudge::<R, SQ>))
         .route("/api/stream", get(routes::stream::<R, SQ>))
+        .route("/metrics", get(routes::metrics))
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(
             layer,

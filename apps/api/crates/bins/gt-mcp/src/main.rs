@@ -16,11 +16,16 @@ use gt_beads::{BeadRepository, InMemoryBeads};
 use gt_root::{spawn, LogEffects, RootConfig, RootHandle, SystemClock};
 use gt_store_dolt::DoltBeads;
 use gt_store_pg::PgAudit;
+use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 
 use gt_mcp::{audit::AuditSink, auth::Scope, JsonlAudit, McpService, ScopeConfig};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _telemetry = init_telemetry(TelemetryConfig::from_env("gt-mcp"))
+        .map_err(|e| eprintln!("[gt-mcp] telemetry init: {e} (continuing without exporter)"))
+        .ok();
+
     let log_path =
         std::env::var("GT_EVENT_LOG").unwrap_or_else(|_| "/tmp/gt.events.jsonl".to_string());
 

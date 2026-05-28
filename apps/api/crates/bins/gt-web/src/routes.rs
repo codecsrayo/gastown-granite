@@ -73,6 +73,13 @@ where
     sse_from_receiver(state.events.subscribe())
 }
 
+/// `GET /metrics` — Prometheus text exposition. Stateless: scrapes the process-global
+/// registry exposed by `gt-telemetry`, independent of the per-request `AppState`.
+pub async fn metrics() -> Result<String, AppError> {
+    gt_telemetry::metrics::render_text()
+        .map_err(|e| AppError::internal(format!("metrics render: {e}")))
+}
+
 /// Single error type mapped to JSON + a status code. Domain errors collapse to 500 by design:
 /// `gt-web` is a gateway, not the place to invent new error semantics.
 #[derive(Debug)]

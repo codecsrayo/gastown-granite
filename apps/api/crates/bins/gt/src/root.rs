@@ -36,7 +36,7 @@ use gt_orchestration::OrchEvent;
 use gt_patrol::actor::{self as patrol_actor, PatrolHandle};
 use gt_patrol::PatrolEvent;
 use gt_quota::actor::{self as quota_actor, QuotaHandle};
-use gt_quota::{ModelWeights, QuotaEvent};
+use gt_quota::{InMemoryKeychain, Keychain, ModelWeights, QuotaEvent};
 use gt_scheduling::actor::{self as sched_actor, SchedHandle};
 use gt_scheduling::SchedEvent;
 
@@ -108,6 +108,9 @@ pub struct RootHandle<R: BeadRepository + Clone> {
     /// the single writer; readers that lag get `Lagged` and resync from the snapshot, exactly
     /// like the doc's bus -> broadcast -> SSE bridge (`docs/07-frontend.md`).
     events: broadcast::Sender<EventRecord>,
+    /// Shared keychain handle so callers (the gate test, gt-mcp's rotate.execute reaction)
+    /// can inspect the live pointer after a rotation lands.
+    keychain: Arc<dyn Keychain>,
     join: JoinHandle<()>,
 }
 
@@ -139,6 +142,12 @@ impl<R: BeadRepository + Clone> RootHandle<R> {
         self.events.receiver_count()
     }
 
+    /// Borrow the running keychain. Lets the bin's MCP frontier read/write credentials
+    /// without re-spawning an adapter, and the gate test assert on the live pointer.
+    pub fn keychain(&self) -> Arc<dyn Keychain> {
+        self.keychain.clone()
+    }
+
     /// Stop the loop. The actors stop when their handles drop.
     pub fn shutdown(self) {
         self.join.abort();
@@ -153,6 +162,10 @@ pub struct RootConfig {
     pub model_weights: HashMap<String, ModelWeights>,
     /// Ring size of the event broadcast hub. Default 1024 matches `docs/07-frontend.md`.
     pub event_buffer: usize,
+    /// Platform credential store the rotation chain swaps on `Quota::Rotated`. Defaults to
+    /// the in-memory adapter so the bin boots end-to-end on a host without a configured
+    /// secret store; the production bin replaces it with `gt_quota::keychain::linux::LinuxKeychain`.
+    pub keychain: Arc<dyn Keychain>,
 }
 
 impl Default for RootConfig {
@@ -161,6 +174,7 @@ impl Default for RootConfig {
             capacity: 4,
             model_weights: HashMap::new(),
             event_buffer: 1024,
+            keychain: Arc::new(InMemoryKeychain::new()),
         }
     }
 }
@@ -201,6 +215,7 @@ where
     let dead_count = Arc::new(AtomicUsize::new(0));
     let (events_tx, _) = broadcast::channel::<EventRecord>(config.event_buffer.max(1));
 
+    let keychain = config.keychain.clone();
     let mut reactor = Reactor {
         sched: sched.clone(),
         patrol: patrol.clone(),
@@ -213,6 +228,7 @@ where
         dead: Vec::new(),
         dead_count: dead_count.clone(),
         events: events_tx.clone(),
+        keychain: keychain.clone(),
     };
 
     let mut sched_rx = sched_rx;
@@ -248,6 +264,7 @@ where
         log_path,
         dead_count,
         events: events_tx,
+        keychain,
         join,
     }
 }
@@ -272,6 +289,9 @@ struct Reactor<R, FX, CK> {
     /// Live broadcast fan-out. Each appended record is also sent here so SSE subscribers see
     /// it; a send error simply means no listeners — not a failure (it is normal during boot).
     events: broadcast::Sender<EventRecord>,
+    /// Credential store the rotation chain flips on `Quota::Rotated`. The reaction is at the
+    /// edge so the core stays pure (`docs/06-observability.md`).
+    keychain: Arc<dyn Keychain>,
 }
 
 impl<R, FX, CK> Reactor<R, FX, CK>
@@ -286,6 +306,11 @@ where
     where
         E: EventKind + Serialize + Into<GtEvent>,
     {
+        // Bump the per-kind events counter once per ingest — the Prometheus exporter sees the
+        // exact same population the audit log records. `record_envelope` also attaches the
+        // causal triple to whatever span the producer was in (no-op outside one).
+        gt_telemetry::record_envelope(&env);
+
         match EventRecord::from_envelope(&env) {
             Ok(rec) => {
                 if let Err(e) = self.writer.append(&rec) {
@@ -308,6 +333,7 @@ where
     fn dead_error(&mut self, kind: &'static str, error: AppError) {
         self.dead.push(DeadLetterEntry::HandlerError { kind, error });
         self.dead_count.fetch_add(1, Ordering::SeqCst);
+        gt_telemetry::metrics::observe_dead_letter(kind);
     }
 
     /// The cross-domain wiring. Each arm is a reaction another step deferred to the root;
@@ -362,6 +388,17 @@ where
             GtEvent::Quota(QuotaEvent::BlockPredicted { account, .. })
             | GtEvent::Quota(QuotaEvent::AccountLimited { account, .. }) => {
                 self.effects.rotate(account);
+            }
+            // hq-0bko.2 gate: a rotation landed. Flip the keychain's live pointer so the next
+            // edge call uses the new account's credentials. Failure here is a real bug — log
+            // it, but keep the loop running; the bead is closed but the runtime is still
+            // using the previous credential until the operator fixes the keychain.
+            GtEvent::Quota(QuotaEvent::Rotated { to_account, .. }) => {
+                if let Err(e) = self.keychain.set_active(to_account) {
+                    eprintln!(
+                        "[gt] keychain: set_active({to_account}) failed: {e} — credential pointer NOT flipped"
+                    );
+                }
             }
             _ => {}
         }

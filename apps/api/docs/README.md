@@ -57,11 +57,14 @@ es la especificación de referencia.
 > | 6.f.2 | `gt-mcp` swap to official `rmcp` SDK (schemars-derived schemas, `#[tool_router]`) | DONE | — | hq-c3hb |
 > | 6.g | `gt-feed` (consumidor puro: Curator/Problems/View, replay byte-idéntico, wired en `GtState.feed` via `replay_gt`) | DONE | — | hq-mc72.8 |
 > | 6.f.13 | v1 operational: persistence wired in bins (DoltBeads + PgAudit opt-in via env) | DONE | — | hq-j9ou |
-> | 7.1 | `RealEffects` (gt sling subprocess + QuotaCommand::Rotate chain wired in `bins/gt` + `bins/gt-web`) | DONE | — | hq-7pdl.1 |
+> | 7.1 | `RealEffects` (gt sling subprocess + QuotaCommand::Rotate chain wired en `bins/gt` + `bins/gt-web`) | DONE | — | hq-7pdl.1 |
 > | 7.2 | `gt-web` bearer-token IAM middleware + `web.*` frontier-audit en events.jsonl | DONE | — | hq-7pdl.2 |
+> | 7.a | `gt-telemetry` (OTEL→Tempo + Prometheus exporters wired in `gt`/`gt-web`/`gt-mcp`, `/metrics` route in `gt-web`) | DONE | — | hq-0bko.1 |
+> | 7.b | `gt-quota::keychain` (port + `InMemoryKeychain` + Linux Secret-Service adapter; rotation flips live pointer at the edge) | DONE | — | hq-0bko.2 |
+> | 7.c | `gt-quota::probe` (parses real `anthropic-ratelimit-*` headers → `ProbeWindow`, idempotent under retry) | DONE | — | hq-0bko.3 |
 > | 6.h+ | resto de `gt-mcp` (otros dominios), adaptadores edge real adicionales | PLANEADO | — | — |
 >
-> Estado global: **Paso 7 (v1 operational: real Effects + gt-web IAM) DONE** (al 2026-05-28). Mantén esta tabla viva.
+> Estado global: **Paso 7 (v1 operational + observability + real quota: hq-7pdl + hq-j9ou + hq-0bko) DONE** (al 2026-05-28). Mantén esta tabla viva.
 
 ---
 

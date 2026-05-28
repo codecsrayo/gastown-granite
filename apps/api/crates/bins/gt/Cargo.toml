@@ -21,6 +21,7 @@ gt-events = { path = "../../kernel/gt-events" }
 gt-bus = { path = "../../kernel/gt-bus" }
 gt-audit = { path = "../../kernel/gt-audit" }
 gt-beads = { path = "../../kernel/gt-beads" }
+gt-telemetry = { path = "../../kernel/gt-telemetry" }
 # Every domain — only the composition root is allowed this fan-in.
 gt-agent = { path = "../../domain/gt-agent" }
 gt-scheduling = { path = "../../domain/gt-scheduling" }

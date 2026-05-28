@@ -18,12 +18,19 @@ use gt_beads::{BeadRepository, InMemoryBeads};
 use gt_root::{spawn, RealEffects, RootConfig, RootHandle, SystemClock};
 use gt_store_dolt::DoltBeads;
 use gt_store_pg::PgAudit;
+use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 
 fn main() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("build tokio runtime");
+
+    // Telemetry: stderr fmt + OTLP/HTTP traces (if `OTEL_EXPORTER_OTLP_ENDPOINT`) + Prometheus
+    // registry. Held until the runtime returns so the batch exporter flushes on shutdown.
+    let _telemetry = init_telemetry(TelemetryConfig::from_env("gt"))
+        .map_err(|e| eprintln!("[gt] telemetry init: {e} (continuing without exporter)"))
+        .ok();
 
     runtime.block_on(async {
         let log_path = std::env::var("GT_EVENT_LOG")

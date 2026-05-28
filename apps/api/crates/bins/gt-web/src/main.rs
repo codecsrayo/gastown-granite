@@ -23,6 +23,7 @@ use gt_beads::{BeadRepository, InMemoryBeads};
 use gt_root::{spawn, RealEffects, RootConfig, RootHandle, SystemClock};
 use gt_store_dolt::DoltBeads;
 use gt_store_pg::PgAudit;
+use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 use gt_web::{router, AppState, AuthConfig, JsonlWebAudit, WebAuditSink};
 
 fn main() {
@@ -30,6 +31,10 @@ fn main() {
         .enable_all()
         .build()
         .expect("build tokio runtime");
+
+    let _telemetry = init_telemetry(TelemetryConfig::from_env("gt-web"))
+        .map_err(|e| eprintln!("[gt-web] telemetry init: {e} (continuing without exporter)"))
+        .ok();
 
     runtime.block_on(async {
         let log_path = std::env::var("GT_EVENT_LOG")
