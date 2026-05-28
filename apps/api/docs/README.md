@@ -63,9 +63,10 @@ es la especificación de referencia.
 > | 7.b | `gt-quota::keychain` (port + `InMemoryKeychain` + Linux Secret-Service adapter; rotation flips live pointer at the edge) | DONE | — | hq-0bko.2 |
 > | 7.c | `gt-quota::probe` (parses real `anthropic-ratelimit-*` headers → `ProbeWindow`, idempotent under retry) | DONE | — | hq-0bko.3 |
 > | 6.h A | `gt-store-dolt::DoltSessions` (`SessionQueries` adapter wired en `gt-web` + `gt-mcp` via `GT_DOLT_URL`) | DONE | — | hq-u955 |
+> | 6.h-C | audit outbox + feed projections (`outbox_events` + `feed_projections`; entity+outbox single-TX in `PgOutboxWriter`, `PgOutboxDrain` fans to `audit_events`+projections, wired in `bins/gt`) | DONE | — | hq-7owq |
 > | 6.h+ | resto de `gt-mcp` (otros dominios), adaptadores edge real adicionales | PLANEADO | — | — |
 >
-> Estado global: **Paso 7 (v1 operational + observability + real quota: hq-7pdl + hq-j9ou + hq-0bko) DONE** (al 2026-05-28). Mantén esta tabla viva.
+> Estado global: **Paso 7 (v1 operational + observability + real quota: hq-7pdl + hq-j9ou + hq-0bko) DONE**; **Paso 6.h-C (audit outbox + analytics: hq-7owq) DONE** (al 2026-05-28). Mantén esta tabla viva.
 
 ---
 

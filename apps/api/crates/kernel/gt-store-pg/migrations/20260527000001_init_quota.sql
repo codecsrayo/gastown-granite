@@ -6,10 +6,13 @@
 -- migration as applied without fighting a pre-existing schema. New migrations should NOT
 -- be edited once applied (sqlx validates each file by checksum) — add a new file instead.
 
+-- `window_json` not `window`: WINDOW is a reserved keyword in Postgres (window functions),
+-- so an unquoted `window` column is a syntax error. The name carries the encoding (JSONB
+-- round-tripped through serde) and sidesteps quoting every reference.
 CREATE TABLE IF NOT EXISTS accounts (
-    id       TEXT PRIMARY KEY,
-    status   TEXT NOT NULL,
-    window   JSONB NULL
+    id           TEXT PRIMARY KEY,
+    status       TEXT NOT NULL,
+    window_json  JSONB NULL
 );
 
 -- Heavy-write, append-only: the rate and the block prediction are computed over these

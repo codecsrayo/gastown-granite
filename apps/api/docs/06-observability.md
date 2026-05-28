@@ -139,10 +139,42 @@ trazabilidad hacia Grafana** — no una consulta a una BD de documentos:
 | **Traces** (cadenas causales) | Tempo | nativo | "muéstrame todo lo causado por el spawn X y dónde murió la cadena" |
 | **Métricas** | Prometheus | nativo | tasas, latencias, profundidad de cola, contadores de dead-letter |
 | **Log de eventos** (`EventRecord`) | Postgres (`JSONB`) | nativo (SQL) | consulta ad-hoc del audit: filtrar por `actor`, `type`, `correlation_id` |
+| **Proyecciones de feed** (rollups) | Postgres (`feed_projections`) | nativo (SQL) | paneles de consumo por cuenta/sesión y totales por `kind` — sin plegar el log entero |
 
 Deliberadamente **no se usa Mongo**: su datasource en Grafana es Enterprise/community, no
 core OSS, y para causación los traces de Tempo son superiores a consultar documentos. El
 audit consultable vive en Postgres `JSONB` (ver [04-persistence.md](04-persistence.md)).
+
+### Paneles SQL sobre `feed_projections` (hq-7owq)
+
+El drain del outbox materializa los agregados que un panel necesita sin re-plegar el log.
+Cada fila es `(scope, scope_id, metric, value_num)`; el panel es un `SELECT` directo:
+
+```sql
+-- Top cuentas por consumo (tokens input+output acumulados)
+SELECT scope_id AS account, value_num AS tokens_total
+FROM feed_projections
+WHERE scope = 'account' AND metric = 'tokens_total'
+ORDER BY value_num DESC;
+
+-- Consumo por sesión de una cuenta (scope_id = '<account>|<session>')
+SELECT split_part(scope_id, '|', 2) AS session, value_num AS tokens_total
+FROM feed_projections
+WHERE scope = 'session' AND metric = 'tokens_total'
+  AND scope_id LIKE 'acct-A|%'
+ORDER BY value_num DESC;
+
+-- Volumen por tipo de evento (mismos números que FeedState.kind_totals del replay)
+SELECT scope_id AS kind, value_num AS events_total
+FROM feed_projections
+WHERE scope = 'kind' AND metric = 'events_total'
+ORDER BY value_num DESC;
+```
+
+El contrato `gt-store-pg/tests/outbox_contract.rs` es el **gate**: una carga sintética
+produce filas en `outbox_events` → el drain las vuelca a `audit_events` + `feed_projections`
+→ el panel SQL lee los mismos totales que reconstruye `gt_feed::Curator::fold` sobre el log
+auditado (la regla doc-04 "el feed es read-only del stream").
 
 ## Cobertura honesta
 
