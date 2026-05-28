@@ -18,8 +18,11 @@ name = "gt-mcp"
 path = "src/main.rs"
 
 [dependencies]
+# The composition root: gt-mcp shares its agent actor instead of spawning an isolated one.
+gt = { path = "../gt" }
 gt-events = { path = "../../kernel/gt-events" }
 gt-agent = { path = "../../domain/gt-agent" }
+gt-beads = { path = "../../kernel/gt-beads" }
 
 tokio = { workspace = true, features = ["io-util", "io-std", "macros", "rt", "rt-multi-thread", "sync"] }
 serde.workspace = true
