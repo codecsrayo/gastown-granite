@@ -15,9 +15,16 @@ use std::sync::Arc;
 
 use rmcp::{
     handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content, ErrorData as McpError},
-    tool, tool_router,
+    model::{
+        AnnotateAble, CallToolResult, Content, ErrorData as McpError, Implementation,
+        ListResourcesResult, PaginatedRequestParams, RawResource, ReadResourceRequestParams,
+        ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo,
+    },
+    service::RequestContext,
+    tool, tool_handler, tool_router, RoleServer, ServerHandler,
 };
+
+use gt_events::AppError;
 
 use gt_agent::actor::AgentHandle;
 use gt_agent::{AddSession, AgentCommand, RemoveSession, TransitionSession};
@@ -51,7 +58,7 @@ struct Inner {
     audit: Arc<dyn AuditSink>,
 }
 
-#[tool_router(server_handler)]
+#[tool_router]
 impl McpService {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -807,5 +814,117 @@ impl McpService {
     ) -> Result<CallToolResult, McpError> {
         let json = serde_json::to_value(&args).expect("RotateAccount is Serialize");
         self.run_quota("quota.rotate.execute", json, QuotaCommand::Rotate(args), false).await
+    }
+
+    // --- read-side: domain snapshots exposed as MCP Resources (doc 09 row 1) ----------------
+    //
+    // These are the read queries the rmcp ServerHandler exposes via `list_resources` /
+    // `read_resource` below. Kept as plain methods so tests drive them without standing up a
+    // RequestContext — same split as the tool `run_*` helpers.
+
+    /// The catalog of read-only snapshot resources, one per domain. Each reads JSON via
+    /// [`McpService::read_resource_json`] at the matching `uri`.
+    pub fn resource_list(&self) -> Vec<RawResource> {
+        let mk = |uri: &str, name: &str, desc: &str| {
+            let mut r = RawResource::new(uri, name);
+            r.description = Some(desc.to_string());
+            r.mime_type = Some("application/json".to_string());
+            r
+        };
+        vec![
+            mk("gt://agent/sessions", "agent.sessions", "Active agent sessions and their lifecycle state."),
+            mk("gt://scheduling/queue", "scheduling.queue", "Dispatcher queue depth and in-flight capacity."),
+            mk("gt://patrol/leases", "patrol.leases", "Live lease count and total expirations emitted."),
+            mk("gt://merge/slots", "merge.slots", "Merge slots and their state machine position."),
+            mk("gt://orch/convoys", "orch.convoys", "Convoys, their state and per-member progress."),
+            mk("gt://quota/accounts", "quota.accounts", "Tracked account count and predictions emitted."),
+        ]
+    }
+
+    /// Read one snapshot resource as JSON. Unknown uri → `NotFound`. Pure read: it only
+    /// snapshots the shared actors, never mutates.
+    pub async fn read_resource_json(&self, uri: &str) -> Result<serde_json::Value, AppError> {
+        match uri {
+            "gt://agent/sessions" => {
+                let sessions = self.inner.agent.snapshot().await;
+                serde_json::to_value(&sessions)
+                    .map_err(|e| AppError::Other(format!("encode sessions: {e}")))
+            }
+            "gt://scheduling/queue" => {
+                let (queued, in_flight) = self.inner.sched.snapshot().await;
+                Ok(serde_json::json!({ "queued": queued, "in_flight": in_flight }))
+            }
+            "gt://patrol/leases" => {
+                let (live_leases, expired_emitted) = self.inner.patrol.snapshot().await;
+                Ok(serde_json::json!({ "live_leases": live_leases, "expired_emitted": expired_emitted }))
+            }
+            "gt://merge/slots" => {
+                let slots = self.inner.merge.snapshot().await;
+                let arr: Vec<serde_json::Value> = slots
+                    .iter()
+                    .map(|s| serde_json::json!({ "bead": s.bead, "branch": s.branch, "state": s.state.as_str() }))
+                    .collect();
+                Ok(serde_json::Value::Array(arr))
+            }
+            "gt://orch/convoys" => {
+                let convoys = self.inner.orch.snapshot().await;
+                let arr: Vec<serde_json::Value> = convoys
+                    .iter()
+                    .map(|c| {
+                        let members: Vec<serde_json::Value> = c
+                            .members
+                            .iter()
+                            .map(|m| serde_json::json!({ "bead": m.bead, "state": m.state.as_str() }))
+                            .collect();
+                        serde_json::json!({ "id": c.id, "state": c.state.as_str(), "members": members })
+                    })
+                    .collect();
+                Ok(serde_json::Value::Array(arr))
+            }
+            "gt://quota/accounts" => {
+                let (accounts, predictions_emitted) = self.inner.quota.snapshot().await;
+                Ok(serde_json::json!({ "accounts": accounts, "predictions_emitted": predictions_emitted }))
+            }
+            other => Err(AppError::NotFound(format!("resource {other}"))),
+        }
+    }
+}
+
+/// The rmcp server handler. `#[tool_handler]` injects `call_tool`/`list_tools`/`get_tool`
+/// from the `#[tool_router]` registry; we add the read-side (`list_resources`/`read_resource`)
+/// and a `get_info` that advertises both the tools and resources capabilities.
+#[tool_handler(router = Self::tool_router())]
+impl ServerHandler for McpService {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
+        .with_server_info(Implementation::from_build_env())
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        let resources = self.resource_list().into_iter().map(|r| r.no_annotation()).collect();
+        Ok(ListResourcesResult::with_all_items(resources))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, McpError> {
+        match self.read_resource_json(&request.uri).await {
+            Ok(value) => {
+                let text = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
+                Ok(ReadResourceResult::new(vec![ResourceContents::text(text, &request.uri)]))
+            }
+            Err(e) => Err(McpError::invalid_request(e.to_string(), None)),
+        }
     }
 }
