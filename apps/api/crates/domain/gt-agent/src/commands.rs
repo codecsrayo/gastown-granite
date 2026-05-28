@@ -5,15 +5,18 @@
 //! tick so there is no TOCTOU window. External clients (e.g. `gt-mcp`) call `validate`
 //! to "ask without doing" — the answer is a snapshot, so the actor revalidates on exec.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use gt_events::{AppError, Command};
 
 use crate::state::{Session, SessionRegistry, SessionState};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AddSession {
+    /// Unique session id. Must be non-empty.
     pub id: String,
+    /// Rig the session runs in. Must be non-empty.
     pub rig: String,
 }
 
@@ -44,8 +47,9 @@ impl Command for AddSession {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RemoveSession {
+    /// Id of an existing session.
     pub id: String,
 }
 
@@ -67,9 +71,11 @@ impl Command for RemoveSession {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TransitionSession {
+    /// Id of an existing session.
     pub id: String,
+    /// Target lifecycle state. Illegal transitions are rejected by the state machine.
     pub to: SessionState,
 }
 
@@ -91,7 +97,7 @@ impl Command for TransitionSession {
 }
 
 /// Sum type so the actor can route any agent command through a single message variant.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentCommand {
     Add(AddSession),

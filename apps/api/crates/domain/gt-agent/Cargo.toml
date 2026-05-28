@@ -9,6 +9,8 @@ gt-events = { path = "../../kernel/gt-events" }
 gt-bus = { path = "../../kernel/gt-bus" }
 tokio.workspace = true
 serde.workspace = true
+# JSON Schema derives for Command arguments — surfaced by gt-mcp.
+schemars.workspace = true
 
 [dev-dependencies]
 # Solo para el gate de replay (Paso 3): el dominio no depende del log en runtime.

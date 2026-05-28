@@ -1,17 +1,15 @@
 //! `gt-mcp` library — MCP-style tool dispatch over a domain actor.
 //!
-//! See `apps/api/docs/09-llm-integration.md`. The library exposes the pure dispatch
-//! pieces (registry, schema, scope auth, audit sink); `main.rs` wires them onto stdio
-//! JSON-RPC. Tests drive `dispatch` directly without spawning the binary so the
-//! protocol layer stays thin and replaceable.
+//! See `apps/api/docs/09-llm-integration.md`. The library exposes the dispatch
+//! pieces (`McpService`, `Scope` auth, `AuditSink`) on top of the official `rmcp`
+//! Rust SDK; `main.rs` mounts the service over stdio. Tests drive
+//! [`McpService::run`] directly so the same code path the macro-generated tool
+//! router uses at runtime is covered without a real transport.
 
 pub mod audit;
 pub mod auth;
-pub mod schema;
-pub mod server;
-pub mod tools;
+pub mod service;
 
-pub use audit::{AuditEvent, AuditSink, InMemoryAudit};
+pub use audit::{AuditEvent, AuditSink, InMemoryAudit, Outcome};
 pub use auth::Scope;
-pub use server::{serve_stdio, Dispatcher};
-pub use tools::{tool_descriptors, ToolError, ToolRegistry};
+pub use service::McpService;

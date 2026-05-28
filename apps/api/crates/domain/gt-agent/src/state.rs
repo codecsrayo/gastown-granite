@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use gt_events::AppError;
@@ -8,7 +9,7 @@ use crate::events::AgentEvent;
 
 /// Ciclo de vida de una sesión. Las transiciones ilegales se rechazan (error semántico
 /// atrapado por el tipo, ver `docs/06-observability.md`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionState {
     Spawned,
