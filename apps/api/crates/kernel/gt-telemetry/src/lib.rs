@@ -154,11 +154,17 @@ pub fn init(cfg: TelemetryConfig) -> Result<TelemetryGuard, TelemetryError> {
     Ok(TelemetryGuard { provider })
 }
 
-/// Attach the causal triple (`correlation_id`, `causation_id`, `event_id`) of an [`Envelope`]
-/// to the **current** tracing span. The causal chain *is* the trace
-/// (`docs/06-observability.md`), so every domain emits these for free if it logs around the
-/// envelope. No-op if there is no current span — does not panic during replay.
+/// Record one envelope to telemetry: bump the per-kind Prometheus counter (always) and, if a
+/// tracing span is active, attach the causal triple (`correlation_id`, `causation_id`,
+/// `event_id`) to it. The causal chain *is* the trace (`docs/06-observability.md`).
+///
+/// The metric bump is **unconditional** — it must not depend on whether the caller happens to
+/// be inside an `#[instrument]` span. The composition root's reactor loop has no span, so
+/// gating the counter on span presence would silently zero `gt_events_total` in production
+/// (the span attributes are the only span-conditional part).
 pub fn record_envelope<E: EventKind>(env: &Envelope<E>) {
+    metrics::observe_event(env.payload.kind());
+
     let span = tracing::Span::current();
     if span.is_disabled() {
         return;
@@ -169,7 +175,6 @@ pub fn record_envelope<E: EventKind>(env: &Envelope<E>) {
         span.record("causation_id", tracing::field::display(cause));
     }
     span.record("event.kind", env.payload.kind());
-    metrics::observe_event(env.payload.kind());
 }
 
 /// Module-level OnceLock so tests / repeated `init_off` calls never fight over the global.

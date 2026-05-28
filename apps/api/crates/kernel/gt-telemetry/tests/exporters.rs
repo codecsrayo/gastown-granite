@@ -21,6 +21,37 @@ impl gt_events::EventKind for FakeEvent {
     }
 }
 
+/// Distinct kind so the no-span assertion is isolated from the span-based test (the
+/// Prometheus counter is process-global and tests run in parallel).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NoSpanEvent;
+
+impl gt_events::EventKind for NoSpanEvent {
+    fn kind(&self) -> &'static str {
+        "test.no_span_event"
+    }
+}
+
+/// Regression gate: the counter must bump even with NO active tracing span. The composition
+/// root's reactor loop has no `#[instrument]` span, so a span-gated counter would silently
+/// zero `gt_events_total` in production (the bug this asserts against).
+#[test]
+fn counter_bumps_without_an_active_span() {
+    metrics::ensure_registered();
+    assert!(
+        tracing::Span::current().is_disabled(),
+        "test must run with no ambient subscriber/span"
+    );
+    for _ in 0..3 {
+        record_envelope(&Envelope::root(NoSpanEvent));
+    }
+    let text = metrics::render_text().expect("render");
+    assert!(
+        text.contains("gt_events_total{kind=\"test.no_span_event\"} 3"),
+        "counter must bump outside a span, body:\n{text}"
+    );
+}
+
 #[test]
 fn synthetic_workflow_emits_trace_and_metrics() {
     let (sink, guard) = install_in_memory_tracer("gt_telemetry=trace,info");
