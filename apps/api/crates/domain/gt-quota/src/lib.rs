@@ -23,6 +23,7 @@ mod cost;
 mod events;
 mod state;
 
+pub use actor::QuotaHandle;
 pub use commands::{ProbeWindow, QuotaCommand, RotateAccount, SampleTokens};
 pub use cost::{cost_units, Cost, ModelWeights};
 pub use events::QuotaEvent;

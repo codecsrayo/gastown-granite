@@ -1,14 +1,15 @@
 //! `gt` binary — the thin boot. Per `docs/01-architecture.md`, the **single** tokio runtime
 //! is created here, in `bins/`; the domain crates never create one, they receive handles.
 //!
-//! This wires the in-memory repo + the logging effects/system clock as a runnable skeleton.
-//! Swapping in the Dolt adapter (`gt-store-dolt`) and the real subprocess/rotation effects is
-//! an edge follow-up; the composition wiring they plug into is what this crate delivers.
+//! Wires the in-memory bead repo + the real subprocess/rotation effects (`gt sling` child
+//! processes + the predictive rotation chain). The Dolt-backed repo (`gt-store-dolt`) slots in
+//! here without touching the composition wiring.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gt_beads::InMemoryBeads;
-use gt_root::{spawn, LogEffects, RootConfig, SystemClock};
+use gt_root::{spawn, RealEffects, RootConfig, SystemClock};
 
 fn main() {
     // One runtime for the whole process.
@@ -20,15 +21,14 @@ fn main() {
     runtime.block_on(async {
         let log_path = std::env::var("GT_EVENT_LOG")
             .unwrap_or_else(|_| "/tmp/gt.events.jsonl".to_string());
+        let gt_bin = std::env::var("GT_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("gt"));
 
         let repo = Arc::new(InMemoryBeads::default());
-        let root = spawn(
-            repo,
-            LogEffects,
-            SystemClock,
-            &log_path,
-            RootConfig::default(),
-        );
+        let (effects, quota_slot) = RealEffects::new(gt_bin);
+        let root = spawn(repo, effects, SystemClock, &log_path, RootConfig::default());
+        let _ = quota_slot.set(root.quota.clone());
 
         eprintln!("[gt] composition root up — event log: {}", root.log_path().display());
         eprintln!("[gt] (edges: scheduler/patrol/merge/quota/orchestration actors live; drive via handles)");
