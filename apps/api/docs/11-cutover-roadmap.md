@@ -31,7 +31,7 @@ apruebe el go/no-go (8.6).
    actor, payload, visibility}`, vocabulario `session_start`/`quota_scanned`) **no** coincide
    con el `EventRecord` Rust (`{event_id, correlation_id, causation_id, ts, type, payload}`,
    vocabulario `agent.spawned`/`quota.usage_probed`). Un log Go NO replay-ea en Rust as-is.
-   → **8.8** (bloquea el shadow 8.4)
+   → **8.8 — DECIDIDO clean cutover** (sin traductor; ver [12-event-log-portability.md](12-event-log-portability.md)). Re-scopes 8.4 a diff de side-effects.
 4. **SessionRole/crew no modelado.** `Session{id,rig,state}` no distingue Mayor/Dog/Polecat ni
    atribuye crew. → **8.7** (bloquea 8.2)
 5. **74 paquetes Go `internal/` vs ~14 crates Rust.** Sin portar: CLI, gt-plugin (vacío),
@@ -47,13 +47,13 @@ apruebe el go/no-go (8.6).
 | hq-8iur.7 | SessionRole + crew schema (Mayor/Dog/Polecat + crew attribution) | P1 | bloquea .2 |
 | hq-8iur.1 | Boot hydration — replay log → actores al boot | P1 | — |
 | hq-8iur.2 | Sessions write-path en Rust (poblar tabla Dolt) | P1 | espera .7 |
-| hq-8iur.8 | Event-format translation Go→Rust + golden-log portability test | P1 | bloquea .4 |
+| hq-8iur.8 | Event-format portability (Go log ↔ Rust) — **DECIDIDO: clean cutover, sin replay histórico**; ver [12-event-log-portability.md](12-event-log-portability.md) | P1 | re-scopes .4 (no bloquea — ver §6 doc 12) |
 | hq-8iur.3 | Paridad audit Go↔Rust (mapa gt commands → API) | P2 | — |
 | hq-8iur.5 | Ops readiness (`/health`+`/readyz`, graceful shutdown, daemon) | P2 | — |
 | hq-8iur.4 | Shadow/parallel-run harness (Rust read-only, diff vs Go) | P2 | espera .8 |
 | hq-8iur.6 | [DECISION] cutover runbook + go/no-go flip + rollback | P1 | espera 1-5,7,8 + humano |
 
-Camino crítico: **.7 → .1/.2 → .8 → .4 → .6**. (.3 y .5 en paralelo.)
+Camino crítico: **.7 → .1/.2 → .4 → .6**. (.3, .5, .8 en paralelo / decididos; .8 desbloquea .4 vía doc 12 §6.)
 
 ---
 
@@ -143,6 +143,8 @@ Scope:
 - Golden-log test: captura slice real de /gt/.events.jsonl como fixture → traductor + replay_gt → assert reconstruye sin error + estado coincide con Go (o subset documentado).
 Gate: fixture Go replay-ea limpio por el path Rust; divergencias explicadas, no silenciosas. Bloquea 8.4. Coordina con 8.3 (vocabulario) y 8.4 (consume el traductor).
 ```
+
+**Resolución (2026-05-28):** decisión (b) — clean cutover sin replay histórico. Sin traductor. La portability test original queda retirada; el gate se sustituye por el documento de decisión + protocolo de flip. Ver [12-event-log-portability.md](12-event-log-portability.md). Re-scopes `hq-8iur.4` (shadow harness) — el diff pasa a side-effects observables, no a replay del log (doc 12 §6).
 
 ### Paso 9 — Agente 9.B (hq-evks gt-plugin, primero)
 
