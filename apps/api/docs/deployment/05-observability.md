@@ -74,18 +74,39 @@ PromQL sobre los datos ya existentes (no requiere migraciones nuevas):
 | `Top feed_projections by value_num` | PG | tabla |
 | `Outbox pending (oldest first)` | PG | tabla, debug visual |
 
-## Métricas que ya emiten los bins
+## Métricas que ya emiten los bins (hq-obsv.1)
 
-`gt-telemetry` expone vía `/metrics` en `gt-api` (puerto 8787, sin auth a propósito —
-[`../docs/06-observability.md`](../06-observability.md)). Las series clave:
+| Bin | `/metrics` HTTP | Llama `record_envelope` | Contenido real |
+|---|---|---|---|
+| `gt-web` (gt-api) | `:8787/metrics` ✓ | ✗ | registry vacío |
+| `gt` (orchestrator) | `:9100/metrics` ✓ | ✓ (`bins/gt/src/root.rs`) | `gt_events_total{kind}` + `gt_dead_letter_total{kind}` con samples reales |
+| `gt-mcp` | `:8765/metrics` ✓ (mismo listener que `/mcp`) | ✗ | registry vacío (placeholder hasta instrumentación) |
 
-- `gt_events_total{kind}` — contador por tipo de evento (counter bumped por
-  `record_envelope`).
-- métricas estándar del runtime Rust (`tokio`, `process_*`, etc.).
+`gt` cuenta porque el composition root bumpea el counter en su reactor; los otros dos
+exponen el endpoint para que cuando se agregue `record_envelope` en sus handlers no haga
+falta cambiar Prom ni compose. Prometheus scrapea los 3 jobs (`gt-web`, `gt`, `gt-mcp`)
+y agrega bajo el label `service`.
 
-`gt` y `gt-mcp` inicializan `gt-telemetry` también — exportan **traces OTEL** vía
-`OTEL_EXPORTER_OTLP_ENDPOINT` si está seteado (no scrapeables por Prom; van a Tempo
-cuando se agregue). No exponen `/metrics` HTTP propio aún.
+Bind override: `GT_METRICS_BIND` en `gt` (default `0.0.0.0:9100`). gt-mcp comparte el
+listener de su HTTP transport — no hay env separado.
+
+### Verificar
+
+```sh
+# Targets healthy
+docker exec gastown-prometheus wget -qO- 'http://127.0.0.1:9090/api/v1/targets' \
+  | jq '.data.activeTargets[] | {job: .labels.job, health, lastError}'
+
+# Counter samples reales
+docker exec gastown-prometheus wget -qO- 'http://127.0.0.1:9090/api/v1/query?query=gt_events_total' \
+  | jq '.data.result'
+
+# Sample local /metrics body
+docker exec gastown-prometheus wget -qO- http://gt:9100/metrics | head -10
+```
+
+Los 3 bins inicializan `gt-telemetry` y exportan **traces OTEL** vía
+`OTEL_EXPORTER_OTLP_ENDPOINT` (ver sección Tempo).
 
 ## Operación
 

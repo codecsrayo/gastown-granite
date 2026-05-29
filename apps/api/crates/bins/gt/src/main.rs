@@ -26,6 +26,8 @@
 //! OTLP batch flush sees a quiescent process. No `task.abort()` on the outbox path — that
 //! was the silent-data-loss seam (gate: `kill -TERM` → 0 outbox rows lost).
 
+mod metrics_http;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -61,6 +63,16 @@ fn main() {
         .ok();
 
     runtime.block_on(async {
+        // hq-obsv.1: spawn the /metrics endpoint early so Prometheus can scrape from boot
+        // onward. Detached task — failure here logs but does not abort the orchestrator
+        // (telemetry is best-effort; the composition root is the load-bearing path).
+        let metrics_addr = metrics_http::bind_addr();
+        tokio::spawn(async move {
+            if let Err(e) = metrics_http::serve(&metrics_addr).await {
+                eprintln!("[gt] metrics http server stopped: {e}");
+            }
+        });
+
         let log_path = std::env::var("GT_EVENT_LOG")
             .unwrap_or_else(|_| "/tmp/gt.events.jsonl".to_string());
 

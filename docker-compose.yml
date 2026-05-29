@@ -120,6 +120,9 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4318/v1/traces}
       OTEL_SERVICE_NAME: gt
+      GT_METRICS_BIND: 0.0.0.0:9100
+    expose:
+      - "9100"
     volumes:
       - ${FOLDER:-/home/nixos/gastown}:/gt
       - agent-home:/home/agent
