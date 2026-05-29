@@ -9,6 +9,8 @@ gt-events = { path = "../gt-events" }
 gt-beads = { path = "../gt-beads" }
 gt-audit = { path = "../gt-audit" }
 gt-quota = { path = "../../domain/orchestration/gt-quota" }
+# hq-mc72.12.31: PgRigs backs the gt-rig RigRepository port (rig catalog persistence).
+gt-rig = { path = "../../domain/platform/gt-rig" }
 # hq-mysw: the activity projection reuses gt-feed's color/age calculator + RFC3339 parse so the
 # SQL read-side and the in-memory `activity_view` share ONE threshold source of truth.
 gt-feed = { path = "../../domain/platform/gt-feed" }

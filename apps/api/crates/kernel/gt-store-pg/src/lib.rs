@@ -14,6 +14,7 @@ mod audit;
 mod conn;
 mod outbox;
 mod quota_repo;
+mod rig_repo;
 mod schema;
 
 pub use activity::{ActivityEntry, PgActivity};
@@ -21,4 +22,5 @@ pub use audit::PgAudit;
 pub use conn::connect;
 pub use outbox::{PgFeedProjections, PgOutboxDrain, PgOutboxWriter};
 pub use quota_repo::PgQuota;
+pub use rig_repo::PgRigs;
 pub use schema::ensure_schema;
