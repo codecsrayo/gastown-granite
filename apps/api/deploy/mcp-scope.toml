@@ -1,0 +1,6 @@
+# gt-mcp per-actor scope. No hardcoded admin: an actor absent here is denied.
+# `mcp-local` (the default GT_MCP_ACTOR) gets full access for development/testing.
+# Tighten per-actor (e.g. allow = ["scheduling.*", "patrol.tick.execute"]) before any
+# multi-client / production exposure — `*` grants every execute tool.
+[actors.mcp-local]
+allow = ["*"]

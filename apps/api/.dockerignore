@@ -1,5 +1,6 @@
 target
 docs
-deploy
+deploy/systemd
 .git
 **/*.md
+!deploy/mcp-scope.toml

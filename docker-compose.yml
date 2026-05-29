@@ -124,6 +124,36 @@ services:
     networks:
       - default
 
+  # gt-mcp: MCP tool/resource server over streamable-HTTP (rmcp). Same slim image as gt-api
+  # (carries gt-mcp too). Reads orchestrator state from Dolt `hq` + PG; shares the event log.
+  # Per-actor scope from mcp-scope.toml (no hardcoded admin); GT_MCP_ACTOR=mcp-local = full
+  # access for dev. Published on 127.0.0.1:8765 for host MCP clients (gt-mcp-cli / Claude Code).
+  gt-mcp:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: gastown-gt-mcp
+    restart: unless-stopped
+    command: ["gt-mcp"]
+    depends_on:
+      - dolt
+      - postgres
+    environment:
+      GT_MCP_TRANSPORT: http
+      GT_MCP_HTTP_BIND: 0.0.0.0:8765
+      GT_DOLT_URL: mysql://gastown@dolt:3307/hq
+      GT_PG_AUDIT_URL: postgres://gastown:gastown@postgres:5432/gastown
+      GT_EVENT_LOG: /var/lib/gastown/events.jsonl
+      GT_MCP_ACTOR: ${GT_MCP_ACTOR:-mcp-local}
+      GT_MCP_SCOPE_CONFIG: /etc/gastown/mcp-scope.toml
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - gt-eventlog:/var/lib/gastown
+    ports:
+      - "127.0.0.1:8765:8765"
+    networks:
+      - default
+
 networks:
   traefik-public:
     name: ${TRAEFIK_PUBLIC_NETWORK:-proyectos-bi-quare}
