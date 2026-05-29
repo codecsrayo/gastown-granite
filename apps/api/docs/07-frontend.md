@@ -6,7 +6,7 @@
 > en Axum.
 >
 > **La aplicación web del navegador (el dashboard) NO vive en este crate.** Se
-> construye aparte en `apps/town/web/` con SvelteKit + Svelte 5 + Tailwind. El
+> construye aparte en `apps/web/` con SvelteKit + Svelte 5 + Tailwind. El
 > contrato HTTP/SSE de `gt-web` es lo único compartido.
 >
 > - **No portar `internal/web/`** (Go viejo) a Rust ni a estos crates. Está
@@ -14,18 +14,18 @@
 >   sigue en el árbol como referencia histórica, no como spec.
 > - El plan completo del frontend nuevo (epics, beads, gaps de API, decisiones de
 >   diseño) vive en:
->   - [apps/town/docs/README.md](../../town/docs/README.md) — índice + reglas para agentes
->   - [apps/town/docs/frontend-migration-sveltekit.md](../../town/docs/frontend-migration-sveltekit.md) — alcance + epic plan
->   - [apps/town/docs/frontend-api-surface.md](../../town/docs/frontend-api-surface.md) — contrato real + gaps
->   - [apps/town/docs/frontend-architecture.md](../../town/docs/frontend-architecture.md) — estructura SvelteKit
->   - [apps/town/docs/frontend-features.md](../../town/docs/frontend-features.md) — catálogo de features
+>   - [apps/docs/README.md](../../docs/README.md) — índice + reglas para agentes
+>   - [apps/docs/frontend-migration-sveltekit.md](../../docs/frontend-migration-sveltekit.md) — alcance + epic plan
+>   - [apps/docs/frontend-api-surface.md](../../docs/frontend-api-surface.md) — contrato real + gaps
+>   - [apps/docs/frontend-architecture.md](../../docs/frontend-architecture.md) — estructura SvelteKit
+>   - [apps/docs/frontend-features.md](../../docs/frontend-features.md) — catálogo de features
 >
 > - El frontend **NO** asume endpoints inventados. Si una feature necesita algo
 >   no documentado en `frontend-api-surface.md`, eso es un **gap explícito** que
 >   abre bead en `hq-fe-api-r.*` o `hq-fe-api-w.*` antes de implementarse aquí.
 >
 > Si un agente empieza a reescribir HTML/CSS/JS dentro de `apps/api`, está fuera
-> de alcance — parar y mover ese trabajo al plan SvelteKit en `apps/town/`.
+> de alcance — parar y mover ese trabajo al plan SvelteKit en `apps/`.
 
 ## Dos naturalezas de dato → dos canales
 
@@ -155,7 +155,7 @@ Bearer plano migra a **JWT firmado con claims `roles[]` + `scopes[]`**. Tracked 
 
 Write-side actual (`POST /api/nudge`) expande a un comando bus completo (tracked en
 `hq-fe-api-w.*`); ver gap table en
-[apps/town/docs/frontend-api-surface.md](../../town/docs/frontend-api-surface.md).
+[apps/docs/frontend-api-surface.md](../../docs/frontend-api-surface.md).
 
 ## Estructura en el árbol
 

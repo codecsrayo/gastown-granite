@@ -32,7 +32,7 @@ persistence, WebSocket genérico, GraphQL, Storybook.
 ## Layout del proyecto
 
 ```
-apps/town/web/
+apps/web/
 ├── package.json · pnpm-lock.yaml · svelte.config.js · vite.config.ts
 ├── tailwind.config.ts · tsconfig.json · postcss.config.cjs
 ├── src/
@@ -387,7 +387,7 @@ solo si dock abierto) + svelte-dnd-action (~5kb).
 ## Cómo arrancar (post-scaffold)
 
 ```bash
-cd apps/town/web
+cd apps/web
 pnpm install
 pnpm dev                      # Vite proxy /api → http://localhost:8787
 
@@ -400,7 +400,7 @@ pnpm test                     # vitest
 pnpm test:e2e                 # playwright contra dev server
 
 # build producción
-pnpm build                    # genera apps/town/web/build/
+pnpm build                    # genera apps/web/build/
 # gt-api sirve ese build (hq-fe-cut.1)
 ```
 
@@ -453,4 +453,4 @@ pnpm build                    # genera apps/town/web/build/
 - Features: [frontend-features.md](frontend-features.md)
 - Wireframe: [Gas Town Redesign Wireframes.html](Gas%20Town%20Redesign%20Wireframes.html)
 - Mockup hi-fi: [pagina.png](pagina.png)
-- Backend design: [apps/api/docs/07-frontend.md](../../api/docs/07-frontend.md)
+- Backend design: [apps/api/docs/07-frontend.md](../api/docs/07-frontend.md)

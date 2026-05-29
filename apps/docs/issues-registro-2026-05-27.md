@@ -89,7 +89,7 @@ agente/rig, tests, compaction reports).
 |---|---|---|
 | hq-68kn | task | Convoy lifecycle desacoplado del estado del bead trackeado (timeline reconstruido: doble sling pl-edd → amber + flint) |
 | hq-d412 | task | `gt doctor agent-beads-exist`: cuenta beads cerrados como missing; `--fix` seguro pero inefectivo |
-| **hq-0fvy / hq-fime** | feature | Persistir historial de consumo de tokens por cuenta; derivar techos de cuota empíricos de eventos rate-limit. **Duplicados entre sí** y cubiertos por el spec [features/token-tracking-prediction.md](../../api/docs/features/token-tracking-prediction.md) |
+| **hq-0fvy / hq-fime** | feature | Persistir historial de consumo de tokens por cuenta; derivar techos de cuota empíricos de eventos rate-limit. **Duplicados entre sí** y cubiertos por el spec [features/token-tracking-prediction.md](../api/docs/features/token-tracking-prediction.md) |
 | pl-mr9 | task (deferred) | Auto-rebuild del grafo graphify en cada commit (AST + Haiku) |
 | pl-j18 | bug (deferred) | ASK_ANYTHING flow incompleto en EditorAIMenu |
 | pl-03i | feature (deferred) | Nested Pages parent-child tree |
@@ -125,7 +125,7 @@ No son bugs de ingeniería; son artefactos del orquestador. Conviene **podar/rea
 
 1. **Crisis de auth/cuotas** (P0 + hq-ai74/tjf0): todas las cuentas rate-limited a la vez →
    polecats no arrancan, Mayor/Deacon caen. Cuello de botella operacional #1.
-   → Conecta con el spec de **predicción de bloqueo** ([token-tracking-prediction.md](../../api/docs/features/token-tracking-prediction.md))
+   → Conecta con el spec de **predicción de bloqueo** ([token-tracking-prediction.md](../api/docs/features/token-tracking-prediction.md))
    y los beads hq-0fvy/hq-fime: rotar **antes** del bloqueo evitaría esta clase de parada.
 2. **Split-brain de Dolt** (hq-4dte/o16o/hamg): 3 instancias Dolt, `export.auto:false`,
    auto-import desde jsonl → writes que no persisten. Genera gran parte del ruido wisp.

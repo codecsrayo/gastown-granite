@@ -1,4 +1,4 @@
-# `apps/town/web/` — Gas Town dashboard SPA
+# `apps/web/` — Gas Town dashboard SPA
 
 SvelteKit 5 + Tailwind + adapter-static. Talks to the Rust API
 (`gt-web` + `gt-mcp`). Replaces the retired Go dashboard
@@ -13,7 +13,7 @@ Prereq: Node 22+, pnpm 9+ (use `corepack enable pnpm` if missing).
 The compose stack (`gt-api` on 8787) must be reachable for live data.
 
 ```sh
-cd apps/town/web
+cd apps/web
 pnpm install
 pnpm dev               # http://localhost:5173 · proxy /api → :8787
 pnpm build             # static SPA in build/

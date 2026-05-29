@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Theme tokens · dark = canonical (mirrors apps/town/docs/pagina.png).
+/* Theme tokens · dark = canonical (mirrors apps/docs/pagina.png).
    Toggled by lib/stores/theme.svelte.ts via [data-theme] on <html>. */
 :root,
 [data-theme='dark'] {

@@ -17,7 +17,7 @@ Docs hermanos (lectura obligada antes de tocar nada):
 - [frontend-features.md](frontend-features.md) — catálogo de features, cómo mapean al backend.
 - [Gas Town Redesign Wireframes.html](Gas%20Town%20Redesign%20Wireframes.html) — V1 dark, 3 vistas (Activity · Work · Crew).
 - [pagina.png](pagina.png) — render hi-fi (= V1 dark canónico).
-- [apps/api/docs/07-frontend.md](../../api/docs/07-frontend.md) — diseño backend (gt-web).
+- [apps/api/docs/07-frontend.md](../api/docs/07-frontend.md) — diseño backend (gt-web).
 
 ---
 
@@ -82,10 +82,10 @@ Total ~75 beads. Tabla viva — actualiza al reclamar/cerrar.
 
 - `hq-fe-api-w.1` command-bus interno en gt-root (refactor; sin HTTP nuevo).
 - `hq-fe-api-w.2` `Idempotency-Key` middleware en gt-web.
-- `hq-fe-build.1` scaffold `apps/town/web/` (Svelte 5 + Tailwind + pnpm).
+- `hq-fe-build.1` scaffold `apps/web/` (Svelte 5 + Tailwind + pnpm).
 - `hq-fe-build.5` tipos TS desde [frontend-api-surface.md](frontend-api-surface.md).
 
-**Gate:** `gt-root::commands::dispatch(cmd)` válido para todos los MCP tools actuales (refactor invisible); `apps/town/web/pnpm dev` arranca página vacía contra `/api`.
+**Gate:** `gt-root::commands::dispatch(cmd)` válido para todos los MCP tools actuales (refactor invisible); `apps/web/pnpm dev` arranca página vacía contra `/api`.
 
 ### Fase 1 — Read-side mínima (semana 2)
 
@@ -217,7 +217,7 @@ Total ~75 beads. Tabla viva — actualiza al reclamar/cerrar.
 
 | Bead | Título | Pri | Estado | Agente | Notas |
 |---|---|---|---|---|---|
-| hq-fe-build.1 | Scaffold `apps/town/web/` (svelte5 + adapter-static + tailwind + pnpm) | P1 | **closed** | codecsrayo | landed 2a76dffc; pnpm install/check/build verdes |
+| hq-fe-build.1 | Scaffold `apps/web/` (svelte5 + adapter-static + tailwind + pnpm) | P1 | **closed** | codecsrayo | landed 2a76dffc; pnpm install/check/build verdes |
 | hq-fe-build.2 | `lib/api` client wrapper (fetch + bearer + idem-key) | P1 | open | — | |
 | hq-fe-build.3 | `lib/sse` stream + router (fan-out por kind) | P1 | open | — | reconnect con Last-Event-ID |
 | hq-fe-build.4 | `lib/stores` base con runes (auth, sessions, beads, activity, quota) | P1 | open | — | `.svelte.ts` singletons |
