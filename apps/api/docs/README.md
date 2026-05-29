@@ -67,7 +67,7 @@ es la especificación de referencia.
 > | 6.h-C | audit outbox + feed projections (`outbox_events` + `feed_projections`; entity+outbox single-TX in `PgOutboxWriter`, `PgOutboxDrain` fans to `audit_events`+projections, wired en `bins/gt`) | DONE | — | hq-7owq |
 > | 6.h+ | resto de `gt-mcp` (otros dominios), adaptadores edge real adicionales | PLANEADO | — | — |
 >
-> Estado global: **Paso 7 (v1 operational + observability + real quota: hq-7pdl + hq-j9ou + hq-0bko) DONE**; **Paso 6.h A/B/C (Dolt read-side + domain-state + audit outbox: hq-u955 + hq-bdn8 + hq-7owq) DONE** (al 2026-05-28). **Paso 8/9 (cutover + Go→Rust): ver [11-cutover-roadmap.md](11-cutover-roadmap.md)** — al 2026-05-29 9.B/9.C/9.D/9.F DONE, 9.A Phase 1, 9.E lifecycle DONE (mayor-spawn deferred); pendiente flip 8.4/8.6. Mantén esta tabla viva.
+> Estado global: **Paso 7 (v1 operational + observability + real quota: hq-7pdl + hq-j9ou + hq-0bko) DONE**; **Paso 6.h A/B/C (Dolt read-side + domain-state + audit outbox: hq-u955 + hq-bdn8 + hq-7owq) DONE** (al 2026-05-28). **Paso 8/9 (cutover + Go→Rust): ver [11-cutover-roadmap.md](11-cutover-roadmap.md)** — al 2026-05-29 9.B/9.C/9.D/9.F DONE, 9.A Phase 1+2 DONE (solo `gt sling` stub), 9.E lifecycle DONE (mayor-spawn deferred); pendiente flip (hq-oap5). Mantén esta tabla viva.
 
 ---
 

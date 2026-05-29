@@ -8,15 +8,17 @@ las épicas, dependencias e instrucciones de despacho por agente.
 > determinista. **No es reemplazo de producción todavía** — ver gaps abajo.
 >
 > **Progreso Paso 9 (al 2026-05-29):** 9.B (gt-plugin), 9.C (wisp/reaper), 9.D (roles),
-> 9.F (operator signals) **DONE**; 9.A (CLI) en Phase 1; 9.E (polecat lifecycle +
-> GT_HOOK_BEAD) DONE salvo mayor real-spawn. Pendiente para descartar Go: 9.A Phases 2+,
-> 9.E mayor-spawn, y el flip (shadow + go/no-go).
+> 9.F (operator signals) **DONE**; 9.A (CLI) **Phase 2 DONE** (eddd777c —
+> prime/done/doctor/daemon/ready/blocked portados; solo `sling` queda stub, espera el
+> RealEffects self-host de `hq-oap5.2`); 9.E (polecat lifecycle + GT_HOOK_BEAD) DONE salvo
+> mayor real-spawn. Pendiente para descartar Go: `sling`, 9.E mayor-spawn, y el flip
+> (shadow + go/no-go).
 >
 > **Paso 8 CERRADO (2026-05-29):** `hq-8iur` cerrado (6/8 children DONE). Los dos restantes
 > se cerraron como *superseded* y se re-enmarcaron bajo la nueva épica **`hq-oap5` — Retire
 > Go orchestrator**: `hq-8iur.4` (shadow harness) → `hq-oap5.1`; `hq-8iur.6` (go/no-go flip
-> + rollback) → `hq-oap5.2`. `hq-oap5` agrupa además los últimos blockers Go (9.A Phases 2+,
-> 9.E mayor real-spawn).
+> + rollback) → `hq-oap5.2`. `hq-oap5` agrupa además los últimos blockers Go (9.A Phase 2 ✅
+> eddd777c — solo `gt sling` pendiente; 9.E mayor real-spawn).
 
 ## Resumen de los dos pasos
 
@@ -48,7 +50,7 @@ apruebe el go/no-go (`hq-oap5.2`, antes 8.6).
 5. **74 paquetes Go `internal/` vs crates Rust.** Paso 9 mayormente portado (al 2026-05-29):
    gt-plugin ✅, roles ✅, operator signals (mail/activity/escalation) ✅, wisp/reaper ✅,
    polecat/crew/tmux lifecycle + hooks ✅ (mayor real-spawn deferred),
-   CLI ⚠️ (Phase 1). Pendiente: CLI Phases 2+ + mayor real-spawn. → **Paso 9**
+   CLI ✅ Phase 2 (solo `sling` stub). Pendiente: `gt sling` + mayor real-spawn. → **Paso 9**
 
 ---
 
@@ -79,10 +81,10 @@ el flip pendiente de Paso 8 + los últimos blockers de Paso 9.
 |---|---|---|---|
 | hq-oap5.1 | Shadow side-effect validation (diff bead status / quota rotation / `/api/sessions` vs `gt agents`; **no** replay del log, ver doc 12 §6) | P2 | — |
 | hq-oap5.2 | [DECISION] cutover go/no-go flip + rollback runbook | P1 | espera .1 + blockers Go + humano |
-| hq-hapx | 9.A — `gt` CLI Phases 2+ (resto de comandos que aún shellean a Go) | P1 | Phase 1 shipped (4402b764) |
+| hq-hapx | 9.A — `gt` CLI Phases 2+ (resto de comandos que aún shellean a Go) | P1 | ✅ Phase 2 DONE (eddd777c, hq-hapx.1) — solo `gt sling` queda, espera `hq-oap5.2` |
 | hq-63az | 9.E — `gt-mayor` real-spawn (deferred) | P2 | — |
 
-Camino crítico: **9.A Phases 2+ / mayor-spawn + .1 shadow → .2 go/no-go (humano)**.
+Camino crítico: **mayor-spawn + `gt sling` (tras RealEffects self-host) + .1 shadow → .2 go/no-go (humano)**. (9.A Phase 2 ✅; `gt sling` es el último comando CLI, acoplado a `hq-oap5.2`.)
 
 ---
 
@@ -90,7 +92,7 @@ Camino crítico: **9.A Phases 2+ / mayor-spawn + .1 shadow → .2 go/no-go (huma
 
 | ID | Epic | Pri | Cubre | Estado |
 |---|---|---|---|---|
-| hq-hapx | 9.A — `gt` CLI port (`internal/cmd/`) | P1 | gt sling/prime/done/doctor/daemon | ⚠️ Phase 1 (4402b764); Phases 2+ pendientes |
+| hq-hapx | 9.A — `gt` CLI port (`internal/cmd/`) | P1 | gt sling/prime/done/doctor/daemon | ✅ Phase 1 (4402b764) + Phase 2 (eddd777c): prime/done/doctor/daemon/ready/blocked; solo `sling` stub |
 | hq-evks | 9.B — `gt-plugin` system (trait + registry) | P1 | watchdogs/sheriffs | ✅ DONE (35da7a24) |
 | hq-t9vt | 9.C — Wisp + Reaper (ephemeral memory + cleanup) | P2 | `internal/wisp`, `internal/reaper` | ✅ DONE (4cd3041d) |
 | hq-92z9 | 9.D — Role behaviors | P1 | Mayor/Witness/Refinery/Deacon/Sheriff + escalation | ✅ DONE (a4c4c128) |
@@ -99,7 +101,7 @@ Camino crítico: **9.A Phases 2+ / mayor-spawn + .1 shadow → .2 go/no-go (huma
 
 Orden Paso 9: **9.B + 9.C** (cero deps) → **9.D** (tras 9.B) → **9.A + 9.E + 9.F** (tras 9.D).
 
-> **Estado Paso 9 (al 2026-05-29):** 9.B/9.C/9.D/9.F **DONE**; 9.A en Phase 1; 9.E lifecycle+hooks DONE salvo mayor real-spawn. Falta: 9.A Phases 2+, 9.E mayor-spawn.
+> **Estado Paso 9 (al 2026-05-29):** 9.B/9.C/9.D/9.F **DONE**; 9.A Phase 1 + Phase 2 DONE (solo `gt sling` stub); 9.E lifecycle+hooks DONE salvo mayor real-spawn. Falta: `gt sling`, 9.E mayor-spawn.
 
 ---
 
@@ -196,13 +198,18 @@ Scope: una crate por rol siguiendo patrón gt-merge (actor+commands+events+state
 Wire bins/gt/root.rs + tools gt-mcp. Gate por rol: test actor lifecycle + replay byte-idéntico. Desbloquea 9.A y 9.E.
 ```
 
-### Paso 9 — Agente 9.A (hq-hapx CLI, tras 9.D) ⚠️ Phase 1
+### Paso 9 — Agente 9.A (hq-hapx CLI) ✅ Phase 1 + Phase 2 (solo `sling` stub)
 
 ```
-Trabaja hq-hapx (gt CLI port internal/cmd/). Worktree: feat/hq-hapx-cli.
-Deps: hq-92z9 (la mayoría de commands invoca un rol). Empieza por los que solo tocan el backend existente (gt enqueue/rotate/bead) si 9.D no mergeó.
-Scope: bins/gt-cli (clap v4). Cada command = thin wrapper: HTTP a gt-web / MCP a gt-mcp / edge I/O local. Coordina con 8.3 (mapa command→endpoint). Críticos primero: gt sling/prime/done/bd/doctor/daemon.
-Criterio: skills crew-commit/patrol/reaper/backup funcionan contra el CLI Rust sin cambios. Gate: crew-commit corre end-to-end via CLI Rust; diff vs Go = vacío.
+bins/gt-cli (clap v4). Cada command = thin wrapper: HTTP a gt-web / MCP a gt-mcp-cli / edge I/O local.
+Phase 1 (4402b764): agents/beads/heartbeat/feed/enqueue/rotate/bd.
+Phase 2 (eddd777c, hq-hapx.1):
+- ready/blocked → `bd ready`/`bd blocked` (edge passthrough).
+- prime → role context de GT_ROLE/GT_RIG/GT_CREW/GT_HOOK_BEAD + cwd (subset; directivas diferidas).
+- done → MCP `merge.submit.{validate,execute}` (branch=git actual, channel_msg_id=ULID).
+- doctor → /health + /readyz + chequeo PATH de bd/gt-mcp-cli (subset del doctor Go de ~80 checks).
+- daemon → run/start/stop/status/logs sobre el binario server `gt` vía pidfile (process_group, SIGTERM).
+PENDIENTE: `gt sling` (único stub) — espera RealEffects self-host (hq-oap5.2). Diferido: doctor full check-suite, prime directivas, daemon admin subcmds (enable-supervisor/clear-backoff/rotate-logs).
 ```
 
 ### Paso 9 — Agente 9.C (hq-t9vt wisp+reaper, paralelo) ✅
@@ -251,7 +258,7 @@ Notifier es PORT — mail no se importa en dominios. Gate: hueco *Stuck sintéti
 | activity | activity log read-side (gt-feed view + PgActivity) | ✅ | 9.F hq-mysw b82ff3aa |
 | hooks (GT_HOOK_BEAD) | gt-polecat inyecta GT_HOOK_BEAD al spawn | ✅ | 9.E hq-63az 438ba69d |
 | email/mail | Notifier PORT + MailNotifier (bead-backed) | ✅ | 9.F hq-mysw b82ff3aa |
-| CLI | gt-cli Phase 1 (clap+reqwest, wrappers backend) | ⚠️ | 9.A hq-hapx 4402b764 (Phases 2+ pendientes) |
+| CLI | gt-cli Phase 1 + Phase 2 (prime/done/doctor/daemon/ready/blocked) | ⚠️ | 9.A hq-hapx 4402b764 + eddd777c (solo `gt sling` stub) |
 | plugins | gt-plugin trait+registry+relay+scanner+sync+Sheriff | ✅ | 9.B hq-evks 35da7a24 |
 | wisp/reaper | gt-wisp + bins/gt-reaper (compaction) | ✅ | 9.C hq-t9vt 4cd3041d |
 | roles (mayor/dogs) | 5 role crates (mayor/witness/refinery/deacon/sheriff) | ✅ | 9.D hq-92z9 a4c4c128 |
