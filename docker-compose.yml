@@ -2,57 +2,80 @@
 # GIT_USER="<your name>" GIT_EMAIL="<your email>" FOLDER="/Users/you/code" docker compose up -d
 
 services:
-  gastown:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: gastown-sandbox
-    stdin_open: false
+  # Dolt extracted from gastown-sandbox into its own service: it now owns the
+  # dolt-data volume exclusively and serves on the compose network. The embedded
+  # `dolt sql-server` inside gastown-sandbox MUST be stopped before this comes up
+  # (two servers on one data dir corrupts it), and `bd` inside gastown must switch
+  # to server mode (TCP dolt:3307) since it no longer has local file access.
+  dolt:
+    image: dolthub/dolt-sql-server:latest
+    container_name: gastown-dolt
     restart: unless-stopped
-    tty: false
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - SETUID
-      - SETGID
-      - DAC_OVERRIDE
-      - FOWNER
-      - NET_RAW
-    environment:
-      IS_SANDBOX: 1
-      TZ: ${TZ:-America/Bogota}
-      GT_DOLT_TIME_ZONE: ${TZ:-America/Bogota}
-      GIT_USER: ${GIT_USER:-TestUser}
-      GIT_EMAIL: ${GIT_EMAIL:-test@example.com}
-      # Dashboard runs as a decoupled background child of the entrypoint
-      # (see docker-entrypoint.sh). Set GT_DASHBOARD_AUTOSTART=0 to boot the
-      # town without the dashboard, e.g. to shed its CPU cost.
-      GT_DASHBOARD_AUTOSTART: ${GT_DASHBOARD_AUTOSTART:-1}
-      GT_DASHBOARD_BIND: ${GT_DASHBOARD_BIND:-0.0.0.0}
-      GT_DASHBOARD_PORT: ${GT_DASHBOARD_PORT:-8080}
+    # Bypass the image's mysql-style entrypoint (which forces port 3306 + root-auth
+    # setup). Run dolt directly, passwordless, matching the sandbox's open server.
+    # On every boot, idempotently ensure the `gastown@%` superuser exists (the data
+    # dir ships only root@localhost, which rejects network clients) BEFORE starting the
+    # server. CREATE USER IF NOT EXISTS = validate, create only when missing.
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        cd /var/lib/dolt
+        dolt sql -q "CREATE USER IF NOT EXISTS 'gastown'@'%'; GRANT ALL PRIVILEGES ON *.* TO 'gastown'@'%' WITH GRANT OPTION;"
+        exec dolt sql-server --host=0.0.0.0 --port=3307
     volumes:
-      # FOLDER must be defined in .env file, e.g. FOLDER=/home/user
-      # or provided as an environment variable when running docker compose,
-      # e.g. FOLDER=/home/user docker compose up
-      - agent-home:/home/agent
-      - ${FOLDER}:/gt
-      # Dolt data on a proper ext4 volume (not the macOS bind mount) to
-      # avoid journal corruption from VirtioFS fsync semantics.
-      - dolt-data:/gt/.dolt-data
-      # Host SSH keys (read-only). Entrypoint copies into agent home so
-      # git push/pull to private remotes works inside the sandbox.
-      - ${HOST_SSH_DIR:-${HOME}/.ssh}:/host-ssh:ro
+      - dolt-data:/var/lib/dolt
     expose:
-      - "8080"
-    # PID1 keep-alive: the container lifecycle no longer depends on the
-    # dashboard (started as a background child by docker-entrypoint.sh).
-    command: ["sleep", "infinity"]
+      - "3307"
+    networks:
+      - default
+
+  # Postgres: canonical audit log + outbox + read-side projections (feed/activity/quota/rigs).
+  # gt-web/gt auto-apply sqlx migrations on boot. Internal-only (expose, never published).
+  postgres:
+    image: postgres:16-alpine
+    container_name: gastown-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gastown
+      POSTGRES_PASSWORD: gastown
+      POSTGRES_DB: gastown
+    volumes:
+      - gt-pgdata:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    networks:
+      - default
+
+  # Rust read-side API (gt-web). Compose builds the binary from apps/api/Dockerfile.
+  # Reads orchestrator state from the `hq` Dolt DB; serves /api + SSE + /health + /readyz.
+  # Replaces the retired Go dashboard as the gastown.codecsrayo.com backend.
+  gt-api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: gastown-gt-api
+    restart: unless-stopped
+    command: ["gt-web"]
+    depends_on:
+      - dolt
+      - postgres
+    environment:
+      GT_WEB_BIND: 0.0.0.0:8787
+      # Fail-closed: refuses to start without a bearer secret for /api/*.
+      GT_WEB_TOKEN: ${GT_WEB_TOKEN:?set GT_WEB_TOKEN in .env}
+      GT_DOLT_URL: mysql://gastown@dolt:3307/hq
+      GT_PG_AUDIT_URL: postgres://gastown:gastown@postgres:5432/gastown
+      GT_EVENT_LOG: /var/lib/gastown/events.jsonl
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - gt-eventlog:/var/lib/gastown
+    expose:
+      - "8787"
     networks:
       - default
       - traefik-public
+    # Inherits the gastown.codecsrayo.com router from the retired Go dashboard — same
+    # domain + cert, loadbalancer now points at gt-web on 8787.
     labels:
       - traefik.enable=true
       - traefik.docker.network=${TRAEFIK_PUBLIC_NETWORK:-proyectos-bi-quare}
@@ -63,10 +86,8 @@ services:
       - traefik.http.routers.gastown.entrypoints=websecure
       - traefik.http.routers.gastown.tls=true
       - traefik.http.routers.gastown.tls.certresolver=netlify
-      - traefik.http.services.gastown.loadbalancer.server.port=8080
+      - traefik.http.services.gastown.loadbalancer.server.port=8787
       - traefik.http.middlewares.gastown-https.redirectscheme.scheme=https
-
-    # Exec into the container with: docker compose exec gastown zsh
 
 networks:
   traefik-public:
@@ -76,3 +97,5 @@ networks:
 volumes:
   agent-home:
   dolt-data:
+  gt-eventlog:
+  gt-pgdata:
