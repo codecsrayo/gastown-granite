@@ -281,4 +281,8 @@ Notifier es PORT — mail no se importa en dominios. Gate: hueco *Stuck sintéti
 | plugins | gt-plugin trait+registry+relay+scanner+sync+Sheriff | ✅ | 9.B hq-evks 35da7a24 |
 | wisp/reaper | gt-wisp + bins/gt-reaper (compaction) | ✅ | 9.C hq-t9vt 4cd3041d |
 | roles (mayor/dogs) | 5 role crates (mayor/witness/refinery/deacon/sheriff) | ✅ | 9.D hq-92z9 a4c4c128 |
-| polecat/crew/daemon/tmux | gt-polecat lifecycle (spawn/heartbeat/restart/tmux/hooks) | ⚠️ | 9.E hq-63az 438ba69d (mayor real-spawn deferred) |
+| polecat/crew/daemon/tmux | gt-polecat lifecycle (spawn/heartbeat/restart/tmux/hooks) | ✅ | 9.E hq-63az 438ba69d + Paso 10 C5 ed35bdec (re-supervision wired) |
+| sling (work dispatch) | RealEffects::sling → gt-polecat PolecatLifecycle (tmux, no Go) | ✅ | Paso 10 D1 hq-mc72.12.2 73af8769 |
+| daemons vivos (refinery/witness/deacon/polecat-sup) | live loops bajo `supervise_daemon` en `bins/gt::run`; refinery MERGE_READY watcher, witness watch+tick escalation, deacon SIGTERM drain, polecat re-sling | ✅ | Paso 10 C2/C5 bac45e94/3cca7a04/b585d1d5/af6dd63b/0b429399/ed35bdec |
+| operator ops (warrant/estop) | supervised gt-channel watchers → escalation bead / deacon drain | ✅ | Paso 10 C8 bc48d97c/69ca5a01 |
+| mayor orchestration loop | gt-mayor actor wired; periodic scan→delegate loop NOT spawned | ⚠️ | Paso 10 C2 (loop deferred — needs convoy-snapshot port) |

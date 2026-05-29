@@ -138,12 +138,12 @@ Spawn signal = how the daemon's tmux session is identified (see §Roles below).
 
 | Go cmd / daemon | Tmux session name | Rust | Status |
 |---|---|---|---|
-| `gt daemon start` / `stop` | (the gastown background daemon — convoy watcher, bd sync, etc.) | none as a `gt daemon` analogue, but **boot hydration landed** (`211c5fff`, hq-8iur.1): the Rust process now replays the event log into the actors at boot before serving, and `135367bb` adds a systemd unit + graceful drain (hq-8iur.5). The Go daemon still owns convoy-event observation, polecat reconciliation, bd→Dolt sync. | **P★** |
-| `gt mayor` (start) ★ | `hq-mayor` | `gt-orchestration::mayor` is implemented as a productor (event borde) inside the actor; no `mayor start` CLI / route — the Mayor process IS the Go binary today | **P★** |
-| `gt deacon` (start) ★ | `hq-deacon` | `gt-orchestration::deacon` exists as productor; same gap — the Deacon process today is the Go binary | **P★** |
-| `gt boot status` | `hq-boot` | none (deacon watchdog is Go-only) | **M** |
-| `gt witness start <rig>` ★ | `<prefix>-witness` | `gt-patrol::witness` is the producer of `PolecatStale` / lease-expired; the actor is wired in `bins/gt` root. **The witness daemon process itself is still the Go binary**; the Rust API has the domain logic but no `witness start` CLI parity. | **P★** |
-| `gt refinery start <rig>` ★ | `<prefix>-refinery` | `gt-merge::refinery` is implemented as a producer that awaits `MERGE_READY` via `gt-channel`. Same situation: domain logic in Rust, **but the refinery process spawned in a tmux pane is the Go binary**. | **P★** |
+| `gt daemon start` / `stop` | (the gastown background daemon — convoy watcher, bd sync, etc.) | **Rust composition root is the daemon** (hq-mc72.12 C2/C5): boot hydration (`211c5fff`) + systemd unit + graceful drain (`135367bb`), and the role daemons below now run as live loops under it — the refinery `MERGE_READY` watcher, the witness ticker, and the polecat re-sling supervisor (`gt_polecat::PolecatSupervisor`) are spawned in `bins/gt::run` and torn down on SIGTERM. `gt_polecat::supervise_daemon` is the restart+backoff harness. | **C★** |
+| `gt mayor` (start) ★ | `hq-mayor` | `gt-mayor` actor (delegations) is wired in `bins/gt` root, but the periodic orchestration **loop** (scan → auto-delegate) is not spawned yet — no live mayor daemon. | **P★** |
+| `gt deacon` (start) ★ | `hq-deacon` | **Rust (hq-mc72.12 C2, `af6dd63b`)**: SIGTERM runs `drain_via_deacon` — `gt_deacon::begin_drain` + await `DrainComplete`; the reactor tracks in-flight merges (`Ready`→track, `Merged`/`Failed`→finish). `gt estop` drives the same drain off a channel. No separate Go deacon process. | **C★** |
+| `gt boot status` | `hq-boot` | none yet (deacon watchdog / boot-status surface not ported — Track A C10). | **M** |
+| `gt witness start <rig>` ★ | `<prefix>-witness` | **Rust (hq-mc72.12 C2, `3cca7a04`+`b585d1d5`)**: `PatrolEvent::LeaseExpired` auto-arms `witness.watch` in the reactor, and a periodic ticker (`spawn_witness_ticker`) ticks watched targets → `EscalationRaised` → status bead + notifier (hq-mysw). Live loop, no Go process. | **C★** |
+| `gt refinery start <rig>` ★ | `<prefix>-refinery` | **Rust (hq-mc72.12 C2, `bac45e94`)**: `gt_merge::refinery::run` awaits `MERGE_READY` over `gt-channel` and submits to the merge actor, spawned as a supervised live daemon in `bins/gt::run` (`spawn_refinery_daemon` under `supervise_daemon`). No Go process. | **C★** |
 | `gt dolt` | (Dolt SQL server admin: start/stop/sql) | none. `gt-store-dolt` connects as a client (MySQL wire 3307); managing the server is a deploy concern. | **M** (intentional) |
 | `gt scheduler` | (dispatch scheduler admin) | partial: dispatcher actor in `gt-scheduling`; no admin surface | **P** |
 | `gt nudge-poller` | (background poller for nudge mail) | none | **M** |
@@ -155,8 +155,8 @@ Spawn signal = how the daemon's tmux session is identified (see §Roles below).
 | `gt doctor` ★ | Run health checks on the workspace | none. `gt doctor` does dolt-vs-jsonl reconciliation, polecat orphan scan, env audit — none of that is in Rust. | **M★** |
 | `gt health` / `gt health-check` | Liveness | `/health` (liveness) + `/readyz` (readiness, gated on hydration + Dolt/PG reachable) landed in `135367bb` (hq-8iur.5); `/metrics` adds Prometheus | **C** |
 | `gt cleanup` | Clean up orphaned Claude processes | none (process-side, Go is the right place) | **M** |
-| `gt warrant file` | File a death warrant for a stuck agent | none. Patrol domain has `LeaseExpired` events; the human-initiated warrant path is Go-only. | **M★** |
-| `gt estop` | Emergency stop | none | **M★** |
+| `gt warrant file` | File a death warrant for a stuck agent | **Rust backend (hq-mc72.12 C8, `bc48d97c`)**: `spawn_warrant_daemon` watches a `warrant` `gt-channel`; each `{worker, reason}` upserts an `escalation-<worker>` status bead. Operator emits via `gt emit-event` (gt-cli C7). | **C** (backend) |
+| `gt estop` | Emergency stop | **Rust backend (hq-mc72.12 C8, `69ca5a01`)**: `spawn_estop_daemon` watches an `estop` `gt-channel`; each message triggers `deacon.begin_drain` (drains in-flight work). | **C** (backend) |
 | `gt shutdown` | Shut down town | none | **M** |
 | `gt orphans` | Find orphan tmux/processes | none | **M** |
 | `gt stale` | Check if gt binary is stale | none (it's a self-check of the binary) | **M** (intentional) |
@@ -298,16 +298,17 @@ Items marked **★** above. Coarse-grained dependency order:
    `hq-8iur.2`). The schema shipped, but the shipped `Dog(DogKind)` shape
    mislabels boot/crew/named-dog sessions vs Go. The *write-side* of `gt agents`
    (populating non-polecat rows) is not safe until these are handled.
-3. **`gt sling` self-hosted** (★, §1). Today `RealEffects::sling` shells out to
-   the Go binary. Cutover requires either (a) the Rust composition root
-   spawning a Rust-managed tmux session, or (b) the Go `gt sling` becoming a
-   thin shim that delegates back to MCP `scheduling.enqueue` + a Rust-owned
-   spawner. Bead `hq-8iur.6` (RealEffects::sling self-host) tracks this.
-4. **Witness + Refinery daemon parity** (★, §4). The domain logic is in Rust,
-   but the long-running process invoked by tmux is still the Go binary.
-   Producer-side wiring of `gt witness start` / `gt refinery start` as Rust
-   binaries (or a single multiplexed daemon) is the actual flip.
-5. **Mayor + Deacon parity** (★, §4). Same gap shape as witness/refinery.
+3. **`gt sling` self-hosted** ✅ **DONE** (hq-mc72.12 D1, `73af8769`).
+   `RealEffects::sling` no longer shells to Go — it spawns a Rust-managed tmux
+   polecat via `gt_polecat::PolecatLifecycle` (option (a)), and the
+   `PolecatSupervisor` re-slings it if the session dies (C5, `ed35bdec`).
+4. **Witness + Refinery daemon parity** ✅ **DONE** (hq-mc72.12 C2). Both run as
+   live loops under the Rust composition root: refinery `MERGE_READY` watcher
+   (`bac45e94`) and the witness watch+tick escalation loop
+   (`3cca7a04`/`b585d1d5`). No Go process.
+5. **Mayor + Deacon parity** — **Deacon DONE** (C2, `af6dd63b`: SIGTERM drain +
+   in-flight merge tracking). **Mayor PARTIAL**: actor wired, but the periodic
+   orchestration loop (scan → auto-delegate) is not spawned yet.
 6. **`gt doctor`** (★, §4). The reconciliation surface (dolt vs jsonl, orphan
    detection) — needed to verify a Rust-only town is healthy.
 7. **`gt audit` + `gt costs`** (★, §3 + §6). Required by ops/finance review;
@@ -323,7 +324,11 @@ Items marked **★** above. Coarse-grained dependency order:
     events are the substrate for `gt done` and rig-to-rig handoff; today
     `gt-channel` is library-only.
 11. **`gt warrant file` + `gt estop` + `gt escalate`** (★, §4, §9). Operator
-    safety surface. Should not flip without these.
+    safety surface. **warrant + estop backends DONE** (hq-mc72.12 C8,
+    `bc48d97c`/`69ca5a01`): supervised `gt-channel` watchers turn operator
+    messages (emitted via gt-cli `gt emit-event`) into an escalation bead /
+    a deacon drain. `gt escalate` rides the same hq-mysw escalation pipeline
+    the witness loop now drives automatically.
 12. **`gt dog` control surface** (★, §10). With the role taxonomy below as
     blocker.
 
