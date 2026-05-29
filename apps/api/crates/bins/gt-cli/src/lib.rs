@@ -240,11 +240,20 @@ pub enum Command {
         action: AccountAction,
     },
 
-    // --- Stub: backend not yet in Rust. ---
-    /// [BLOCKED] Dispatch work to an agent. Needs RealEffects self-host (hq-oap5.2 / was hq-8iur.6).
+    /// Dispatch a bead to an agent. Launches a single-member convoy via MCP
+    /// `orch.launch_convoy`, which the orchestrator turns into a real polecat spawn
+    /// (`OrchEvent::MemberDispatched` → `RealEffects::sling`, self-hosted in Paso 10 D1) — no
+    /// Go binary involved. Interim shape until the orchestration owner exposes a dedicated
+    /// single-bead dispatch surface; repointing this verb to that is then a one-line change.
     Sling {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Bead id to dispatch.
+        bead: String,
+        /// Convoy id to create. Defaults to `sling-<ulid>`.
+        #[arg(long)]
+        convoy: Option<String>,
+        /// Validate only (`orch.launch_convoy.validate`) — does not create the convoy.
+        #[arg(long)]
+        validate: bool,
     },
 }
 
@@ -379,11 +388,7 @@ pub async fn run(cli: Cli, cfg: Config) -> Result<i32> {
             run_costs(account, by_model, log, cli.json)
         }
         Command::Account { action } => run_account(action).await,
-
-        Command::Sling { .. } => Ok(blocked(
-            "sling",
-            "RealEffects self-host (hq-oap5.2 / was hq-8iur.6); use Go `gt sling` until then",
-        )),
+        Command::Sling { bead, convoy, validate } => run_sling(bead, convoy, validate).await,
     }
 }
 
@@ -1651,6 +1656,34 @@ async fn run_account(action: AccountAction) -> Result<i32> {
              follow-up bead under hq-mc72.12",
         )),
     }
+}
+
+// --- sling -----------------------------------------------------------------
+
+/// `gt sling <bead>` — dispatch a bead to an agent. Builds a single-member convoy and submits
+/// it through MCP `orch.launch_convoy`; the orchestrator reacts to the resulting
+/// `OrchEvent::MemberDispatched` by spawning a Rust-managed tmux polecat
+/// (`RealEffects::sling`, self-hosted in Paso 10 D1). No Go binary is involved.
+///
+/// This is the interim dispatch shape: a convoy is heavier than a bare sling (it leaves a
+/// 1-member convoy record on the board that self-resolves on completion). When the
+/// orchestration owner exposes a dedicated single-bead dispatch surface, repoint the tool name
+/// here and drop the convoy wrapper.
+async fn run_sling(bead: String, convoy: Option<String>, validate: bool) -> Result<i32> {
+    let convoy = convoy.unwrap_or_else(|| format!("sling-{}", ulid::Ulid::new()));
+    let tool = if validate {
+        "orch.launch_convoy.validate"
+    } else {
+        "orch.launch_convoy.execute"
+    };
+    let payload = serde_json::json!({ "convoy": convoy, "members": [bead] });
+    let call = vec![
+        "call".to_string(),
+        tool.to_string(),
+        "--json".to_string(),
+        serde_json::to_string(&payload).expect("LaunchConvoy payload serializes"),
+    ];
+    run_passthrough("gt-mcp-cli", &call).await
 }
 
 // --- shared helpers --------------------------------------------------------
