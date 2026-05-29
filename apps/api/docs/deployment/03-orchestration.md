@@ -6,23 +6,27 @@ y en régimen.
 
 ## Al boot
 
-```
-gt-rs
-  ├─ hydration  ── pliega el event log → estado de actores (slots/leases/convoys/quota/rigs)
-  ├─ spawn_hydrated(root)            ── arranca el reactor con ese estado
-  ├─ spawn_pg_outbox_pipeline        ── broadcast → outbox_events → drain → audit + projections
-  ├─ spawn_sessions_projector        ── AgentEvent → tabla Dolt `sessions`
-  ├─ spawn_plugin_relay              ── plugins (sheriff/scanner/sync)
-  └─ daemons vivos (abajo)
+```mermaid
+flowchart TB
+    boot["gt-rs boot"] --> hyd["hydration — pliega el event log →<br/>estado de actores (slots/leases/convoys/quota/rigs)"]
+    hyd --> root["spawn_hydrated(root) — arranca el reactor"]
+    root --> ob["spawn_pg_outbox_pipeline<br/>broadcast → outbox → drain → audit + projections"]
+    root --> sp["spawn_sessions_projector<br/>AgentEvent → tabla Dolt sessions"]
+    root --> pl["spawn_plugin_relay (sheriff/scanner/sync)"]
+    root --> dae["daemons vivos (abajo)"]
 ```
 
 ## Pipeline de eventos
 
-```
-  comando/efecto ─► actor ─► EventRecord ─► broadcast ──► outbox_events (durable)
-                                                │                │ drain (200ms / pass-until-empty)
-                                                ▼                ▼
-                                          event log        audit_events + feed_projections
+```mermaid
+flowchart LR
+    cmd["comando / efecto"] --> actor
+    actor --> ev["EventRecord"]
+    ev --> bc["broadcast"]
+    bc --> elog[("event log")]
+    bc --> ob[("outbox_events · durable")]
+    ob -->|"drain (200ms / pass-until-empty)"| audit[("audit_events")]
+    ob --> proj[("feed_projections")]
 ```
 
 El outbox garantiza que ningún evento se pierde entre el broadcast y el audit (recuperable
@@ -42,10 +46,17 @@ tras crash). En `SIGTERM`, `gt` drena el outbox a cero antes de salir (gate: 0 f
 
 ## Spawn de un polecat (el agente)
 
-```
-mayor/dog/sling ─► PolecatLifecycle::spawn ─► tmux new-session -d -c /gt -e GT_*=… <cmd>
-                                                                    │
-                                          <cmd> = GT_POLECAT_CMD (default `claude`)
+```mermaid
+sequenceDiagram
+    participant M as mayor / dog / sling
+    participant P as PolecatLifecycle
+    participant T as tmux
+    participant C as claude (polecat)
+    M->>P: spawn (convoy member / bead)
+    P->>T: new-session -d -c /gt -e GT_HOOK_BEAD=… GT_*=…
+    T->>C: launch GT_POLECAT_CMD (default claude)
+    C-->>P: heartbeat (mtime de archivo)
+    Note over P,C: supervisor re-slinga con backoff si el heartbeat muere (cada 15s)
 ```
 
 - Un polecat = un proceso **`claude`** corriendo en una sesión tmux detached, workdir

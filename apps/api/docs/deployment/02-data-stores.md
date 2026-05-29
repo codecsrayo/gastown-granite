@@ -4,15 +4,25 @@ El estado vive en tres lugares, cada uno con un dueño y un rol distinto. Saber 
 escribe qué** es la clave para entender por qué los bins no comparten memoria y aun así
 convergen.
 
-```
-   event log (events.jsonl)        Dolt (hq)                  Postgres
-   ────────────────────────        ─────────────             ─────────────────────
-   append-only, formato            estado de dominio          audit canónico + outbox
-   EventRecord                     (snapshots)                + proyecciones read-side
-        ▲   ▲                            ▲                          ▲
-        │   │ append (frontier)          │ write/read               │ outbox → drain
-   gt ──┘   └── gt-api / gt-mcp      gt (actores)              gt (pipeline)
-                                     gt-api/gt-mcp (read)
+```mermaid
+flowchart LR
+    gt["gt"]
+    gtapi["gt-api"]
+    gtmcp["gt-mcp"]
+
+    elog[("event log · events.jsonl<br/>append-only EventRecord")]
+    dolt[("Dolt hq<br/>estado de dominio · snapshots")]
+    pg[("Postgres<br/>audit + outbox + projections")]
+
+    gt -->|append frontier + outbox drain| elog
+    gtapi -->|append frontier| elog
+    gtmcp -->|append frontier| elog
+
+    gt -->|write actores / proyector| dolt
+    gtapi -->|read| dolt
+    gtmcp -->|read| dolt
+
+    gt -->|outbox → drain| pg
 ```
 
 ## 1. Event log — `events.jsonl` (volume `gt-eventlog`)

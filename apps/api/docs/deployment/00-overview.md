@@ -6,38 +6,45 @@ hablan, dónde vive el estado. Stack desplegado por `docker-compose.yml` (proyec
 
 ## Diagrama maestro
 
+```mermaid
+flowchart TB
+    browser["browser / SvelteKit"]
+    mcpcli["gt-mcp-cli / Claude Code"]
+    traefik["traefik :80/:443<br/>gastown.codecsrayo.com"]
+
+    browser --> traefik
+
+    subgraph net["red compose: gastown_default"]
+        gtapi["gt-api · gt-web<br/>:8787 — API read + SSE"]
+        gt["gt<br/>composition root + daemons<br/>+ polecat spawn"]
+        gtmcp["gt-mcp<br/>MCP HTTP :8765/mcp"]
+
+        elog[("event log · events.jsonl<br/>volume gt-eventlog")]
+        dolt[("dolt :3307 · hq<br/>estado / beads / sessions")]
+        pg[("postgres :5432<br/>audit · outbox · projections")]
+        tmux["tmux → claude (polecat)<br/>workdir /gt = town root"]
+
+        gtapi -. append/hydrate .-> elog
+        gt -. append/hydrate .-> elog
+        gtmcp -. append/hydrate .-> elog
+
+        gt -->|write| dolt
+        gtapi -->|read| dolt
+        gtmcp -->|read| dolt
+
+        gt -->|outbox → drain| pg
+        gtapi -->|audit| pg
+        gtmcp -->|audit| pg
+
+        gt -->|spawn GT_POLECAT_CMD| tmux
+    end
+
+    traefik --> gtapi
+    mcpcli --> gtmcp
 ```
-                         ┌──────────────────────────────────────────────┐
-   browser / SvelteKit ─►│        traefik (proxy :80 / :443)             │
-                         │   gastown.codecsrayo.com  ──►  gt-api:8787     │
-                         └───────────────────────┬──────────────────────┘
-                                                 │
- ┌──────────────────── red compose: gastown_default ─────────────────────────────────────┐
- │                                               ▼                                         │
- │   ┌──────────────┐      ┌──────────────────┐      ┌──────────────────┐                  │
- │   │   gt-api     │      │       gt         │      │     gt-mcp        │ ◄── gt-mcp-cli /  │
- │   │  (gt-web)    │      │ composition root │      │   MCP sobre HTTP  │     Claude Code   │
- │   │   :8787      │      │  + daemons vivos │      │     :8765/mcp     │   127.0.0.1:8765  │
- │   │ API read+SSE │      │  + polecat spawn │      │ tools/resources   │                  │
- │   └──────┬───────┘      └────────┬─────────┘      └────────┬─────────┘                  │
- │          │  cada bin boota su PROPIO composition root; NO comparten memoria.            │
- │          │  Sincronizan por 3 planos de datos compartidos:                              │
- │          ▼                       ▼                         ▼                            │
- │   ┌────────────────────────────────────────────────────────────────────────┐          │
- │   │  event log  ── volume gt-eventlog : /var/lib/gastown/events.jsonl         │         │
- │   └────────────────────────────────────────────────────────────────────────┘          │
- │          │                       │                         │                            │
- │          ▼                       ▼                         ▼                            │
- │   ┌──────────────┐      ┌──────────────────┐                                            │
- │   │    dolt      │      │    postgres      │                                            │
- │   │  :3307  hq   │      │     :5432        │                                            │
- │   │ estado/beads │      │ audit + outbox + │                                            │
- │   │ /sessions    │      │ projections      │                                            │
- │   └──────────────┘      └──────────────────┘                                            │
- │                                                                                         │
- │   gt ──spawn──► tmux ──► claude (polecat)    [GT_POLECAT_CMD, workdir /gt = town root]   │
- └─────────────────────────────────────────────────────────────────────────────────────┘
-```
+
+> Cada bin (`gt`, `gt-api`, `gt-mcp`) boota su **propio** composition root; **no comparten
+> memoria** — sincronizan por los 3 planos compartidos (event log + Dolt + Postgres).
 
 ## Cómo se orquesta (en una frase por pieza)
 
