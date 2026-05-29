@@ -127,8 +127,14 @@ Frontend should filter them out unless building an audit view.
 
 ## gt-mcp surface (not the browser path)
 
-Mentioned for completeness; the browser frontend does **not** call gt-mcp.
-This is what agents (Claude Code, gt-mcp-cli) hit on `127.0.0.1:8765`.
+The browser frontend does **not** call gt-mcp. This is the **agent**
+frontier: registered as `gt-mcp` in `~/.claude.json`, HTTP at
+`127.0.0.1:8765/mcp`. Inside a Claude Code session, every tool listed
+below appears as `mcp__gt-mcp__<tool_with_underscores>` (e.g.
+`agent.transition.execute` → `mcp__gt-mcp__agent_transition_execute`).
+Agents call those directly — no shell, no `docker exec`. Outside
+Claude Code (scripts, other clients): use `gt-mcp-cli` against the same
+endpoint.
 
 ### Resources (read-only snapshots)
 

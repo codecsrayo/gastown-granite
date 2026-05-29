@@ -65,22 +65,28 @@ internal/web/                     ← Go viejo, retirado, NO TOCAR
 
 ## Cómo abro un bead nuevo (si encuentro un gap)
 
-**Los agentes hablan con el orquestador SOLO vía MCP** (`http://127.0.0.1:8765/mcp`).
-No abras shell en `gastown-dolt` ni en `gastown-gt`. Si el MCP no expone una
-operación que necesitas, **el gap mismo se vuelve un bead** — no es excusa
-para hacer bypass.
+**Los agentes hablan con el orquestador SOLO vía MCP.** El servidor está
+registrado como **`gt-mcp`** en `~/.claude.json` (HTTP a
+`http://127.0.0.1:8765/mcp`), así que dentro de una sesión Claude Code los
+tools ya aparecen nativos en tu lista como `mcp__gt-mcp__*` — **llámalos
+directamente**. No abras shell en `gastown-dolt` ni en `gastown-gt`, no busques
+binarios en rutas. Si el MCP no expone una operación, **el gap mismo se vuelve
+un bead** — no es excusa para hacer bypass.
 
 1. Verifica que el gap no esté ya listado en
    [frontend-api-surface.md](frontend-api-surface.md) o
    [frontend-migration-sveltekit.md](frontend-migration-sveltekit.md).
-2. Si es nuevo: crea bead vía MCP usando `gt-mcp-cli` (en PATH; repo en
-   `/home/nixos/gt-mcp-cli`):
-   ```sh
-   gt-mcp-cli call scheduling.create_bead.validate \
-     --json '{"id":"hq-fe-…","title":"…","priority":2}'
-   gt-mcp-cli call scheduling.create_bead.execute \
-     --json '{"id":"hq-fe-…","title":"…","priority":2}'
+2. Si es nuevo: crea bead vía los tools nativos:
    ```
+   mcp__gt-mcp__scheduling_create_bead_validate({
+     "id":"hq-fe-…","title":"…","priority":2
+   })
+   mcp__gt-mcp__scheduling_create_bead_execute({
+     "id":"hq-fe-…","title":"…","priority":2
+   })
+   ```
+   Equivalente fuera de Claude Code (shell, scripts):
+   `gt-mcp-cli call scheduling.create_bead.execute --json '…'`.
    **Limitación conocida (2026-05-29):** `scheduling.create_bead` escribe en
    la tabla `beads` (5 columnas: id, title, status, priority, assignee),
    no en `issues` (~25 columnas, leída por el dashboard kanban + el plan
