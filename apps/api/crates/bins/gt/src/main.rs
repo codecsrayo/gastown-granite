@@ -208,6 +208,11 @@ async fn run<R, MR, PR, OR>(
     // `gt emit-event` (C7, gt-cli). Same supervised shape as the refinery.
     let warrant_task = spawn_warrant_daemon(&root);
 
+    // hq-mc72.12 C8 — operator estop daemon. Same supervised channel shape as the warrant
+    // daemon, but each message triggers a deacon drain (the SIGTERM-equivalent operator
+    // signal) so an in-flight town can be brought down without a console.
+    let estop_task = spawn_estop_daemon(&root);
+
     eprintln!(
         "[gt] composition root up — event log: {}",
         root.log_path().display()
@@ -248,6 +253,12 @@ async fn run<R, MR, PR, OR>(
     // Warrant daemon: same teardown — abort the channel watcher; already-upserted escalation
     // beads are durable in the repo / audit log.
     if let Some(task) = warrant_task {
+        task.abort();
+        let _ = task.await;
+    }
+    // Estop daemon: abort the channel watcher; already-dispatched drains are durable in the
+    // audit log (deacon.drain_requested / drain_complete are appended on exec).
+    if let Some(task) = estop_task {
         task.abort();
         let _ = task.await;
     }
@@ -423,6 +434,79 @@ where
             }
         };
         gt_polecat::supervise_daemon("warrant", make, &mut tracker, u32::MAX, now_secs).await;
+    }))
+}
+
+/// JSON shape an operator emits on the `estop` channel (hq-mc72.12 C8). Sent via
+/// `gt emit-event estop '{"by":"…","reason":"…"}'` (gt-cli C7). `by` is the operator
+/// identity recorded on the resulting `deacon.drain_requested` event.
+#[derive(Debug, Deserialize)]
+struct EstopRequest {
+    by: String,
+    #[allow(dead_code)]
+    reason: String,
+}
+
+/// Spawn the supervised operator-estop daemon (hq-mc72.12 C8). Same supervised channel shape
+/// as the warrant daemon; each well-formed `EstopRequest` calls
+/// `gt_deacon::deacon::begin_drain(by, now)` so the orchestrator drains in-flight merges
+/// without a SIGTERM. Channel: `GT_CHANNEL_ROOT` + `GT_ESTOP_CHANNEL` (default `estop`).
+/// Malformed messages are acked + logged (no retry).
+fn spawn_estop_daemon<R>(root: &RootHandle<R>) -> Option<tokio::task::JoinHandle<()>>
+where
+    R: BeadRepository + Clone + 'static,
+{
+    let root_dir = std::env::var("GT_CHANNEL_ROOT")
+        .unwrap_or_else(|_| "/gt/.channels".to_string());
+    let channel_name =
+        std::env::var("GT_ESTOP_CHANNEL").unwrap_or_else(|_| "estop".to_string());
+    let channel = match gt_channel::Channel::open(&root_dir, &channel_name) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "[gt] estop disabled — channel open failed at {root_dir}/{channel_name}: {e}"
+            );
+            return None;
+        }
+    };
+    eprintln!("[gt] estop: operator channel {}", channel.dir().display());
+
+    let deacon = root.deacon.clone();
+    Some(tokio::spawn(async move {
+        let mut tracker = gt_polecat::RestartTracker::new(gt_polecat::RestartConfig::default());
+        let make = move || {
+            let channel = channel.clone();
+            let deacon = deacon.clone();
+            async move {
+                let mut rx = match channel.subscribe(64) {
+                    Ok(rx) => rx,
+                    Err(e) => {
+                        eprintln!("[gt] estop subscribe failed: {e} — supervisor will restart");
+                        return;
+                    }
+                };
+                while let Some(msg) = rx.recv().await {
+                    match serde_json::from_slice::<EstopRequest>(&msg.payload) {
+                        Ok(req) => {
+                            match gt_deacon::deacon::begin_drain(&deacon, &req.by, now_secs())
+                                .await
+                            {
+                                Ok(()) => eprintln!("[gt] estop accepted by={}", req.by),
+                                Err(e) => eprintln!(
+                                    "[gt] estop drain failed by={}: {e}",
+                                    req.by
+                                ),
+                            }
+                        }
+                        Err(e) => eprintln!(
+                            "[gt] estop malformed payload (ack + drop): {e}"
+                        ),
+                    }
+                    let _ = channel.ack(&msg);
+                }
+            }
+        };
+        gt_polecat::supervise_daemon("estop", make, &mut tracker, u32::MAX, now_secs).await;
     }))
 }
 
