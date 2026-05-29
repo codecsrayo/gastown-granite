@@ -232,6 +232,21 @@ async fn run<R, MR, PR, OR>(
     // (gt-cli `gt emit-event`); same supervised channel shape as warrant/estop.
     let dog_task = spawn_dog_daemon(&root);
 
+    // hq-mc72.12 C10 boot-status — the orchestrator's own watchdog session. Emit Spawned for
+    // `hq-boot` so the boot is auditable and shows up in `/api/sessions`, then drive periodic
+    // heartbeats so liveness stays fresh. Role = `Dog(Deacon)` matches the Go `hq-boot`
+    // parsing (doc 10 §Roles D4: `GTRole()=="boot"` → Deacon Name="boot").
+    let _ = root
+        .agent_events
+        .send(Envelope::root(AgentEvent::Spawned {
+            session: "hq-boot".to_string(),
+            rig: "hq".to_string(),
+            role: SessionRole::Dog(DogKind::Deacon),
+            crew: None,
+        }))
+        .await;
+    let boot_heartbeat = spawn_boot_heartbeat(root.agent_events.clone());
+
     eprintln!(
         "[gt] composition root up — event log: {}",
         root.log_path().display()
@@ -244,6 +259,17 @@ async fn run<R, MR, PR, OR>(
         "[gt] shutting down (dead-letters: {})",
         root.dead_letters()
     );
+    // hq-mc72.12 C10 boot-status — record terminal state for the orchestrator watchdog
+    // session BEFORE the drain so /api/sessions shows `hq-boot` ended cleanly even if the
+    // drain hits its timeout.
+    let _ = root
+        .agent_events
+        .send(Envelope::root(AgentEvent::SessionEnd {
+            session: "hq-boot".to_string(),
+        }))
+        .await;
+    boot_heartbeat.abort();
+    let _ = boot_heartbeat.await;
     // hq-mc72.12 C2 Deacon — drain in-flight merges before tearing the reactor down. Subscribe
     // BEFORE `begin_drain` so a same-tick `DrainComplete` (pending empty at drain time) is not
     // missed. `GT_DRAIN_TIMEOUT_SECS` caps the wait (default 30) so a wedged merge cannot pin
@@ -655,6 +681,32 @@ where
         };
         gt_polecat::supervise_daemon("dog", make, &mut tracker, u32::MAX, now_secs).await;
     }))
+}
+
+/// Periodic Heartbeat for the `hq-boot` watchdog session (hq-mc72.12 C10 boot-status). Every
+/// `GT_BOOT_HEARTBEAT_SECS` (default 30, floored at 1) it pushes an `AgentEvent::Heartbeat`
+/// through the agent relay so `/api/sessions` shows the orchestrator as live. Aborted on
+/// shutdown.
+fn spawn_boot_heartbeat(
+    agent_events: tokio::sync::mpsc::Sender<Envelope<AgentEvent>>,
+) -> tokio::task::JoinHandle<()> {
+    let interval_secs = std::env::var("GT_BOOT_HEARTBEAT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(30)
+        .max(1);
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(interval_secs));
+        tick.tick().await; // skip the immediate first tick (Spawned was just emitted)
+        loop {
+            tick.tick().await;
+            let _ = agent_events
+                .send(Envelope::root(AgentEvent::Heartbeat {
+                    session: "hq-boot".to_string(),
+                }))
+                .await;
+        }
+    })
 }
 
 /// Spawn the periodic witness ticker (hq-mc72.12 C2 Witness). Every `GT_WITNESS_TICK_SECS`
