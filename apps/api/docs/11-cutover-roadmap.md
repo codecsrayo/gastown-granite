@@ -10,7 +10,13 @@ las épicas, dependencias e instrucciones de despacho por agente.
 > **Progreso Paso 9 (al 2026-05-29):** 9.B (gt-plugin), 9.C (wisp/reaper), 9.D (roles),
 > 9.F (operator signals) **DONE**; 9.A (CLI) en Phase 1; 9.E (polecat lifecycle +
 > GT_HOOK_BEAD) DONE salvo mayor real-spawn. Pendiente para descartar Go: 9.A Phases 2+,
-> 9.E mayor-spawn, y el flip de Paso 8 (.4 shadow + .6 go/no-go).
+> 9.E mayor-spawn, y el flip (shadow + go/no-go).
+>
+> **Paso 8 CERRADO (2026-05-29):** `hq-8iur` cerrado (6/8 children DONE). Los dos restantes
+> se cerraron como *superseded* y se re-enmarcaron bajo la nueva épica **`hq-oap5` — Retire
+> Go orchestrator**: `hq-8iur.4` (shadow harness) → `hq-oap5.1`; `hq-8iur.6` (go/no-go flip
+> + rollback) → `hq-oap5.2`. `hq-oap5` agrupa además los últimos blockers Go (9.A Phases 2+,
+> 9.E mayor real-spawn).
 
 ## Resumen de los dos pasos
 
@@ -20,8 +26,8 @@ las épicas, dependencias e instrucciones de despacho por agente.
   operator signals) para poder **descartar el Go por completo**.
 
 Sin Paso 9 se puede operar en **coexistencia híbrida** (Rust backend + Go CLI/lifecycle).
-El flip de Paso 8 NO debe ejecutarse antes de que sus children estén DONE y un humano
-apruebe el go/no-go (8.6).
+El flip NO debe ejecutarse antes de que los blockers de `hq-oap5` estén DONE y un humano
+apruebe el go/no-go (`hq-oap5.2`, antes 8.6).
 
 ---
 
@@ -46,20 +52,37 @@ apruebe el go/no-go (8.6).
 
 ---
 
-## Paso 8 — cutover backend (`hq-8iur`, P1)
+## Paso 8 — cutover backend (`hq-8iur`, P1) — ✅ CERRADO (2026-05-29)
+
+| Bead | Entregable | Pri | Estado |
+|---|---|---|---|
+| hq-8iur.7 | SessionRole + crew schema (Mayor/Dog/Polecat + crew attribution) | P1 | ✅ DONE |
+| hq-8iur.1 | Boot hydration — replay log → actores al boot | P1 | ✅ DONE |
+| hq-8iur.2 | Sessions write-path en Rust (poblar tabla Dolt) | P1 | ✅ DONE |
+| hq-8iur.8 | Event-format portability (Go log ↔ Rust) — **DECIDIDO: clean cutover, sin replay histórico**; ver [12-event-log-portability.md](12-event-log-portability.md) | P1 | ✅ DONE |
+| hq-8iur.3 | Paridad audit Go↔Rust (mapa gt commands → API) | P2 | ✅ DONE |
+| hq-8iur.5 | Ops readiness (`/health`+`/readyz`, graceful shutdown, daemon) | P2 | ✅ DONE |
+| hq-8iur.4 | Shadow/parallel-run harness (Rust read-only, diff vs Go) | P2 | ⤳ superseded → `hq-oap5.1` |
+| hq-8iur.6 | [DECISION] cutover runbook + go/no-go flip + rollback | P1 | ⤳ superseded → `hq-oap5.2` |
+
+Épica cerrada con 6/8 DONE. `.4` y `.6` no se implementaron: se cerraron como *superseded* y
+se re-enmarcaron bajo `hq-oap5` (ver abajo). Sin trabajo perdido.
+
+---
+
+## Discard-Go — retirar Go por completo (`hq-oap5`, P1)
+
+Nueva épica (2026-05-29) que agrupa todo lo que falta para **descartar el orquestador Go**:
+el flip pendiente de Paso 8 + los últimos blockers de Paso 9.
 
 | Bead | Entregable | Pri | Bloqueo |
 |---|---|---|---|
-| hq-8iur.7 | SessionRole + crew schema (Mayor/Dog/Polecat + crew attribution) | P1 | bloquea .2 |
-| hq-8iur.1 | Boot hydration — replay log → actores al boot | P1 | — |
-| hq-8iur.2 | Sessions write-path en Rust (poblar tabla Dolt) | P1 | espera .7 |
-| hq-8iur.8 | Event-format portability (Go log ↔ Rust) — **DECIDIDO: clean cutover, sin replay histórico**; ver [12-event-log-portability.md](12-event-log-portability.md) | P1 | re-scopes .4 (no bloquea — ver §6 doc 12) |
-| hq-8iur.3 | Paridad audit Go↔Rust (mapa gt commands → API) | P2 | — |
-| hq-8iur.5 | Ops readiness (`/health`+`/readyz`, graceful shutdown, daemon) | P2 | — |
-| hq-8iur.4 | Shadow/parallel-run harness (Rust read-only, diff vs Go) | P2 | espera .8 |
-| hq-8iur.6 | [DECISION] cutover runbook + go/no-go flip + rollback | P1 | espera 1-5,7,8 + humano |
+| hq-oap5.1 | Shadow side-effect validation (diff bead status / quota rotation / `/api/sessions` vs `gt agents`; **no** replay del log, ver doc 12 §6) | P2 | — |
+| hq-oap5.2 | [DECISION] cutover go/no-go flip + rollback runbook | P1 | espera .1 + blockers Go + humano |
+| hq-hapx | 9.A — `gt` CLI Phases 2+ (resto de comandos que aún shellean a Go) | P1 | Phase 1 shipped (4402b764) |
+| hq-63az | 9.E — `gt-mayor` real-spawn (deferred) | P2 | — |
 
-Camino crítico: **.7 → .1/.2 → .4 → .6**. (.3, .5, .8 en paralelo / decididos; .8 desbloquea .4 vía doc 12 §6.)
+Camino crítico: **9.A Phases 2+ / mayor-spawn + .1 shadow → .2 go/no-go (humano)**.
 
 ---
 
