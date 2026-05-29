@@ -65,19 +65,35 @@ internal/web/                     ← Go viejo, retirado, NO TOCAR
 
 ## Cómo abro un bead nuevo (si encuentro un gap)
 
+**Los agentes hablan con el orquestador SOLO vía MCP** (`http://127.0.0.1:8765/mcp`).
+No abras shell en `gastown-dolt` ni en `gastown-gt`. Si el MCP no expone una
+operación que necesitas, **el gap mismo se vuelve un bead** — no es excusa
+para hacer bypass.
+
 1. Verifica que el gap no esté ya listado en
    [frontend-api-surface.md](frontend-api-surface.md) o
    [frontend-migration-sveltekit.md](frontend-migration-sveltekit.md).
-2. Si es nuevo: inserta en Dolt `hq` con `external_ref` apuntando al epic
-   correspondiente (e.g. `hq-fe-api-r`). Memoria: bd CLI no funciona
-   contra hq → usa SQL directo:
+2. Si es nuevo: crea bead vía MCP usando `gt-mcp-cli` (en PATH; repo en
+   `/home/nixos/gt-mcp-cli`):
    ```sh
-   docker exec gastown-dolt dolt sql -q "USE hq; INSERT INTO issues (id, title, description, status, priority, issue_type, created_by) VALUES ('hq-fe-...', '...', '...', 'open', 2, 'task', 'agent-X');"
-   docker exec gastown-dolt dolt sql -q "USE hq; CALL DOLT_COMMIT('-A', '-m', 'bead: hq-fe-... open');"
+   gt-mcp-cli call scheduling.create_bead.validate \
+     --json '{"id":"hq-fe-…","title":"…","priority":2}'
+   gt-mcp-cli call scheduling.create_bead.execute \
+     --json '{"id":"hq-fe-…","title":"…","priority":2}'
    ```
+   **Limitación conocida (2026-05-29):** `scheduling.create_bead` escribe en
+   la tabla `beads` (5 columnas: id, title, status, priority, assignee),
+   no en `issues` (~25 columnas, leída por el dashboard kanban + el plan
+   de épics). Para issues completas con `description` / `external_ref` /
+   `acceptance_criteria` / dependencias, la familia `issues.*` MCP está
+   pendiente — ver epic `hq-mcp-issues` (`.1..5`). Mientras tanto, escala
+   al operador humano para la inserción canónica.
 3. Actualiza la tabla de estado en
    [frontend-migration-sveltekit.md](frontend-migration-sveltekit.md).
 4. Si abres dependencias entre beads, añádelas al grafo del mismo doc.
+5. **No** uses `docker exec gastown-dolt dolt sql` desde un agente — es
+   escape hatch operador-only (sin audit, sin scope, sin invariantes del
+   reactor).
 
 ## Decisiones de scope (NO en MVP)
 
