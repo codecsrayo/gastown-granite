@@ -13,12 +13,22 @@ Shell scripts that replace the Go `gt` **B3** Dolt SQL-server admin surface.
 Verified invocation form for this Dolt build: `--host`/`--port`/`--no-tls` are
 **global** args placed *before* the `sql` subcommand.
 
-## Pending (data-critical — separate follow-up bead)
+## Shipped (hq-mc72.12.20 — lifecycle, sandbox-tested)
+
+| Script | Replaces Go `gt dolt …` | What it does |
+|---|---|---|
+| `start.sh` | `dolt start` | Write a managed `config.yaml` (faithful to `doltserver.writeServerConfig`: warning log, 127.0.0.1, 1000 conns, 5-min timeouts, event-scheduler/stats off, auto-gc off), clean a stale socket, refuse a foreign listener (no kill), launch `dolt sql-server --config …` detached → `daemon/dolt.log`, pid → `daemon/dolt.pid`, wait for the port. |
+| `stop.sh` | `dolt stop` | SIGTERM the recorded pid, wait, clear the pidfile. |
+
+`start.sh`/`stop.sh` were tested on a throwaway server (`GT_DOLT_PORT=3399`,
+temp `GT_DOLT_DATA_DIR`) — never against the shared live `:3307`.
+
+## Pending (separate follow-up beads)
 
 | Script | Replaces | Why deferred |
 |---|---|---|
-| `start.sh` | `dolt start` | Needs the `config.yaml` (`writeServerConfig`: timeouts, port) + stale-socket cleanup + port-conflict/imposter detection ported from `internal/doltserver`, and a sandbox to verify — it cannot be tested against the shared live `:3307` without risking every other agent (split-brain). |
-| `stop.sh` / `restart.sh` / `kill-imposters.sh` | `dolt stop` / `restart` / kill | Same: process-lifecycle on the shared data store. |
+| `restart.sh` | `dolt restart` | Compose of stop + kill-imposters + start; land after kill-imposters. |
+| `kill-imposters.sh` | `dolt kill` (imposter) | **Destructive** (kills a foreign Dolt holding the port) — needs careful process-identity checks. |
 
 The orchestrator (`apps/api/crates/kernel/gt-store-dolt`) connects to Dolt as
 a **client** (MySQL wire on `:3307`); it has no business starting the server.

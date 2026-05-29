@@ -54,3 +54,45 @@ dolt_listener_pid() {
       | grep -oE 'pid=[0-9]+' | head -n1 | cut -d= -f2
   fi
 }
+
+# Daemon-side paths (mirror Go `doltserver.DefaultConfig`: <town>/daemon/{dolt.log,dolt.pid}).
+DAEMON_DIR="${GT_DOLT_DAEMON_DIR:-$TOWN_ROOT/daemon}"
+DOLT_LOG="$DAEMON_DIR/dolt.log"
+DOLT_PID="$DAEMON_DIR/dolt.pid"
+
+# Is `pid` a live process? (kill -0, no signal sent.)
+dolt_pid_alive() {
+  [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null
+}
+
+# Write the managed server config.yaml. Faithful to Go `doltserver.writeServerConfig` +
+# `DefaultConfig`: warning log level, 127.0.0.1, 1000 conns, 5-minute read/write timeouts,
+# event scheduler + dolt stats off, auto-gc disabled. Overwritten on each start (managed file).
+dolt_write_config() {
+  local path="$1"
+  cat > "$path" <<EOF
+# Dolt SQL server configuration — managed by Gas Town (deploy/dolt/start.sh)
+# Do not edit manually; overwritten on each server start.
+
+log_level: warning
+
+listener:
+  port: $DOLT_PORT
+  host: $DOLT_HOST
+  max_connections: 1000
+  read_timeout_millis: 300000
+  write_timeout_millis: 300000
+
+data_dir: "$DATA_DIR"
+
+behavior:
+  dolt_transaction_commit: false
+  event_scheduler: "OFF"
+  auto_gc_behavior:
+    enable: false
+    archive_level: 0
+
+system_variables:
+  dolt_stats_enabled: 0
+EOF
+}
