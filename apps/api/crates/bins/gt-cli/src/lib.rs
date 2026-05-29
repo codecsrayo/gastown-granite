@@ -161,7 +161,18 @@ pub enum Command {
         validate: bool,
     },
     /// Workspace health checks: gt-web `/health`+`/readyz` probes plus local binary checks.
-    Doctor,
+    /// `--recon` adds two slower reconciliation checks: bead drift (dispatch table vs the
+    /// `bd` JSONL tracker export) and tmux orphans (`/api/sessions` vs `tmux list-sessions`).
+    Doctor {
+        /// Run reconciliation checks (bead drift + tmux orphans). Slower; off by default so
+        /// the fast probe-only path stays fast.
+        #[arg(long)]
+        recon: bool,
+        /// Path to the bd JSONL export used by the drift check. Defaults to
+        /// `/gt/.beads/issues.jsonl`.
+        #[arg(long)]
+        jsonl: Option<String>,
+    },
     /// Manage the Gas Town daemon (the long-running `gt` server process).
     Daemon {
         #[command(subcommand)]
@@ -353,7 +364,7 @@ pub async fn run(cli: Cli, cfg: Config) -> Result<i32> {
         Command::Done { bead, branch, channel_msg_id, validate } => {
             run_done(bead, branch, channel_msg_id, validate).await
         }
-        Command::Doctor => run_doctor(&client, &cfg, cli.json).await,
+        Command::Doctor { recon, jsonl } => run_doctor(&client, &cfg, cli.json, recon, jsonl).await,
         Command::Daemon { action } => run_daemon(action).await,
         Command::EmitEvent { channel, payload, payload_file } => {
             run_emit_event(&channel, payload, payload_file, cli.json).await
@@ -823,9 +834,18 @@ struct DoctorCheck {
 }
 
 /// Health checks. Hits the gt-web liveness/readiness probes (outside IAM) and verifies the
-/// edge binaries the CLI depends on are on PATH. Exits non-zero if any check fails. This is a
-/// pragmatic subset of the Go `gt doctor` (~80 checks over town/rig/dolt state).
-async fn run_doctor(client: &reqwest::Client, cfg: &Config, json: bool) -> Result<i32> {
+/// edge binaries the CLI depends on are on PATH. With `--recon`, adds two slower
+/// reconciliation passes: (1) bead drift — dispatch table (`/api/beads`) vs the bd JSONL
+/// tracker export, reporting orphan dispatch rows; (2) tmux orphans — `/api/sessions` vs
+/// `tmux list-sessions`, reporting tmux sessions without a DB row and vice versa. Exits
+/// non-zero if any check fails. Pragmatic subset of the Go `gt doctor` (~80 checks).
+async fn run_doctor(
+    client: &reqwest::Client,
+    cfg: &Config,
+    json: bool,
+    recon: bool,
+    jsonl: Option<String>,
+) -> Result<i32> {
     let mut checks = Vec::new();
 
     // gt-web liveness.
@@ -836,6 +856,12 @@ async fn run_doctor(client: &reqwest::Client, cfg: &Config, json: bool) -> Resul
     checks.push(binary_present("bd", "beads-binary").await);
     checks.push(binary_present("gt-mcp-cli", "mcp-cli-binary").await);
 
+    if recon {
+        let jsonl_path = jsonl.clone().unwrap_or_else(|| "/gt/.beads/issues.jsonl".to_string());
+        checks.push(check_bead_drift(client, cfg, &jsonl_path).await);
+        checks.push(check_tmux_orphans(client, cfg).await);
+    }
+
     let all_ok = checks.iter().all(|c| c.ok);
 
     if json {
@@ -843,7 +869,7 @@ async fn run_doctor(client: &reqwest::Client, cfg: &Config, json: bool) -> Resul
     } else {
         for c in &checks {
             let mark = if c.ok { "✓" } else { "✗" };
-            println!("{mark} {:<20} {}", c.name, c.detail);
+            println!("{mark} {:<22} {}", c.name, c.detail);
         }
         println!();
         if all_ok {
@@ -855,6 +881,165 @@ async fn run_doctor(client: &reqwest::Client, cfg: &Config, json: bool) -> Resul
     }
 
     Ok(if all_ok { 0 } else { 1 })
+}
+
+/// Reconciliation: every bead the orchestrator is tracking for dispatch must exist in the bd
+/// tracker (the JSONL export). The reverse (bd issues not in the dispatch table) is normal —
+/// most bd issues are not claimed/dispatched. So the failure signal here is "dispatch row
+/// pointing at a bead the tracker does not know" (`db_orphans`), which indicates a sync gap.
+async fn check_bead_drift(
+    client: &reqwest::Client,
+    cfg: &Config,
+    jsonl_path: &str,
+) -> DoctorCheck {
+    // 1. DB side: union over the dispatch statuses gt-web exposes.
+    const STATUSES: &[&str] = &["pending", "dispatched", "working", "done", "failed"];
+    let mut db_ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for s in STATUSES {
+        match fetch_beads(client, cfg, s).await {
+            Ok(rows) => db_ids.extend(rows.into_iter().map(|r| r.id)),
+            Err(e) => {
+                return DoctorCheck {
+                    name: "bead-drift".to_string(),
+                    ok: false,
+                    detail: format!("GET /api/beads?status={s} failed: {e}"),
+                }
+            }
+        }
+    }
+
+    // 2. JSONL side: read every `_type: issue` line and collect the id.
+    let jsonl_ids = match read_jsonl_issue_ids(std::path::Path::new(jsonl_path)) {
+        Ok(ids) => ids,
+        Err(e) => {
+            return DoctorCheck {
+                name: "bead-drift".to_string(),
+                ok: false,
+                detail: format!("read jsonl {jsonl_path}: {e}"),
+            }
+        }
+    };
+
+    let orphans: Vec<&String> = db_ids.iter().filter(|id| !jsonl_ids.contains(*id)).collect();
+    let detail = if orphans.is_empty() {
+        format!(
+            "db={} jsonl={} (no orphan dispatch rows)",
+            db_ids.len(),
+            jsonl_ids.len()
+        )
+    } else {
+        let sample: Vec<&str> = orphans.iter().take(5).map(|s| s.as_str()).collect();
+        format!(
+            "db={} jsonl={} ORPHAN dispatch rows (db not in jsonl): {} (first 5: {})",
+            db_ids.len(),
+            jsonl_ids.len(),
+            orphans.len(),
+            sample.join(", ")
+        )
+    };
+    DoctorCheck {
+        name: "bead-drift".to_string(),
+        ok: orphans.is_empty(),
+        detail,
+    }
+}
+
+/// Read every line of a JSONL, return the set of `id` values for lines with `_type == "issue"`.
+/// Lines that are not JSON, are blank, or have a different `_type` are silently skipped.
+fn read_jsonl_issue_ids(path: &std::path::Path) -> Result<std::collections::BTreeSet<String>> {
+    use std::io::{BufRead, BufReader};
+    let f = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut ids = std::collections::BTreeSet::new();
+    for line in BufReader::new(f).lines() {
+        let line = line.context("read jsonl line")?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        if v.get("_type").and_then(|t| t.as_str()) != Some("issue") {
+            continue;
+        }
+        if let Some(id) = v.get("id").and_then(|s| s.as_str()) {
+            ids.insert(id.to_string());
+        }
+    }
+    Ok(ids)
+}
+
+/// Reconciliation: every active session row must correspond to a live tmux session and vice
+/// versa. Reports both directions because each maps to a real failure mode: a DB row without a
+/// tmux session means the process died but the lease was not closed; a tmux session without a
+/// DB row means a polecat was spawned outside the orchestrator's knowledge. If `tmux ls` is
+/// unavailable (no tmux on PATH, no running server) the check is skipped (ok=true) — same shape
+/// as a network probe that cannot reach its target: silent rather than a false fail.
+async fn check_tmux_orphans(client: &reqwest::Client, cfg: &Config) -> DoctorCheck {
+    let db_sessions = match fetch_sessions(client, &Config { base_url: cfg.base_url.clone(), token: cfg.token.clone() }, None).await {
+        Ok(rows) => rows.into_iter().map(|r| r.id).collect::<std::collections::BTreeSet<String>>(),
+        Err(e) => {
+            return DoctorCheck {
+                name: "tmux-orphans".to_string(),
+                ok: false,
+                detail: format!("GET /api/sessions failed: {e}"),
+            }
+        }
+    };
+    let tmux_names = match list_tmux_sessions().await {
+        Ok(names) => names,
+        Err(e) => {
+            return DoctorCheck {
+                name: "tmux-orphans".to_string(),
+                ok: true,
+                detail: format!("skipped: {e} ({} DB sessions, tmux unreachable)", db_sessions.len()),
+            }
+        }
+    };
+
+    let tmux_orphans: Vec<&String> = tmux_names.iter().filter(|n| !db_sessions.contains(*n)).collect();
+    let db_orphans: Vec<&String> = db_sessions.iter().filter(|n| !tmux_names.contains(*n)).collect();
+    let ok = tmux_orphans.is_empty() && db_orphans.is_empty();
+    let detail = if ok {
+        format!("db={} tmux={} (consistent)", db_sessions.len(), tmux_names.len())
+    } else {
+        let take = |v: &[&String]| -> String {
+            v.iter().take(5).map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+        };
+        format!(
+            "db={} tmux={} tmux-only={} ({}) db-only={} ({})",
+            db_sessions.len(),
+            tmux_names.len(),
+            tmux_orphans.len(),
+            take(&tmux_orphans),
+            db_orphans.len(),
+            take(&db_orphans),
+        )
+    };
+    DoctorCheck {
+        name: "tmux-orphans".to_string(),
+        ok,
+        detail,
+    }
+}
+
+/// `tmux list-sessions -F '#S'` → set of session names. Errors if tmux is missing or no
+/// server is running (no sessions yet); the caller treats that as skip-not-fail.
+async fn list_tmux_sessions() -> Result<std::collections::BTreeSet<String>> {
+    let out = tokio::process::Command::new("tmux")
+        .args(["list-sessions", "-F", "#S"])
+        .output()
+        .await
+        .context("spawn tmux")?;
+    if !out.status.success() {
+        bail!(
+            "tmux list-sessions failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect())
 }
 
 async fn http_probe(
@@ -1874,6 +2059,41 @@ mod audit_costs_tests {
         std::fs::write(&path, body).unwrap();
         let recs = read_jsonl(&path).unwrap();
         assert_eq!(recs.len(), 2, "malformed + blank lines must be skipped");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod doctor_recon_tests {
+    use super::*;
+
+    #[test]
+    fn read_jsonl_issue_ids_filters_to_issue_type() {
+        let dir = std::env::temp_dir().join(format!(
+            "gt-cli-doctor-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("issues.jsonl");
+        // Mix issues, memories, blank lines, and one malformed line. Only issue ids should land.
+        let body = "\
+{\"_type\":\"issue\",\"id\":\"hq-a\",\"status\":\"open\"}\n\
+\n\
+{\"_type\":\"memory\",\"id\":\"mem-1\"}\n\
+{not json}\n\
+{\"_type\":\"issue\",\"id\":\"hq-b\",\"status\":\"closed\"}\n\
+{\"_type\":\"issue\"}\n\
+{\"_type\":\"issue\",\"id\":\"hq-a\"}\n";
+        std::fs::write(&path, body).unwrap();
+        let ids = read_jsonl_issue_ids(&path).unwrap();
+        // hq-a, hq-b — memories, malformed, missing-id, and the duplicate of hq-a all skipped.
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains("hq-a"));
+        assert!(ids.contains("hq-b"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
