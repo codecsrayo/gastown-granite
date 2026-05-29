@@ -221,6 +221,12 @@ pub struct RootConfig {
     /// merge-stuck signals through this port. Defaults to [`LogNotifier`]; the production bin
     /// installs the bead-backed `MailNotifier`, the gate injects `gt_notify::FakeNotifier`.
     pub notifier: Arc<dyn Notifier>,
+    /// hq-mc72.12 C2 Witness — inactivity budget (seconds) applied when the reactor
+    /// auto-watches a worker on `PatrolEvent::LeaseExpired`. Once the next witness tick lands
+    /// past this threshold the actor raises `EscalationRaised`, which the reactor turns into
+    /// a status bead + notification through the existing hq-mysw escalation pipeline. Default
+    /// 300s (5 min).
+    pub witness_threshold_secs: u64,
 }
 
 impl Default for RootConfig {
@@ -231,6 +237,7 @@ impl Default for RootConfig {
             event_buffer: 1024,
             keychain: Arc::new(InMemoryKeychain::new()),
             notifier: Arc::new(LogNotifier),
+            witness_threshold_secs: 300,
         }
     }
 }
@@ -496,6 +503,8 @@ where
         patrol: patrol.clone(),
         merge: merge.clone(),
         deacon: deacon.clone(),
+        witness: witness.clone(),
+        witness_threshold: config.witness_threshold_secs,
         repo: repo.clone(),
         effects,
         clock,
@@ -571,6 +580,10 @@ struct Reactor<R, FX, CK> {
     /// hq-mc72.12 C2 Deacon — track in-flight merges and drive `DrainComplete` on SIGTERM.
     /// Merge::Ready arms `deacon.track`; Merge::Merged / Failed arm `deacon.finish`.
     deacon: DeaconHandle,
+    /// hq-mc72.12 C2 Witness — auto-watch workers whose patrol lease expired so the next
+    /// tick past `witness_threshold` raises an escalation through the hq-mysw pipeline.
+    witness: WitnessHandle,
+    witness_threshold: u64,
     repo: R,
     effects: FX,
     clock: CK,
@@ -657,6 +670,9 @@ where
             }
             // The patrol's pure detector fired: reclaim the lease in the repo (CAS only wins
             // if the bead is still dispatched + owned by the dead worker) and re-enqueue.
+            // hq-mc72.12 C2 Witness: also auto-watch the worker so the next tick past the
+            // configured threshold raises an escalation (escalation_raised -> status bead +
+            // notification via the existing hq-mysw escalation arm).
             GtEvent::Patrol(PatrolEvent::LeaseExpired {
                 bead,
                 worker,
@@ -666,6 +682,9 @@ where
                     self.sched.capacity_freed().await;
                     self.sched.enqueue(bead.clone(), *priority).await;
                 }
+                let now = self.clock.now_secs();
+                gt_witness::witness::watch(&self.witness, worker, now, self.witness_threshold)
+                    .await?;
             }
             // Convoy handoff (Paso 6.d): the next member is ready — sling it.
             GtEvent::Orch(OrchEvent::MemberDispatched { convoy, member }) => {
