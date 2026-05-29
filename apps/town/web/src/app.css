@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Theme tokens · dark = canonical (mirrors apps/town/docs/pagina.png).
+   Toggled by lib/stores/theme.svelte.ts via [data-theme] on <html>. */
+:root,
+[data-theme='dark'] {
+  --paper: #0f1612;
+  --paper-2: #1a221c;
+  --ink: #d8d4c4;
+  --ink-soft: #8aa399;
+  --ink-faint: #4a5a52;
+  --border: #3a4a40;
+  --border-soft: #2a3630;
+  --accent: #18a883;
+  --accent-soft: #1d5447;
+  --warn: #c47a2e;
+  --warn-soft: #3a2818;
+  --bad: #c2474a;
+  --bad-soft: #3a1a1c;
+  --grid-dot: rgba(255, 255, 255, 0.025);
+  --shadow: rgba(0, 0, 0, 0.35);
+}
+
+[data-theme='light'] {
+  --paper: #f3efe6;
+  --paper-2: #ebe6d9;
+  --ink: #1a1a1a;
+  --ink-soft: #5a5a55;
+  --ink-faint: #a8a39a;
+  --border: #1a1a1a;
+  --border-soft: #a8a39a;
+  --accent: #18a883;
+  --accent-soft: #b5e6d6;
+  --warn: #c47a2e;
+  --warn-soft: #f0d9b8;
+  --bad: #c2474a;
+  --bad-soft: #f1c6c7;
+  --grid-dot: rgba(0, 0, 0, 0.04);
+  --shadow: rgba(0, 0, 0, 0.06);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--paper);
+  color: var(--ink);
+  background-image: radial-gradient(var(--grid-dot) 1px, transparent 1px);
+  background-size: 22px 22px;
+  min-height: 100vh;
+  font-family: 'Kalam', 'Patrick Hand', sans-serif;
+}
