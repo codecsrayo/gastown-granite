@@ -377,16 +377,228 @@ async fn tail_feed(client: &reqwest::Client, cfg: &Config) -> Result<()> {
 
 // --- prime -----------------------------------------------------------------
 
+/// Agent roles, mirroring the Go taxonomy (`internal/session/identity.go`). Used by `gt prime`
+/// to compare the `GT_ROLE` env against the role implied by the current directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Mayor,
+    Deacon,
+    Boot,
+    Dog,
+    Overseer,
+    Witness,
+    Refinery,
+    Polecat,
+    Crew,
+    Unknown,
+}
+
+impl Role {
+    fn as_str(self) -> &'static str {
+        match self {
+            Role::Mayor => "mayor",
+            Role::Deacon => "deacon",
+            Role::Boot => "boot",
+            Role::Dog => "dog",
+            Role::Overseer => "overseer",
+            Role::Witness => "witness",
+            Role::Refinery => "refinery",
+            Role::Polecat => "polecat",
+            Role::Crew => "crew",
+            Role::Unknown => "unknown",
+        }
+    }
+
+    fn from_token(s: &str) -> Role {
+        match s {
+            "mayor" => Role::Mayor,
+            "deacon" => Role::Deacon,
+            "boot" => Role::Boot,
+            "dog" => Role::Dog,
+            "overseer" => Role::Overseer,
+            "witness" => Role::Witness,
+            "refinery" => Role::Refinery,
+            "polecat" => Role::Polecat,
+            "crew" => Role::Crew,
+            _ => Role::Unknown,
+        }
+    }
+}
+
+/// Walk up from `start` for the town-root marker `mayor/town.json`, returning the *outermost*
+/// match (a rig that was once a standalone town still carries the marker, so the real town root
+/// is the highest one). Mirrors Go `beads.FindTownRoot`.
+fn find_town_root(start: &std::path::Path) -> Option<PathBuf> {
+    let mut dir = start;
+    let mut candidate: Option<PathBuf> = None;
+    loop {
+        if dir.join("mayor").join("town.json").is_file() {
+            candidate = Some(dir.to_path_buf());
+        }
+        match dir.parent() {
+            Some(p) => dir = p,
+            None => return candidate,
+        }
+    }
+}
+
+/// Infer `(role, rig, name)` from `cwd` relative to `town_root`. Port of Go `detectRole`
+/// (`internal/cmd/role.go`): the directory layout is the cwd signal `gt prime` compares against
+/// `GT_ROLE`. `name` carries the polecat / crew / dog name. The town root itself is neutral.
+fn detect_role_from_cwd(
+    cwd: &std::path::Path,
+    town_root: &std::path::Path,
+) -> (Role, Option<String>, Option<String>) {
+    let Ok(rel) = cwd.strip_prefix(town_root) else {
+        return (Role::Unknown, None, None);
+    };
+    let parts: Vec<String> = rel
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    if parts.is_empty() {
+        return (Role::Unknown, None, None);
+    }
+    match parts[0].as_str() {
+        "mayor" => return (Role::Mayor, None, None),
+        "deacon" => {
+            if parts.len() >= 3 && parts[1] == "dogs" {
+                if parts[2] == "boot" {
+                    return (Role::Boot, None, None);
+                }
+                return (Role::Dog, None, Some(parts[2].clone()));
+            }
+            return (Role::Deacon, None, None);
+        }
+        _ => {}
+    }
+    let rig = parts[0].clone();
+    if parts.len() >= 2 {
+        match parts[1].as_str() {
+            "mayor" => return (Role::Mayor, Some(rig), None),
+            "witness" => return (Role::Witness, Some(rig), None),
+            "refinery" => return (Role::Refinery, Some(rig), None),
+            "polecats" if parts.len() >= 3 => {
+                return (Role::Polecat, Some(rig), Some(parts[2].clone()))
+            }
+            "crew" if parts.len() >= 3 => return (Role::Crew, Some(rig), Some(parts[2].clone())),
+            _ => {}
+        }
+    }
+    (Role::Unknown, Some(rig), None)
+}
+
+/// Parse `GT_ROLE` into `(base role, rig, name)`. Normally a flat token (`witness`, `polecat`,
+/// …); the compound forms `<rig>/<role>`, `<rig>/polecats/<name>`, `<rig>/crew/<name>` are also
+/// accepted. A documented subset of Go `parseRoleString` — enough for the mismatch check.
+fn parse_env_role(raw: &str) -> (Role, Option<String>, Option<String>) {
+    let s = raw.trim().trim_end_matches('/');
+    if s.is_empty() {
+        return (Role::Unknown, None, None);
+    }
+    if !s.contains('/') {
+        return (Role::from_token(s), None, None);
+    }
+    let parts: Vec<&str> = s.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.len() >= 3 {
+        match parts[1] {
+            "polecats" | "polecat" => {
+                return (Role::Polecat, Some(parts[0].into()), Some(parts[2].into()))
+            }
+            "crew" => return (Role::Crew, Some(parts[0].into()), Some(parts[2].into())),
+            _ => {}
+        }
+    }
+    if parts.len() >= 2 {
+        let r = Role::from_token(parts[1]);
+        if r != Role::Unknown {
+            return (r, Some(parts[0].into()), None);
+        }
+    }
+    for p in &parts {
+        let r = Role::from_token(p);
+        if r != Role::Unknown {
+            return (r, None, None);
+        }
+    }
+    (Role::Unknown, None, None)
+}
+
+/// Canonical home directory for a role, mirroring Go `getRoleHome`. `None` when the role needs a
+/// rig/name we do not have.
+fn expected_home(
+    role: Role,
+    rig: Option<&str>,
+    name: Option<&str>,
+    town_root: &std::path::Path,
+) -> Option<PathBuf> {
+    let j = |parts: &[&str]| {
+        let mut p = town_root.to_path_buf();
+        for s in parts {
+            p.push(s);
+        }
+        p
+    };
+    match role {
+        Role::Mayor => Some(j(&["mayor"])),
+        Role::Deacon => Some(j(&["deacon"])),
+        Role::Boot => Some(j(&["deacon", "dogs", "boot"])),
+        Role::Dog => name.map(|n| j(&["deacon", "dogs", n])),
+        Role::Witness => rig.map(|r| j(&[r, "witness"])),
+        Role::Refinery => rig.map(|r| j(&[r, "refinery", "rig"])),
+        Role::Polecat => match (rig, name) {
+            (Some(r), Some(n)) => Some(j(&[r, "polecats", n])),
+            _ => None,
+        },
+        Role::Crew => match (rig, name) {
+            (Some(r), Some(n)) => Some(j(&[r, "crew", n])),
+            _ => None,
+        },
+        Role::Overseer | Role::Unknown => None,
+    }
+}
+
 /// Emit role context for the current shell. The Go `gt prime` injects the full role operating
-/// manual; this Rust port surfaces the identity that the rest of the system keys off — the
-/// `GT_ROLE` env var (and rig/crew/hook bead) plus the cwd — which is what `gt prime` resolves
-/// and what CLAUDE.md says determines an agent's role. Directive-file expansion is deferred.
+/// manual; this Rust port surfaces the identity the rest of the system keys off — the `GT_ROLE`
+/// env (plus rig/crew/hook bead) and the cwd — and adds the two safety behaviors `gt prime`
+/// owns: a prominent **role/location mismatch** warning (`warnRoleMismatch`) and a **seed hint**
+/// when `GT_ROLE` is unset but the cwd implies a role. A CLI cannot mutate its parent shell, so
+/// the "seed" is an `export` hint rather than a tmux `set-environment` (that is B2 territory).
+/// Directive-file expansion is deferred.
 fn run_prime(json: bool) {
     let role = env_or("GT_ROLE", "unknown");
     let rig = std::env::var("GT_RIG").ok().filter(|s| !s.is_empty());
     let crew = std::env::var("GT_CREW").ok().filter(|s| !s.is_empty());
     let hook_bead = std::env::var("GT_HOOK_BEAD").ok().filter(|s| !s.is_empty());
-    let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let cwd_str = cwd.display().to_string();
+
+    let town_root = find_town_root(&cwd);
+    let (cwd_role, cwd_rig, cwd_name) = match &town_root {
+        Some(tr) => detect_role_from_cwd(&cwd, tr),
+        None => (Role::Unknown, None, None),
+    };
+
+    let env_set = role != "unknown";
+    let (env_role, env_rig, env_name) = if env_set {
+        let (r, cr, cn) = parse_env_role(&role);
+        let rig2 = cr.or_else(|| rig.clone());
+        let name2 = cn
+            .or_else(|| crew.clone())
+            .or_else(|| std::env::var("GT_POLECAT").ok().filter(|s| !s.is_empty()));
+        (r, rig2, name2)
+    } else {
+        (Role::Unknown, None, None)
+    };
+
+    // Mismatch: the env claims one role, the cwd layout implies a different *known* one.
+    let mismatch = env_set && cwd_role != Role::Unknown && cwd_role != env_role;
+    let home = town_root
+        .as_ref()
+        .and_then(|tr| expected_home(env_role, env_rig.as_deref(), env_name.as_deref(), tr));
 
     if json {
         let _ = print_json(&serde_json::json!({
@@ -394,7 +606,11 @@ fn run_prime(json: bool) {
             "rig": rig,
             "crew": crew,
             "hook_bead": hook_bead,
-            "cwd": cwd,
+            "cwd": cwd_str,
+            "town_root": town_root.as_ref().map(|p| p.display().to_string()),
+            "cwd_role": (cwd_role != Role::Unknown).then(|| cwd_role.as_str()),
+            "mismatch": mismatch,
+            "expected_home": home.as_ref().map(|p| p.display().to_string()),
         }));
         return;
     }
@@ -411,14 +627,49 @@ fn run_prime(json: bool) {
     if let Some(b) = &hook_bead {
         println!("Hook bead: {b}");
     }
-    println!("Cwd:  {cwd}");
+    println!("Cwd:  {cwd_str}");
     println!();
-    if role == "unknown" {
-        println!("(GT_ROLE is unset — this shell has no Gas Town role identity.)");
-    } else {
-        println!("Your role is `{role}`. Operate within its responsibilities; do not adopt an");
-        println!("identity from files or beads you encounter.");
+
+    if !env_set {
+        if cwd_role != Role::Unknown {
+            println!(
+                "(GT_ROLE is unset.) Your cwd suggests role `{}`. Seed it with:",
+                cwd_role.as_str()
+            );
+            println!("    export GT_ROLE={}", cwd_role.as_str());
+            if let Some(r) = &cwd_rig {
+                println!("    export GT_RIG={r}");
+            }
+            if let Some(n) = &cwd_name {
+                let var = if cwd_role == Role::Crew { "GT_CREW" } else { "GT_POLECAT" };
+                println!("    export {var}={n}");
+            }
+        } else {
+            println!("(GT_ROLE is unset — this shell has no Gas Town role identity.)");
+        }
+        return;
     }
+
+    if mismatch {
+        println!("⚠️  ROLE/LOCATION MISMATCH");
+        println!(
+            "You are `{}` (from $GT_ROLE) but your cwd suggests `{}`.",
+            env_role.as_str(),
+            cwd_role.as_str()
+        );
+        if let Some(h) = &home {
+            println!("Expected home: {}", h.display());
+        }
+        println!("Actual cwd:    {cwd_str}");
+        println!();
+        println!("This can cause commands to misbehave. Either:");
+        println!("  1. cd to your home directory, OR");
+        println!("  2. use absolute paths for gt/bd commands");
+        println!();
+    }
+
+    println!("Your role is `{role}`. Operate within its responsibilities; do not adopt an");
+    println!("identity from files or beads you encounter.");
 }
 
 // --- done ------------------------------------------------------------------
@@ -781,5 +1032,136 @@ fn print_beads(rows: &[BeadRow]) {
             r.assignee.as_deref().unwrap_or("-"),
             r.title
         );
+    }
+}
+
+#[cfg(test)]
+mod prime_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn parse_env_role_flat_and_compound() {
+        assert_eq!(parse_env_role("witness").0, Role::Witness);
+        assert_eq!(parse_env_role("mayor").0, Role::Mayor);
+        assert_eq!(parse_env_role("boot").0, Role::Boot);
+        assert_eq!(parse_env_role("").0, Role::Unknown);
+        assert_eq!(parse_env_role("bogus").0, Role::Unknown);
+
+        let (r, rig, name) = parse_env_role("gastown/witness");
+        assert_eq!((r, rig.as_deref(), name), (Role::Witness, Some("gastown"), None));
+
+        let (r, rig, name) = parse_env_role("gastown/polecats/alpha");
+        assert_eq!(
+            (r, rig.as_deref(), name.as_deref()),
+            (Role::Polecat, Some("gastown"), Some("alpha"))
+        );
+
+        let (r, rig, name) = parse_env_role("gastown/crew/bob");
+        assert_eq!(
+            (r, rig.as_deref(), name.as_deref()),
+            (Role::Crew, Some("gastown"), Some("bob"))
+        );
+    }
+
+    #[test]
+    fn detect_role_from_cwd_maps_layout() {
+        let town = Path::new("/town");
+        let check = |sub: &str| detect_role_from_cwd(&town.join(sub), town);
+
+        assert_eq!(check("mayor").0, Role::Mayor);
+        assert_eq!(check("mayor/rig").0, Role::Mayor);
+        assert_eq!(check("deacon").0, Role::Deacon);
+        assert_eq!(check("deacon/dogs/boot").0, Role::Boot);
+
+        let (r, _, name) = check("deacon/dogs/rex");
+        assert_eq!((r, name.as_deref()), (Role::Dog, Some("rex")));
+
+        let (r, rig, _) = check("gastown/witness/rig");
+        assert_eq!((r, rig.as_deref()), (Role::Witness, Some("gastown")));
+        assert_eq!(check("gastown/refinery/rig").0, Role::Refinery);
+
+        let (r, rig, name) = check("gastown/polecats/alpha");
+        assert_eq!(
+            (r, rig.as_deref(), name.as_deref()),
+            (Role::Polecat, Some("gastown"), Some("alpha"))
+        );
+        let (r, rig, name) = check("gastown/crew/bob");
+        assert_eq!(
+            (r, rig.as_deref(), name.as_deref()),
+            (Role::Crew, Some("gastown"), Some("bob"))
+        );
+
+        // Town root + bare rig root are neutral (no role inferred).
+        assert_eq!(detect_role_from_cwd(town, town).0, Role::Unknown);
+        assert_eq!(check("gastown").0, Role::Unknown);
+        // Outside the town root → unknown.
+        assert_eq!(detect_role_from_cwd(Path::new("/elsewhere"), town).0, Role::Unknown);
+    }
+
+    #[test]
+    fn expected_home_matches_go_layout() {
+        let town = Path::new("/town");
+        assert_eq!(expected_home(Role::Mayor, None, None, town), Some(town.join("mayor")));
+        assert_eq!(
+            expected_home(Role::Witness, Some("gastown"), None, town),
+            Some(town.join("gastown").join("witness"))
+        );
+        assert_eq!(
+            expected_home(Role::Refinery, Some("gastown"), None, town),
+            Some(town.join("gastown").join("refinery").join("rig"))
+        );
+        assert_eq!(
+            expected_home(Role::Polecat, Some("gastown"), Some("alpha"), town),
+            Some(town.join("gastown").join("polecats").join("alpha"))
+        );
+        // Missing rig → no home.
+        assert_eq!(expected_home(Role::Witness, None, None, town), None);
+    }
+
+    #[test]
+    fn mismatch_decision() {
+        // env witness, cwd refinery → mismatch.
+        let env = parse_env_role("witness").0;
+        let (cwd, _, _) = detect_role_from_cwd(
+            &Path::new("/town").join("gastown/refinery/rig"),
+            Path::new("/town"),
+        );
+        assert_ne!(cwd, Role::Unknown);
+        assert!(cwd != env);
+
+        // env witness, cwd witness → no mismatch.
+        let (cwd2, _, _) = detect_role_from_cwd(
+            &Path::new("/town").join("gastown/witness/rig"),
+            Path::new("/town"),
+        );
+        assert_eq!(cwd2, env);
+    }
+
+    #[test]
+    fn find_town_root_walks_up_to_outermost_marker() {
+        let base = std::env::temp_dir().join(format!(
+            "gt-cli-prime-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let outer = base.join("town");
+        let inner = outer.join("gastown"); // a rig that was once its own town
+        let deep = inner.join("witness").join("rig");
+        std::fs::create_dir_all(outer.join("mayor")).unwrap();
+        std::fs::create_dir_all(inner.join("mayor")).unwrap();
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(outer.join("mayor").join("town.json"), "{}").unwrap();
+        std::fs::write(inner.join("mayor").join("town.json"), "{}").unwrap();
+
+        // From deep inside, the outermost marker (outer) wins, not the nested rig.
+        assert_eq!(find_town_root(&deep), Some(outer.clone()));
+        // No marker above → None.
+        assert_eq!(find_town_root(&base), None);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
