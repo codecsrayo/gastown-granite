@@ -716,16 +716,27 @@ where
                 self.merge.start(bead.clone()).await;
                 gt_deacon::deacon::track(&self.deacon, bead, "merge").await?;
             }
-            // Merge landed: close the bead and free the capacity it held (the cross-domain
-            // integration gt-merge deliberately left to the root). hq-mc72.12 C2 Deacon: clear
-            // the in-flight entry — when draining and pending hits zero, the actor emits
-            // `DrainComplete` in the same tick.
+            // Merge landed: free the dispatcher capacity FIRST (in-memory, infallible) and
+            // then close the bead. hq-mcyc.2: a Dolt I/O error on `repo.get`/`upsert` must not
+            // strand the scheduling slot — capacity release runs unconditionally, repo update
+            // is best-effort. hq-mc72.12 C2 Deacon: clear the in-flight entry — when draining
+            // and pending hits zero, the actor emits `DrainComplete` in the same tick.
             GtEvent::Merge(MergeEvent::Merged { bead, .. }) => {
-                if let Some(mut b) = self.repo.get(bead).await? {
-                    b.status = BeadStatus::Done;
-                    self.repo.upsert(&b).await?;
-                }
                 self.sched.capacity_freed().await;
+                match self.repo.get(bead).await {
+                    Ok(Some(mut b)) => {
+                        b.status = BeadStatus::Done;
+                        if let Err(e) = self.repo.upsert(&b).await {
+                            eprintln!(
+                                "[gt] merge_merged: bead {bead} status upsert failed (capacity already released): {e}"
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => eprintln!(
+                        "[gt] merge_merged: bead {bead} repo lookup failed (capacity already released): {e}"
+                    ),
+                }
                 let now = self.clock.now_secs();
                 gt_deacon::deacon::finish(&self.deacon, bead, now).await?;
                 // hq-mc72.12 C5: work done — stop supervising its polecat.
