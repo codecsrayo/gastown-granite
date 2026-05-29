@@ -105,6 +105,25 @@ Orden Paso 9: **9.B + 9.C** (cero deps) → **9.D** (tras 9.B) → **9.A + 9.E +
 
 ---
 
+## Paso 10 — cortar Go por completo (`hq-mc72.12`, P1)
+
+Epic activo que ejecuta el corte final: cero `Command::new(gt)`, cero `blocked()→Go` en `gt-cli`, sin bootstrap dentro del binario Go. Pistas paralelas:
+
+- **PISTA A** — spawn/daemons (`effects_real.rs` + crates de rol/daemon).
+- **PISTA B** — CLI/MCP/bootstrap (`bins/gt-cli`, `bins/gt-mcp`, `deploy/`).
+
+Progreso PISTA B (al 2026-05-29):
+- **D2** `hq-mc72.12.1` ✅ — `rig.create` MCP retirado (último Go-exec en gt-mcp).
+- **C1** `hq-mc72.12.3` ✅ — `gt prime` warning de role/cwd mismatch + seed hint.
+- **C7** `hq-mc72.12.5` ✅ — `gt emit-event` / `gt await-event` sobre `gt-channel`.
+- **C9** `hq-mc72.12.6` ✅ — `gt audit` + `gt costs` (lectores del event-log JSONL).
+- **C6** `hq-mc72.12.8` ✅ — `gt account list / set-default / retire` (retire stub citando `gt-quota::remove_account`).
+- **B1/B2/B3** `hq-mc72.12.9` ✅ — DECISIÓN: bootstrap/tmux/dolt → `deploy/` shell scripts (no portar a Rust). Skeleton + doc en [`13-bootstrap-decision.md`](13-bootstrap-decision.md).
+- **D3** — `gt sling` stub PARKED, esperando la decisión de orquestación de PISTA A (la self-host de `RealEffects::sling` ya aterrizó, pero el trigger CLI no se redefine unilateralmente desde B).
+- **C3** — `gt doctor` reconciliation (Dolt-vs-jsonl drift + orphans): sized en bead aparte, requiere análisis de coste del dep `gt-store-dolt` en `gt-cli`.
+
+---
+
 ## Reglas para todos los agentes
 
 - **Worktree, nunca town root** (auto-revert a main). `git worktree add -b <rama> <ruta> main`.

@@ -327,15 +327,18 @@ Items marked **★** above. Coarse-grained dependency order:
 12. **`gt dog` control surface** (★, §10). With the role taxonomy below as
     blocker.
 
-Items NOT critical-path (intentionally Go-only):
+Items NOT critical-path (relocate, do **not** port — Paso 10 B1/B2/B3 decision,
+see [13-bootstrap-decision.md](13-bootstrap-decision.md) and `deploy/`):
 
-- Filesystem bootstrap: `gt install`, `gt init`, `gt git-init`, `gt config`,
-  `gt theme`, `gt status-line`, `gt upgrade`, `gt uninstall`, `gt stale`,
-  `gt hooks` install.
-- tmux/process plumbing: `gt cycle`, `gt peek` (capture-pane), `gt cleanup`,
-  `gt orphans`. These belong on the OS side; the Rust API can publish events,
-  not execute tmux.
-- Dolt server admin: `gt dolt` (deploy concern, not API concern).
+- **B1 — filesystem bootstrap → `deploy/bootstrap/`:** `gt install`, `gt init`,
+  `gt git-init`, `gt config`, `gt theme`, `gt status-line`, `gt upgrade`,
+  `gt uninstall`, `gt stale`, `gt hooks` install (and `gt rig add` after the
+  Paso 10 D2 retirement of `rig.create` MCP).
+- **B2 — tmux + process plumbing → `deploy/tmux/`:** `gt cycle`, `gt peek`
+  (capture-pane), `gt cleanup`, `gt orphans`. These belong on the OS side;
+  the Rust API can publish events, not execute tmux.
+- **B3 — Dolt server admin → `deploy/dolt/`:** `gt dolt {start, stop, sql}`
+  (deploy concern; the orchestrator is a Dolt client, not its supervisor).
 - UI themes / TUI: covered by SvelteKit migration ([07-frontend.md](07-frontend.md)).
 
 ---
