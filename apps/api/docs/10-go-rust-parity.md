@@ -38,7 +38,6 @@ Refresh again when either side moves materially.
 |---|---|
 | agent | `add`, `remove`, `transition` |
 | scheduling | `enqueue`, `mark_dispatched`, `create_bead` *(new — hq-mc72.10)* |
-| rig | `create` *(new — hq-mc72.11)* |
 | merge | `start`, `submit`, `complete`, `fail` |
 | patrol | `register`, `heartbeat`, `tick`, `close` |
 | quota | `sample`, `probe`, `rotate`, `register` *(new — hq-mc72.10)* |
@@ -52,9 +51,11 @@ write directly and emit **no domain event**, only a frontier audit record):
 - `quota.register` — registers (or replaces) a quota account with a live window
   so `sample`/`probe`/`rotate` can act on it. Covers the *add* facet of Go
   `gt account`.
-- `rig.create` — shells out to `gt rig add <name> <git_url>` via `RigCreator`
-  (same Go-binary dependency shape as `RealEffects::sling`); fails cleanly when
-  no `GT_BIN` is wired. Covers Go `gt rig add`.
+- `rig.create` — **RETIRED (Paso 10 D2, hq-mc72.12.1).** It used to shell out to
+  `gt rig add` via `RigCreator` (the last Go-binary exec inside gt-mcp). Removed:
+  gt-mcp has no rig domain, and rig creation is filesystem bootstrap (bare clone +
+  dir scaffold + bead seeding + tmux pattern update) — classified B1 (CLI/deploy),
+  not orchestrator state. Rig creation relocates to `gt-cli`/`deploy/` under B1.
 - `agent.add.execute` — now publishes `AgentEvent::Spawned` on the edge relay so
   the add reaches the log / SSE / sessions projector (hq-mc72.10). **But it
   hardcodes `role: Polecat, crew: None`** — MCP can only spawn polecats; mayor /
@@ -205,7 +206,7 @@ Spawn signal = how the daemon's tmux session is identified (see §Roles below).
 | `gt install` | Create a new HQ workspace | none (CLI bootstrap is a Go responsibility) | **M** (intentional) |
 | `gt init` | Initialize cwd as a rig | none | **M** (intentional) |
 | `gt town` | Town-level subcmds | none | **M** |
-| `gt rig` | Manage rigs | partial: MCP `rig.create` wraps `gt rig add <name> <git_url>` (shells to the Go binary via `RigCreator`, same dependency shape as `RealEffects::sling` — fails cleanly without `GT_BIN`). list / remove / park have no Rust path | **P★** |
+| `gt rig` | Manage rigs | MCP `rig.create` **RETIRED** (Paso 10 D2, hq-mc72.12.1 — removed the Go-exec). Rig creation is filesystem bootstrap (B1): relocates to `gt-cli`/`deploy/`, not orchestrator state. list / remove / park have no Rust path | **M** (B1) |
 | `gt worktree` | Create worktree in another rig | none | **M** |
 | `gt config` | Manage configuration | none | **M** (intentional — config is filesystem) |
 | `gt hooks` / `gt hook` | Install / manage hooks | none (claude-side hooks live in JSON) | **M** |

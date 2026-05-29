@@ -22,7 +22,7 @@ use gt_store_pg::PgAudit;
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 
 use gt_mcp::{
-    audit::AuditSink, auth::Scope, JsonlAudit, McpService, RigCreator, ScopeConfig, SessionsRead,
+    audit::AuditSink, auth::Scope, JsonlAudit, McpService, ScopeConfig, SessionsRead,
 };
 
 #[tokio::main]
@@ -135,10 +135,6 @@ where
         Some(d) => SessionsRead::Dolt(d),
         None => SessionsRead::Actor(root.agent.clone()),
     };
-    // `rig.create` shells out to the `gt` CLI (hq-mc72.11). `GT_BIN` points at the binary;
-    // default `gt` resolves on PATH. Set to empty to disable the tool on this server.
-    let gt_bin = std::env::var("GT_BIN").unwrap_or_else(|_| "gt".to_string());
-    let rig_creator = (!gt_bin.is_empty()).then(|| RigCreator { gt_bin: gt_bin.into() });
     let service = McpService::with_sessions(
         root.agent.clone(),
         sessions,
@@ -150,7 +146,6 @@ where
         scope,
         audit,
         Some(root.agent_events.clone()),
-        rig_creator,
     );
 
     // Transport selection (Paso 6.f.12). `GT_MCP_TRANSPORT=http` serves the streamable-HTTP
