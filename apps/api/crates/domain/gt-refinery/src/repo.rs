@@ -1,6 +1,5 @@
-//! Persistence port for Refinery. Same shape as `MergeRepository` (returns
-//! `impl Future + Send` so the actor can `.await` without `async_trait` / `dyn`).
-//! **Scaffolding stub** — in-memory only; the Dolt adapter lands with behavior.
+//! Persistence port for Refinery. Same `impl Future + Send` shape as the other domain
+//! repos. Best-effort mirror — the event log + `RefineryState` reducer are authoritative.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -8,33 +7,39 @@ use std::sync::Mutex;
 
 use gt_events::AppError;
 
-use crate::state::RefineryItem;
+use crate::state::RefineryEntry;
 
 pub trait RefineryRepository: Send + Sync {
-    fn upsert_item(&self, item: &RefineryItem) -> impl Future<Output = Result<(), AppError>> + Send;
-    fn get_item(&self, id: &str) -> impl Future<Output = Result<Option<RefineryItem>, AppError>> + Send;
+    fn upsert_entry(
+        &self,
+        entry: &RefineryEntry,
+    ) -> impl Future<Output = Result<(), AppError>> + Send;
+    fn get_entry(
+        &self,
+        bead: &str,
+    ) -> impl Future<Output = Result<Option<RefineryEntry>, AppError>> + Send;
 }
 
 #[derive(Default)]
 pub struct InMemoryRefineryRepo {
-    inner: Mutex<BTreeMap<String, RefineryItem>>,
+    inner: Mutex<BTreeMap<String, RefineryEntry>>,
 }
 
 impl RefineryRepository for InMemoryRefineryRepo {
-    async fn upsert_item(&self, item: &RefineryItem) -> Result<(), AppError> {
+    async fn upsert_entry(&self, entry: &RefineryEntry) -> Result<(), AppError> {
         let mut g = self
             .inner
             .lock()
             .map_err(|_| AppError::Other("gt-refinery repo poisoned".into()))?;
-        g.insert(item.id.clone(), item.clone());
+        g.insert(entry.bead.clone(), entry.clone());
         Ok(())
     }
 
-    async fn get_item(&self, id: &str) -> Result<Option<RefineryItem>, AppError> {
+    async fn get_entry(&self, bead: &str) -> Result<Option<RefineryEntry>, AppError> {
         let g = self
             .inner
             .lock()
             .map_err(|_| AppError::Other("gt-refinery repo poisoned".into()))?;
-        Ok(g.get(id).cloned())
+        Ok(g.get(bead).cloned())
     }
 }

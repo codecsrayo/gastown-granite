@@ -35,6 +35,8 @@ gt-orchestration = { path = "../../domain/gt-orchestration" }
 gt-sheriff = { path = "../../domain/gt-sheriff" }
 # hq-92z9 Paso 9.D — Deacon drain coordination (third role fill).
 gt-deacon = { path = "../../domain/gt-deacon" }
+# hq-92z9 Paso 9.D — Refinery merge-ready projection (fourth role fill).
+gt-refinery = { path = "../../domain/gt-refinery" }
 # Pure consumer projection of the audit log; the root folds it into `GtState.feed`.
 gt-feed = { path = "../../domain/gt-feed" }
 # Real persistence adapters wired in by the bin when env URLs are set; otherwise the bin
