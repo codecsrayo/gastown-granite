@@ -3,4 +3,4 @@
 # - lib/sse/      (hq-fe-build.3)
 # - lib/stores/   (hq-fe-build.4)
 # - lib/types/    (hq-fe-build.5)
-# See apps/docs/frontend-architecture.md for the canonical layout.
+# See ../docs/frontend-architecture.md for the canonical layout.

@@ -14,11 +14,11 @@
 >   sigue en el árbol como referencia histórica, no como spec.
 > - El plan completo del frontend nuevo (epics, beads, gaps de API, decisiones de
 >   diseño) vive en:
->   - [apps/docs/README.md](../../docs/README.md) — índice + reglas para agentes
->   - [apps/docs/frontend-migration-sveltekit.md](../../docs/frontend-migration-sveltekit.md) — alcance + epic plan
->   - [apps/docs/frontend-api-surface.md](../../docs/frontend-api-surface.md) — contrato real + gaps
->   - [apps/docs/frontend-architecture.md](../../docs/frontend-architecture.md) — estructura SvelteKit
->   - [apps/docs/frontend-features.md](../../docs/frontend-features.md) — catálogo de features
+>   - [apps/web/docs/README.md](../../web/docs/README.md) — índice + reglas para agentes
+>   - [apps/web/docs/frontend-migration-sveltekit.md](../../web/docs/frontend-migration-sveltekit.md) — alcance + epic plan
+>   - [apps/web/docs/frontend-api-surface.md](../../web/docs/frontend-api-surface.md) — contrato real + gaps
+>   - [apps/web/docs/frontend-architecture.md](../../web/docs/frontend-architecture.md) — estructura SvelteKit
+>   - [apps/web/docs/frontend-features.md](../../web/docs/frontend-features.md) — catálogo de features
 >
 > - El frontend **NO** asume endpoints inventados. Si una feature necesita algo
 >   no documentado en `frontend-api-surface.md`, eso es un **gap explícito** que
@@ -155,7 +155,7 @@ Bearer plano migra a **JWT firmado con claims `roles[]` + `scopes[]`**. Tracked 
 
 Write-side actual (`POST /api/nudge`) expande a un comando bus completo (tracked en
 `hq-fe-api-w.*`); ver gap table en
-[apps/docs/frontend-api-surface.md](../../docs/frontend-api-surface.md).
+[apps/web/docs/frontend-api-surface.md](../../web/docs/frontend-api-surface.md).
 
 ## Estructura en el árbol
 

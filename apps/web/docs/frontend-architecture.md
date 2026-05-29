@@ -453,4 +453,4 @@ pnpm build                    # genera apps/web/build/
 - Features: [frontend-features.md](frontend-features.md)
 - Wireframe: [Gas Town Redesign Wireframes.html](Gas%20Town%20Redesign%20Wireframes.html)
 - Mockup hi-fi: [pagina.png](pagina.png)
-- Backend design: [apps/api/docs/07-frontend.md](../api/docs/07-frontend.md)
+- Backend design: [apps/api/docs/07-frontend.md](../../api/docs/07-frontend.md)

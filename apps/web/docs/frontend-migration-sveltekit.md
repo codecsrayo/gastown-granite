@@ -17,7 +17,7 @@ Docs hermanos (lectura obligada antes de tocar nada):
 - [frontend-features.md](frontend-features.md) — catálogo de features, cómo mapean al backend.
 - [Gas Town Redesign Wireframes.html](Gas%20Town%20Redesign%20Wireframes.html) — V1 dark, 3 vistas (Activity · Work · Crew).
 - [pagina.png](pagina.png) — render hi-fi (= V1 dark canónico).
-- [apps/api/docs/07-frontend.md](../api/docs/07-frontend.md) — diseño backend (gt-web).
+- [apps/api/docs/07-frontend.md](../../api/docs/07-frontend.md) — diseño backend (gt-web).
 
 ---
 

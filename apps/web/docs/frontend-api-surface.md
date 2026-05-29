@@ -5,11 +5,11 @@ Snapshot of the **actual** HTTP/SSE/MCP surface the Rust backend exposes today
 The retired Go dashboard (`internal/web/`) is **not** the spec — its endpoints
 do not exist in Rust and will not be ported one-for-one.
 
-- Authoritative source for routes: [bins/gt-web/src/lib.rs](../api/crates/bins/gt-web/src/lib.rs)
-- DTOs: [bins/gt-web/src/dto.rs](../api/crates/bins/gt-web/src/dto.rs)
-- SSE: [bins/gt-web/src/stream.rs](../api/crates/bins/gt-web/src/stream.rs)
-- MCP tools/resources: [bins/gt-mcp/src/service.rs](../api/crates/bins/gt-mcp/src/service.rs)
-- Deploy topology: [docker-compose.yml](../../docker-compose.yml)
+- Authoritative source for routes: [bins/gt-web/src/lib.rs](../../api/crates/bins/gt-web/src/lib.rs)
+- DTOs: [bins/gt-web/src/dto.rs](../../api/crates/bins/gt-web/src/dto.rs)
+- SSE: [bins/gt-web/src/stream.rs](../../api/crates/bins/gt-web/src/stream.rs)
+- MCP tools/resources: [bins/gt-mcp/src/service.rs](../../api/crates/bins/gt-mcp/src/service.rs)
+- Deploy topology: [docker-compose.yml](../../../docker-compose.yml)
 
 If a route or DTO changes, update this file in the same commit.
 
@@ -31,7 +31,7 @@ clients (gt-mcp-cli, Claude Code), not the browser.
 
 ## gt-api HTTP surface
 
-All `/api/*` routes sit behind the bearer middleware ([auth.rs](../api/crates/bins/gt-web/src/auth.rs)).
+All `/api/*` routes sit behind the bearer middleware ([auth.rs](../../api/crates/bins/gt-web/src/auth.rs)).
 `/health`, `/readyz` and `/metrics` sit **outside** the auth layer (probes).
 
 ### Auth
@@ -43,26 +43,26 @@ All `/api/*` routes sit behind the bearer middleware ([auth.rs](../api/crates/bi
 | neither | bin exits with status 2 |
 
 Every request lands in `events.jsonl` as `web.invoked` / `web.unauthorized`
-([audit.rs](../api/crates/bins/gt-web/src/audit.rs)). Actor tag = `web:<sha256-12hex>`.
+([audit.rs](../../api/crates/bins/gt-web/src/audit.rs)). Actor tag = `web:<sha256-12hex>`.
 
 ### Routes
 
 | Method | Path | Handler | Body / Query | Response |
 |---|---|---|---|---|
-| GET | `/api/sessions` | [`list_sessions`](../api/crates/bins/gt-web/src/routes.rs) | `?role=<polecat\|deacon\|...>` (optional) | `Vec<SessionDto>` |
-| GET | `/api/beads` | [`list_beads`](../api/crates/bins/gt-web/src/routes.rs) | `?status=pending\|open\|hooked\|...` (default `pending`) | `Vec<BeadDto>` |
-| POST | `/api/nudge` | [`nudge`](../api/crates/bins/gt-web/src/routes.rs) | `NudgeRequest { session: String }` | `NudgeResponse { accepted: bool }` |
-| GET | `/api/stream` | [`stream`](../api/crates/bins/gt-web/src/routes.rs) | — | SSE of `EventRecord` |
-| GET | `/health` | [`health`](../api/crates/bins/gt-web/src/health.rs) | — | 200 `"ok"` (liveness) |
-| GET | `/readyz` | [`readyz`](../api/crates/bins/gt-web/src/health.rs) | — | 200/503 + JSON probe report |
-| GET | `/metrics` | [`metrics`](../api/crates/bins/gt-web/src/routes.rs) | — | Prometheus text |
+| GET | `/api/sessions` | [`list_sessions`](../../api/crates/bins/gt-web/src/routes.rs) | `?role=<polecat\|deacon\|...>` (optional) | `Vec<SessionDto>` |
+| GET | `/api/beads` | [`list_beads`](../../api/crates/bins/gt-web/src/routes.rs) | `?status=pending\|open\|hooked\|...` (default `pending`) | `Vec<BeadDto>` |
+| POST | `/api/nudge` | [`nudge`](../../api/crates/bins/gt-web/src/routes.rs) | `NudgeRequest { session: String }` | `NudgeResponse { accepted: bool }` |
+| GET | `/api/stream` | [`stream`](../../api/crates/bins/gt-web/src/routes.rs) | — | SSE of `EventRecord` |
+| GET | `/health` | [`health`](../../api/crates/bins/gt-web/src/health.rs) | — | 200 `"ok"` (liveness) |
+| GET | `/readyz` | [`readyz`](../../api/crates/bins/gt-web/src/health.rs) | — | 200/503 + JSON probe report |
+| GET | `/metrics` | [`metrics`](../../api/crates/bins/gt-web/src/routes.rs) | — | Prometheus text |
 
 That is the **entire** read+write surface today. No `/api/snapshot`, no
 `/api/run`, no `/api/mail`, no `/api/issues/*`, no `/api/quota/stream`,
 no `/api/git/events`, no `/api/session/attach`. Anything the frontend needs
 beyond this list is a **gap** that becomes a bead.
 
-### DTOs ([dto.rs](../api/crates/bins/gt-web/src/dto.rs))
+### DTOs ([dto.rs](../../api/crates/bins/gt-web/src/dto.rs))
 
 ```ts
 // /api/sessions
@@ -90,7 +90,7 @@ type NudgeResponse = { accepted: boolean };
 
 ### SSE `/api/stream`
 
-Single stream of `EventRecord` ([kernel/gt-audit/src/record.rs](../api/crates/kernel/gt-audit/src/record.rs)):
+Single stream of `EventRecord` ([kernel/gt-audit/src/record.rs](../../api/crates/kernel/gt-audit/src/record.rs)):
 
 ```ts
 type EventRecord = {
@@ -158,7 +158,7 @@ Actor identity from `GT_MCP_ACTOR`.
 - Prom metrics scraped from gt-api `/metrics`, gt-mcp `/metrics`, gt `:9100/metrics`.
 - Traces (OTLP → tempo `:4318`). `OTEL_SERVICE_NAME=gt-api|gt-mcp|gt`.
 - Grafana at `https://grafana.gastown.codecsrayo.com` (provisioning under
-  [deploy/observability/grafana/](../../deploy/observability/grafana/)).
+  [deploy/observability/grafana/](../../../deploy/observability/grafana/)).
 
 Frontend itself should ship traces / RUM only if/when added as a follow-up.
 
@@ -245,7 +245,7 @@ to the old API; pick the cleanest contract per feature.
 
 Cada request `/api/*` (aceptado o rechazado) produce un `web.invoked` /
 `web.unauthorized` en `events.jsonl` + PG audit (ver
-[audit.rs](../api/crates/bins/gt-web/src/audit.rs)). Para acciones
+[audit.rs](../../api/crates/bins/gt-web/src/audit.rs)). Para acciones
 destructivas, enriquecer el record con `command` + `target` para que el
 Activity feed muestre "brayan killed gg-furiosa · 2s ago" (bead
 `hq-fe-rbac.5`).

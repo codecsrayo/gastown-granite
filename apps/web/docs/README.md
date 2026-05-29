@@ -1,4 +1,4 @@
-# `apps/docs/` · índice para agentes
+# `apps/web/docs/` · índice para agentes
 
 Carpeta de planificación del **frontend del town** (dashboard SvelteKit).
 Esta carpeta es la **fuente de verdad** del alcance, contrato y arquitectura
@@ -21,7 +21,7 @@ Visual:
 Referencias paralelas:
 
 - **[issues-registro-2026-05-27.md](issues-registro-2026-05-27.md)** — snapshot de issues del town hq (foto puntual, no spec).
-- **[apps/api/docs/07-frontend.md](../api/docs/07-frontend.md)** — diseño backend del `gt-web` (contrato visto desde el lado servidor).
+- **[apps/api/docs/07-frontend.md](../../api/docs/07-frontend.md)** — diseño backend del `gt-web` (contrato visto desde el lado servidor).
 
 ## Reglas duras (no negociables sin acuerdo)
 
@@ -58,7 +58,7 @@ Referencias paralelas:
 
 ```
 apps/web/                    ← código SvelteKit (post hq-fe-build.1)
-apps/docs/                   ← esta carpeta (planificación + spec)
+apps/web/docs/                   ← esta carpeta (planificación + spec)
 apps/api/                         ← backend Rust (gt-web, gt-mcp, gt orchestrator)
 internal/web/                     ← Go viejo, retirado, NO TOCAR
 ```
@@ -130,7 +130,7 @@ clicks en lugar de 3.
 
 ## Cross-refs externos
 
-- Backend design: [apps/api/docs/](../api/docs/)
-- Compose / deploy: [docker-compose.yml](../../docker-compose.yml) · [apps/api/docs/deployment/](../api/docs/deployment/)
-- Observabilidad: [deploy/observability/](../../deploy/observability/) (Prometheus + Tempo + Grafana)
-- Memoria del proyecto: [`~/.claude/projects/-home-nixos-gastown/memory/MEMORY.md`](../../../.claude/projects/-home-nixos-gastown/memory/MEMORY.md)
+- Backend design: [apps/api/docs/](../../api/docs/)
+- Compose / deploy: [docker-compose.yml](../../../docker-compose.yml) · [apps/api/docs/deployment/](../../api/docs/deployment/)
+- Observabilidad: [deploy/observability/](../../../deploy/observability/) (Prometheus + Tempo + Grafana)
+- Memoria del proyecto: [`~/.claude/projects/-home-nixos-gastown/memory/MEMORY.md`](../../../../.claude/projects/-home-nixos-gastown/memory/MEMORY.md)

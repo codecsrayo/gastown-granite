@@ -1,7 +1,7 @@
 import type { Config } from 'tailwindcss';
 
 // Theme via [data-theme] attribute on <html>; toggled by lib/stores/theme.svelte.ts.
-// Dark = canonical (matches apps/docs/pagina.png); light = optional toggle.
+// Dark = canonical (matches apps/web/docs/pagina.png); light = optional toggle.
 export default {
   content: ['./src/**/*.{html,js,svelte,ts}'],
   darkMode: ['selector', '[data-theme="dark"]'],

@@ -2,7 +2,7 @@
   "name": "@gastown/town-web",
   "version": "0.0.1",
   "private": true,
-  "description": "Gas Town dashboard — SvelteKit SPA against the Rust API (gt-web + gt-mcp). See apps/docs/README.md.",
+  "description": "Gas Town dashboard — SvelteKit SPA against the Rust API (gt-web + gt-mcp). See apps/web/docs/README.md.",
   "type": "module",
   "scripts": {
     "dev": "vite dev",

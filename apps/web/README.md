@@ -4,7 +4,7 @@ SvelteKit 5 + Tailwind + adapter-static. Talks to the Rust API
 (`gt-web` + `gt-mcp`). Replaces the retired Go dashboard
 (`internal/web/`).
 
-**Read first:** [`../docs/README.md`](../docs/README.md) — rules,
+**Read first:** [`../docs/README.md`](./docs/README.md) — rules,
 canonical decisions, links to architecture / API / features docs.
 
 ## Quick start
@@ -69,4 +69,4 @@ src/
 - Don't port `internal/web/` 1:1 — build against the Rust contract real,
   not the retired Go API.
 
-Full anti-patterns list in [`../docs/frontend-architecture.md`](../docs/frontend-architecture.md#anti-patrones-no-hacer).
+Full anti-patterns list in [`../docs/frontend-architecture.md`](./docs/frontend-architecture.md#anti-patrones-no-hacer).
