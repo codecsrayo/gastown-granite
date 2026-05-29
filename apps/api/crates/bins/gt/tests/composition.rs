@@ -29,6 +29,7 @@ use gt_merge::{MergeEvent, MergeState};
 use gt_orchestration::{OrchEvent, OrchState};
 use gt_patrol::{PatrolEvent, PatrolState};
 use gt_quota::{QuotaEvent, QuotaState};
+use gt_rig::{AddRig, RigCommand};
 use gt_scheduling::{SchedEvent, SchedState};
 
 use gt_plugin::{PluginRegistry, SheriffPlugin};
@@ -302,6 +303,89 @@ async fn multi_domain_flow_through_root_replays_byte_identical() {
     let feed_a = serde_json::to_string(&feed_unified).unwrap();
     let feed_b = serde_json::to_string(&feed_again).unwrap();
     assert_eq!(feed_a, feed_b, "serialized FeedState must be byte-identical");
+
+    let _ = std::fs::remove_file(&log_path);
+    root.shutdown();
+}
+
+/// hq-mc72.12.30 gate: the rig actor is wired into the composition root, so a `rig.exec`
+/// (the same path `gt-mcp`'s `rig.add.execute` drives once `.with_rig(root.rig.clone())` is
+/// chained) emits a `RigEvent` that the reactor drains into the single audit log AND fans out
+/// over the broadcast hub (the `/api/stream` SSE source). The live catalog reflects it and a
+/// fresh `replay_gt` rebuilds the same rig — proving the relay → log → broadcast → replay loop
+/// is closed for the rig domain exactly like every other.
+#[tokio::test]
+async fn rig_exec_drains_to_log_broadcast_and_replays() {
+    let repo = Arc::new(InMemoryBeads::default());
+    let log_path = std::env::temp_dir().join(format!(
+        "gt-rig-{}-{}.events.jsonl",
+        std::process::id(),
+        ulid::Ulid::new()
+    ));
+    let _ = std::fs::remove_file(&log_path);
+
+    let root = spawn(
+        repo,
+        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
+        Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
+        RecordingEffects::default(),
+        ManualClock::new(100),
+        &log_path,
+        RootConfig::default(),
+    );
+
+    // Subscribe to the broadcast BEFORE driving so the SSE-equivalent stream can't miss it.
+    let mut sse = root.subscribe_events();
+
+    // The MCP `rig.add.execute` path: exec an Add against the shared rig actor.
+    root.rig
+        .exec(RigCommand::Add(AddRig {
+            name: "plane".into(),
+            prefix: "pl".into(),
+            git_url: "git@github.com:o/plane.git".into(),
+            push_url: None,
+            upstream_url: None,
+            default_branch: "main".into(),
+            now_secs: 100,
+        }))
+        .await
+        .expect("rig add exec");
+
+    // 1) Lands in the single audit log.
+    let records = wait_for(
+        &log_path,
+        |recs| recs.iter().any(|r| r.kind == "rig.added"),
+        Duration::from_secs(3),
+    )
+    .await;
+
+    // 2) Fans out over the broadcast (the /api/stream SSE source).
+    let streamed = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match sse.recv().await {
+                Ok(rec) if rec.kind == "rig.added" => return rec,
+                Ok(_) => continue,
+                Err(e) => panic!("broadcast closed before rig.added: {e}"),
+            }
+        }
+    })
+    .await
+    .expect("rig.added must reach the SSE broadcast");
+    assert_eq!(streamed.kind, "rig.added");
+
+    // 3) The live catalog reflects it (what `gt://rigs` reads through the same handle).
+    let live = root.rig.rigs().await;
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].name, "plane");
+    assert_eq!(live[0].prefix, "pl");
+
+    // 4) A fresh unified replay rebuilds the same rig from the log alone.
+    let unified = replay_gt(&records).unwrap();
+    assert_eq!(unified.rig.rigs.len(), 1, "replay rebuilds the rig catalog");
+    assert!(unified.rig.rigs.contains_key("plane"));
+
+    assert_eq!(root.dead_letters(), 0, "no dead-letters on a clean rig exec");
 
     let _ = std::fs::remove_file(&log_path);
     root.shutdown();

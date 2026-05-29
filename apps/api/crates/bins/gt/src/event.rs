@@ -26,6 +26,7 @@ use gt_merge::{MergeEvent, MergeState};
 use gt_orchestration::{OrchEvent, OrchState};
 use gt_patrol::{PatrolEvent, PatrolState};
 use gt_quota::{QuotaEvent, QuotaState};
+use gt_rig::{RigEvent, RigState};
 use gt_scheduling::{SchedEvent, SchedState};
 use gt_sheriff::{SheriffEvent, SheriffState};
 use gt_deacon::{DeaconEvent, DeaconState};
@@ -48,6 +49,7 @@ pub enum GtEvent {
     Refinery(RefineryEvent),
     Witness(WitnessEvent),
     Mayor(MayorEvent),
+    Rig(RigEvent),
 }
 
 impl EventKind for GtEvent {
@@ -66,6 +68,7 @@ impl EventKind for GtEvent {
             GtEvent::Refinery(e) => e.kind(),
             GtEvent::Witness(e) => e.kind(),
             GtEvent::Mayor(e) => e.kind(),
+            GtEvent::Rig(e) => e.kind(),
         }
     }
 }
@@ -90,6 +93,7 @@ gt_from!(Deacon, DeaconEvent);
 gt_from!(Refinery, RefineryEvent);
 gt_from!(Witness, WitnessEvent);
 gt_from!(Mayor, MayorEvent);
+gt_from!(Rig, RigEvent);
 
 /// Wire prefixes that ride in the event log but are **not** domain state: frontier-audit
 /// observability (e.g. `mcp.invoked` from `gt-mcp`). Domain replay skips them so reconstructed
@@ -128,6 +132,7 @@ impl GtEvent {
             "refinery" => GtEvent::Refinery(rec.decode()?),
             "witness" => GtEvent::Witness(rec.decode()?),
             "mayor" => GtEvent::Mayor(rec.decode()?),
+            "rig" => GtEvent::Rig(rec.decode()?),
             other => return Err(AppError::Other(format!("unknown event domain: {other}"))),
         })
     }
@@ -154,6 +159,7 @@ pub struct GtState {
     pub refinery: RefineryState,
     pub witness: WitnessState,
     pub mayor: MayorState,
+    pub rig: RigState,
     pub feed: FeedState,
 }
 
@@ -190,6 +196,9 @@ impl GtState {
             GtEvent::Mayor(e) => {
                 let _ = self.mayor.apply(e);
             }
+            // RigState::apply is total and returns (); fold straight in like the orchestration
+            // reducers (the typed apply mutates the catalog reducer in place).
+            GtEvent::Rig(e) => self.rig.apply(e),
         }
     }
 }

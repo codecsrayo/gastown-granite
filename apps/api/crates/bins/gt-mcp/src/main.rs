@@ -147,12 +147,11 @@ where
         audit,
         Some(root.agent_events.clone()),
     );
-    // TODO(hq-mc72.12.30 — composition-root agent): once `Root` owns a `RigHandle` (spawn
-    // `gt_rig::actor::spawn_hydrated` in `bins/gt::root`, hydrate from the replayed
-    // `RigState` reducer, drain its `Envelope<RigEvent>` relay into the shared bus like the
-    // quota relay), chain `.with_rig(root.rig.clone())` here. Until then the `rig.*` tools
-    // return `rig domain not wired` and `gt://rigs` is an empty array — the wire surface is
-    // already complete + scope-gated, only the actor injection is missing.
+    // hq-mc72.12.30 — the composition root now owns a hydrated `RigHandle` (spawned +
+    // relay-drained in `bins/gt::root`). Share it so the `rig.*` tools + `gt://rigs` resource
+    // drive the same catalog actor the root persists — its `RigEvent`s land in the shared log
+    // and stream out over SSE like every other domain.
+    let service = service.with_rig(root.rig.clone());
 
     // Transport selection (Paso 6.f.12). `GT_MCP_TRANSPORT=http` serves the streamable-HTTP
     // transport (bind via `GT_MCP_HTTP_BIND`); anything else keeps the default stdio transport.

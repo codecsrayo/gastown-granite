@@ -49,6 +49,8 @@ use gt_witness::actor::{self as witness_actor, WitnessHandle};
 use gt_witness::{InMemoryWitnessRepo, WitnessEvent};
 use gt_quota::actor::{self as quota_actor, QuotaHandle};
 use gt_quota::{AccountRegistry, InMemoryKeychain, Keychain, ModelWeights, QuotaEvent};
+use gt_rig::actor::{self as rig_actor, RigHandle};
+use gt_rig::{RigCatalog, RigEvent};
 use gt_scheduling::actor::{self as sched_actor, SchedHandle};
 use gt_scheduling::SchedEvent;
 
@@ -127,6 +129,9 @@ pub struct RootHandle<R: BeadRepository + Clone> {
     pub merge: MergeHandle,
     pub orch: OrchHandle,
     pub quota: QuotaHandle,
+    /// hq-mc72.12.30 — rig catalog actor (orchestrator's rig registry). gt-mcp's `rig.*`
+    /// tools + `gt://rigs` resource drive this handle once `main` chains `.with_rig`.
+    pub rig: RigHandle,
     pub agent: AgentHandle,
     /// hq-92z9 Paso 9.D — Sheriff watchdog. Operators register watches via this handle
     /// (`SheriffCommand::Register`/`Clear`); observations are fed automatically from
@@ -424,6 +429,7 @@ where
     let (merge_tx, merge_rx) = mpsc::channel::<Envelope<MergeEvent>>(256);
     let (orch_tx, orch_rx) = mpsc::channel::<Envelope<OrchEvent>>(256);
     let (quota_tx, quota_rx) = mpsc::channel::<Envelope<QuotaEvent>>(256);
+    let (rig_tx, rig_rx) = mpsc::channel::<Envelope<RigEvent>>(256);
     let (agent_tx, agent_rx) = mpsc::channel::<Envelope<AgentEvent>>(256);
     let (sheriff_tx, sheriff_rx) = mpsc::channel::<Envelope<SheriffEvent>>(256);
     let (deacon_tx, deacon_rx) = mpsc::channel::<Envelope<DeaconEvent>>(256);
@@ -446,6 +452,7 @@ where
         refinery: refinery_initial,
         witness: witness_initial,
         mayor: mayor_initial,
+        rig: rig_state,
         feed: _,
     } = hydration.state;
     let merge_initial = MergeBoard::from_state(&merge_state);
@@ -454,12 +461,16 @@ where
     let orch_initial = ConvoyBoard::from_state(&orch_state);
     let quota_initial = AccountRegistry::from_state(&quota_state);
     let quota_predictions_seen = quota_state.predictions.len();
+    let rig_initial = RigCatalog::from_state(&rig_state);
 
     let sched = sched_actor::spawn(repo.clone(), sched_tx, config.capacity);
     let patrol = patrol_actor::spawn_hydrated(patrol_repo, patrol_tx, patrol_initial, patrol_expired_seen);
     let merge = merge_actor::spawn_hydrated(merge_repo, merge_tx, merge_initial);
     let orch = orch_actor::spawn_hydrated(orch_repo, orch_tx, orch_initial);
     let quota = quota_actor::spawn_hydrated(quota_tx, config.model_weights, quota_initial, quota_predictions_seen);
+    // Rig catalog: hydrate the live catalog from the replayed RigState reducer (hq-8iur.1
+    // boot-hydration pattern), then drain its relay into the reactor like every other domain.
+    let rig = rig_actor::spawn_hydrated(rig_tx, rig_initial);
     let agent = agent_actor::spawn_hydrated(256, agent_state);
     // Sheriff repo is in-memory for now — the Dolt adapter lands when a per-watch panel
     // surfaces in `gt-web`. The reducer + replay are already authoritative for state.
@@ -526,6 +537,7 @@ where
     let mut merge_rx = merge_rx;
     let mut orch_rx = orch_rx;
     let mut quota_rx = quota_rx;
+    let mut rig_rx = rig_rx;
     let mut agent_rx = agent_rx;
     let mut sheriff_rx = sheriff_rx;
     let mut deacon_rx = deacon_rx;
@@ -541,6 +553,7 @@ where
                 Some(env) = merge_rx.recv() => reactor.ingest(env).await,
                 Some(env) = orch_rx.recv() => reactor.ingest(env).await,
                 Some(env) = quota_rx.recv() => reactor.ingest(env).await,
+                Some(env) = rig_rx.recv() => reactor.ingest(env).await,
                 Some(env) = agent_rx.recv() => reactor.ingest(env).await,
                 Some(env) = sheriff_rx.recv() => reactor.ingest(env).await,
                 Some(env) = deacon_rx.recv() => reactor.ingest(env).await,
@@ -558,6 +571,7 @@ where
         merge,
         orch,
         quota,
+        rig,
         agent,
         sheriff,
         deacon,

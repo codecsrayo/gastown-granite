@@ -31,6 +31,8 @@ gt-patrol = { path = "../../domain/orchestration/gt-patrol" }
 gt-merge = { path = "../../domain/orchestration/gt-merge" }
 gt-quota = { path = "../../domain/orchestration/gt-quota" }
 gt-orchestration = { path = "../../domain/orchestration/gt-orchestration" }
+# hq-mc72.12.30 — rig catalog actor wired into the composition root; gt-mcp drives it.
+gt-rig = { path = "../../domain/platform/gt-rig" }
 # hq-92z9 Paso 9.D — Mayor orchestration-loop role (delegations actor).
 gt-mayor = { path = "../../domain/roles/gt-mayor" }
 # hq-92z9 Paso 9.D — Sheriff watchdog Plugin (first role fill on top of scaffolding).

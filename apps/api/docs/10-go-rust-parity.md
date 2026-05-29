@@ -65,8 +65,11 @@ write directly and emit **no domain event**, only a frontier audit record):
   (`rig.added` / `rig.adopted` / `rig.removed` / `rig.prefix_changed` /
   `rig.default_branch_changed`). They mutate the registry, NOT the filesystem — the
   bootstrap edge (B1) is what clones/inits and will *publish* `rig.added` into this
-  domain once wired. The `gt-mcp` `RigHandle` stays `None` (tools return `rig domain
-  not wired`) until the composition root spawns the actor (**TODO hq-mc72.12.30**).
+  domain once wired. **The composition root now spawns the `gt-rig` actor and chains
+  `.with_rig(root.rig.clone())` (hq-mc72.12.30, `bins/gt::root` + `bins/gt-mcp::serve`)**,
+  so the tools are LIVE: a `rig.add.execute` emits a `RigEvent` that lands in the shared
+  audit log + `/api/stream` SSE, and the catalog is boot-hydrated from the replayed
+  `RigState` reducer like every other domain.
 - `agent.add.execute` — now publishes `AgentEvent::Spawned` on the edge relay so
   the add reaches the log / SSE / sessions projector (hq-mc72.10). **But it
   hardcodes `role: Polecat, crew: None`** — MCP can only spawn polecats; mayor /
@@ -82,7 +85,7 @@ write directly and emit **no domain event**, only a frontier audit record):
 | `gt://merge/slots` | merge slots `[{bead, branch, state}]` |
 | `gt://orch/convoys` | convoys + per-member progress |
 | `gt://quota/accounts` | `{accounts, predictions_emitted}` (partial read-side of `gt quota status`) |
-| `gt://rigs` | registered rigs `[{name, prefix, git_url, default_branch, …}]` (read-side of `gt rig list`; empty until the composition root wires the `gt-rig` actor — hq-mc72.12.29/.30) |
+| `gt://rigs` | registered rigs `[{name, prefix, git_url, default_branch, …}]` (read-side of `gt rig list`; **LIVE** — the composition root wires the `gt-rig` actor, hq-mc72.12.30) |
 
 **`RealEffects`** (`bins/gt/src/effects_real.rs`) — production-only edges out of the core:
 
@@ -218,7 +221,7 @@ Spawn signal = how the daemon's tmux session is identified (see §Roles below).
 | `gt install` | Create a new HQ workspace | none (CLI bootstrap is a Go responsibility) | **M** (intentional) |
 | `gt init` | Initialize cwd as a rig | none | **M** (intentional) |
 | `gt town` | Town-level subcmds | none | **M** |
-| `gt rig` | Manage rigs | MCP `rig.create` **RETIRED** (Paso 10 D2, hq-mc72.12.1). Orchestrator-state side now in Rust via `gt-rig` domain (hq-mc72.12.29): RigEvent (Added/Adopted/Removed/PrefixChanged/DefaultBranchChanged), RigCommand (Add/Adopt/Remove/SetPrefix/SetDefaultBranch), `RigCatalog` actor + `RigRepository` port. Filesystem bootstrap (clone, bd init, redirects, dolt orphans) stays B1 in `deploy/bootstrap`; the bootstrap edge will publish events into this domain once it lands. CLI list/remove/park surfaces still pending | **P** (orchestrator state) / **M** (B1 bootstrap + CLI) |
+| `gt rig` | Manage rigs | MCP `rig.create` **RETIRED** (Paso 10 D2, hq-mc72.12.1). Orchestrator-state side now in Rust via `gt-rig` domain (hq-mc72.12.29): RigEvent (Added/Adopted/Removed/PrefixChanged/DefaultBranchChanged), RigCommand (Add/Adopt/Remove/SetPrefix/SetDefaultBranch), `RigCatalog` actor + `RigRepository` port, now **wired live into the composition root** (hq-mc72.12.30): `bins/gt::root` spawns the boot-hydrated actor + drains its relay, `gt-mcp` chains `.with_rig`, and `gt-store-pg::PgRigs` persists the catalog (hq-mc72.12.31). Filesystem bootstrap (clone, bd init, redirects, dolt orphans) stays B1 in `deploy/bootstrap`; the bootstrap edge will publish events into this domain once it lands. CLI list/remove/park surfaces still pending | **C** (orchestrator state) / **M** (B1 bootstrap + CLI) |
 | `gt worktree` | Create worktree in another rig | none | **M** |
 | `gt config` | Manage configuration | none | **M** (intentional — config is filesystem) |
 | `gt hooks` / `gt hook` | Install / manage hooks | none (claude-side hooks live in JSON) | **M** |

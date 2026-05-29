@@ -145,12 +145,13 @@ async fn run<R, MR, PR, OR>(
     let hydration = match load_state(log_path) {
         Ok(h) => {
             eprintln!(
-                "[gt] hydrated from {} records: {} merge slots, {} patrol leases, {} convoys, {} accounts",
+                "[gt] hydrated from {} records: {} merge slots, {} patrol leases, {} convoys, {} accounts, {} rigs",
                 h.records_folded,
                 h.state.merge.board.len(),
                 h.state.patrol.tracker.len(),
                 h.state.orch.convoys.len(),
                 h.state.quota.accounts.len(),
+                h.state.rig.rigs.len(),
             );
             h
         }
