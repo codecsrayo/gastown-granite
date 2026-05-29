@@ -1,36 +1,55 @@
-//! hq-7pdl.1 gate: the production `Effects` adapter actually launches `gt sling` and drives
-//! the rotation chain through the quota actor. Backs the deterministic fake in
-//! `composition.rs` with a bin-level smoke check that the real edge wires up: a stub script
-//! plays the part of the `gt` binary, and we observe the marker file it writes when invoked.
+//! hq-7pdl.1 / hq-mc72.12 D1 gate: the production `Effects` adapter spawns a real
+//! Rust-managed polecat (a detached `tmux` session via `gt_polecat::PolecatLifecycle`, NOT a
+//! `gt sling` subprocess) and drives the rotation chain through the quota actor. The sling
+//! tests run against a private `-L` tmux socket so they never touch live sessions, and skip
+//! cleanly when `tmux` is not installed. The rotate tests don't spawn, so they use a
+//! `FakeTmux`-backed lifecycle.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gt_beads::InMemoryBeads;
+use gt_polecat::{FakeTmux, PolecatLifecycle, SpawnTemplate, TmuxCli, GT_HOOK_BEAD};
 use gt_quota::{Account, AccountQuotaStatus, QuotaState};
 use gt_root::{spawn, RealEffects, RootConfig, SystemClock};
 
-#[tokio::test]
-async fn sling_spawns_subprocess_with_convoy_and_member() {
-    let dir = tempdir();
-    let marker = dir.join("sling.marker");
-    let script = dir.join("gt-stub.sh");
+/// Spawn-template whose command is a harmless long-lived process so `respawn-pane` succeeds
+/// on hosts without the real coding agent installed.
+fn test_template() -> SpawnTemplate {
+    SpawnTemplate {
+        rig: "granite".to_string(),
+        prefix: "gt".to_string(),
+        workdir: std::env::temp_dir(),
+        command: "sleep".to_string(),
+        args: vec!["30".to_string()],
+        base_env: vec![("GT_ROLE".to_string(), "polecat".to_string())],
+        heartbeat_dir: std::env::temp_dir(),
+    }
+}
 
-    // The stub records its args + the convoy/member it was called with. The real adapter
-    // invokes it as `<bin> sling <convoy> <member>` (positional, as wired in effects_real.rs).
-    write_script(
-        &script,
-        &format!(
-            "#!/usr/bin/env sh\nprintf '%s\\n' \"$1 $2 $3\" > {}\n",
-            quote(marker.to_str().unwrap())
-        ),
-    );
+fn which_tmux() -> bool {
+    std::process::Command::new("tmux")
+        .arg("-V")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[tokio::test]
+async fn sling_spawns_polecat_session_via_lifecycle() {
+    if !which_tmux() {
+        eprintln!("skipping: tmux not on PATH");
+        return;
+    }
+    let dir = tempdir();
+    let socket = format!("gt-real-effects-{}", ulid::Ulid::new());
+    let tmux = TmuxCli::new().with_socket(&socket);
+    let lifecycle = PolecatLifecycle::new(Box::new(TmuxCli::new().with_socket(&socket)), test_template());
 
     let repo = Arc::new(InMemoryBeads::default());
     let log = dir.join("events.jsonl");
-
-    let (effects, quota_slot) = RealEffects::new(script.clone());
+    let (effects, quota_slot) = RealEffects::new(lifecycle);
     let root = spawn(
         repo,
         Arc::new(gt_merge::InMemoryMergeRepo::default()),
@@ -44,41 +63,48 @@ async fn sling_spawns_subprocess_with_convoy_and_member() {
     let _ = quota_slot.set(root.quota.clone());
 
     // Drive a real MemberDispatched through the orchestrator: the reactor forwards it to
-    // Effects::sling, which spawns the stub.
+    // Effects::sling, which spawns the tmux-backed polecat `gt-m-1` (prefix + sanitized member).
     root.orch
         .create_convoy("c-smoke", vec!["m-1".to_string()])
         .await;
     root.orch.launch("c-smoke").await;
 
-    let contents = wait_for_file(&marker, Duration::from_secs(5)).await;
-    assert_eq!(
-        contents.trim(),
-        "sling c-smoke m-1",
-        "stub did not see the expected sling invocation",
-    );
+    let appeared = wait_for(Duration::from_secs(5), || {
+        use gt_polecat::Tmux;
+        tmux.has_session("gt-m-1")
+    })
+    .await;
 
+    // Capture env before teardown so a failure still cleans up the private server.
+    let convoy = {
+        use gt_polecat::Tmux;
+        tmux.show_environment("gt-m-1", "GT_CONVOY").ok().flatten()
+    };
+    let _ = std::process::Command::new("tmux")
+        .args(["-L", &socket, "kill-server"])
+        .status();
     root.shutdown();
+
+    assert!(appeared, "sling did not create the tmux polecat session gt-m-1");
+    assert_eq!(convoy.as_deref(), Some("c-smoke"), "GT_CONVOY not carried into the session");
 }
 
 #[tokio::test]
 async fn sling_pins_dispatched_bead_as_gt_hook_bead() {
-    // hq-63az / gg-0nb gate: the slung subprocess must inherit GT_HOOK_BEAD = the member, so
-    // the deferred-spawn path can hand the polecat its hook without a flippable bd read.
+    // hq-63az / gg-0nb gate: the slung polecat must carry GT_HOOK_BEAD = the member, so the
+    // deferred-spawn path can hand the polecat its hook without a flippable bd read.
+    if !which_tmux() {
+        eprintln!("skipping: tmux not on PATH");
+        return;
+    }
     let dir = tempdir();
-    let marker = dir.join("hook.marker");
-    let script = dir.join("gt-stub.sh");
-    write_script(
-        &script,
-        &format!(
-            "#!/usr/bin/env sh\nprintf '%s\\n' \"$GT_HOOK_BEAD\" > {}\n",
-            quote(marker.to_str().unwrap())
-        ),
-    );
+    let socket = format!("gt-real-effects-{}", ulid::Ulid::new());
+    let tmux = TmuxCli::new().with_socket(&socket);
+    let lifecycle = PolecatLifecycle::new(Box::new(TmuxCli::new().with_socket(&socket)), test_template());
 
     let repo = Arc::new(InMemoryBeads::default());
     let log = dir.join("events.jsonl");
-
-    let (effects, quota_slot) = RealEffects::new(script.clone());
+    let (effects, quota_slot) = RealEffects::new(lifecycle);
     let root = spawn(
         repo,
         Arc::new(gt_merge::InMemoryMergeRepo::default()),
@@ -96,26 +122,35 @@ async fn sling_pins_dispatched_bead_as_gt_hook_bead() {
         .await;
     root.orch.launch("c-hook").await;
 
-    let contents = wait_for_file(&marker, Duration::from_secs(5)).await;
-    assert_eq!(
-        contents.trim(),
-        "hq-63az",
-        "slung subprocess did not inherit GT_HOOK_BEAD = member",
-    );
-
+    let appeared = wait_for(Duration::from_secs(5), || {
+        use gt_polecat::Tmux;
+        tmux.has_session("gt-hq-63az")
+    })
+    .await;
+    let hook = {
+        use gt_polecat::Tmux;
+        tmux.show_environment("gt-hq-63az", GT_HOOK_BEAD).ok().flatten()
+    };
+    let _ = std::process::Command::new("tmux")
+        .args(["-L", &socket, "kill-server"])
+        .status();
     root.shutdown();
+
+    assert!(appeared, "sling did not create the tmux polecat session gt-hq-63az");
+    assert_eq!(
+        hook.as_deref(),
+        Some("hq-63az"),
+        "slung polecat did not carry GT_HOOK_BEAD = member",
+    );
 }
 
 #[tokio::test]
 async fn rotate_invokes_quota_command_chain_with_healthy_target() {
     let dir = tempdir();
-    let script = dir.join("gt-stub.sh");
-    write_script(&script, "#!/usr/bin/env sh\nexit 0\n");
-
     let repo = Arc::new(InMemoryBeads::default());
     let log = dir.join("events.jsonl");
 
-    let (effects, quota_slot) = RealEffects::new(script);
+    let (effects, quota_slot) = RealEffects::new(fake_lifecycle());
     let root = spawn(
         repo,
         Arc::new(gt_merge::InMemoryMergeRepo::default()),
@@ -177,13 +212,10 @@ async fn rotate_invokes_quota_command_chain_with_healthy_target() {
 #[tokio::test]
 async fn rotate_with_no_healthy_target_is_a_noop() {
     let dir = tempdir();
-    let script = dir.join("gt-stub.sh");
-    write_script(&script, "#!/usr/bin/env sh\nexit 0\n");
-
     let repo = Arc::new(InMemoryBeads::default());
     let log = dir.join("events.jsonl");
 
-    let (effects, quota_slot) = RealEffects::new(script);
+    let (effects, quota_slot) = RealEffects::new(fake_lifecycle());
     let root = spawn(
         repo,
         Arc::new(gt_merge::InMemoryMergeRepo::default()),
@@ -217,6 +249,11 @@ async fn rotate_with_no_healthy_target_is_a_noop() {
     root.shutdown();
 }
 
+/// A lifecycle that never reaches a real tmux server — the rotate tests don't sling.
+fn fake_lifecycle() -> PolecatLifecycle {
+    PolecatLifecycle::new(Box::new(FakeTmux::new()), test_template())
+}
+
 fn tempdir() -> PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!("gt-real-effects-{}", ulid::Ulid::new()));
@@ -224,31 +261,16 @@ fn tempdir() -> PathBuf {
     p
 }
 
-fn write_script(path: &std::path::Path, body: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::write(path, body).unwrap();
-    let mut perm = std::fs::metadata(path).unwrap().permissions();
-    perm.set_mode(0o755);
-    std::fs::set_permissions(path, perm).unwrap();
-}
-
-fn quote(s: &str) -> String {
-    // Single-quote the path so spaces survive the shell.
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-async fn wait_for_file(path: &std::path::Path, timeout: Duration) -> String {
+async fn wait_for(timeout: Duration, mut pred: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Ok(s) = std::fs::read_to_string(path) {
-            if !s.is_empty() {
-                return s;
-            }
+        if pred() {
+            return true;
         }
         if Instant::now() >= deadline {
-            panic!("timeout waiting for {}", path.display());
+            return false;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
     }
 }
 

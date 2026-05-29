@@ -153,3 +153,147 @@ pub fn spawn_tmux(tmux: &dyn Tmux, spec: &SpawnSpec) -> io::Result<()> {
 pub fn heartbeat_is_stale(path: &Path, max_age: std::time::Duration) -> bool {
     gt_agent::supervisor::heartbeat_is_stale(path, max_age)
 }
+
+/// Everything fixed for one rig's polecats, independent of which member is dispatched. The
+/// composition root builds this once (from rig config / env) and reuses it for every sling —
+/// the per-member bits (session name, hooked bead) are derived in [`SpawnTemplate::spec_for`].
+#[derive(Debug, Clone)]
+pub struct SpawnTemplate {
+    /// Rig name → `Session.rig` and `GT_RIG`.
+    pub rig: String,
+    /// tmux session-name prefix for this rig's polecats (`<prefix>-<name>`, e.g. `gt-furiosa`).
+    pub prefix: String,
+    /// Working directory the agent runs in (the rig checkout).
+    pub workdir: PathBuf,
+    /// The coding-agent command launched in the pane (e.g. `claude`).
+    pub command: String,
+    /// Fixed args for the command.
+    pub args: Vec<String>,
+    /// Base env layered onto every polecat (`GT_ROLE`, `GT_RIG`, `GT_RIG_PATH`, …). The
+    /// per-member `GT_HOOK_BEAD` and `GT_CONVOY` are added by [`SpawnTemplate::spec_for`].
+    pub base_env: Vec<(String, String)>,
+    /// Directory the heartbeat files live in (`<dir>/<session>.heartbeat`).
+    pub heartbeat_dir: PathBuf,
+}
+
+impl SpawnTemplate {
+    /// Build the per-member [`SpawnSpec`]. `member` is the dispatched convoy member / slung
+    /// bead: it becomes both the polecat-name suffix and the pinned `GT_HOOK_BEAD`. `convoy`
+    /// is carried in `GT_CONVOY` for context (mirrors the Go `gt sling <convoy> <member>`
+    /// positional args).
+    pub fn spec_for(&self, convoy: &str, member: &str) -> SpawnSpec {
+        let name = sanitize_name(member);
+        let session = format!("{}-{}", self.prefix, name);
+        let heartbeat = self.heartbeat_dir.join(format!("{session}.heartbeat"));
+        let mut env = self.base_env.clone();
+        env.push(("GT_CONVOY".to_string(), convoy.to_string()));
+        SpawnSpec {
+            session,
+            rig: self.rig.clone(),
+            polecat: name,
+            crew: None,
+            workdir: self.workdir.clone(),
+            command: self.command.clone(),
+            args: self.args.clone(),
+            env,
+            hook_bead: Some(member.to_string()),
+            issue: None,
+            heartbeat,
+        }
+    }
+}
+
+/// Production polecat spawner — the Rust replacement for the Go `gt sling` subprocess
+/// (hq-mc72.12 D1). Holds the tmux edge adapter plus the rig's [`SpawnTemplate`]; [`sling`]
+/// turns a dispatched convoy member into a live tmux-backed polecat with the slung bead pinned
+/// as `GT_HOOK_BEAD`. This is the single production caller `gt-polecat` was missing: the
+/// composition root's `Effects::sling` delegates here instead of shelling out to the Go binary.
+///
+/// [`sling`]: PolecatLifecycle::sling
+pub struct PolecatLifecycle {
+    tmux: Box<dyn Tmux>,
+    template: SpawnTemplate,
+}
+
+impl PolecatLifecycle {
+    pub fn new(tmux: Box<dyn Tmux>, template: SpawnTemplate) -> Self {
+        Self { tmux, template }
+    }
+
+    /// Spawn the production polecat for a dispatched convoy `member`. Returns the [`SpawnSpec`]
+    /// that was launched so the caller can emit the matching `AgentEvent::Spawned`.
+    pub fn sling(&self, convoy: &str, member: &str) -> io::Result<SpawnSpec> {
+        let spec = self.template.spec_for(convoy, member);
+        spawn_tmux(self.tmux.as_ref(), &spec)?;
+        Ok(spec)
+    }
+
+    /// The spec that *would* be spawned for `(convoy, member)`, without launching it.
+    pub fn spec_for(&self, convoy: &str, member: &str) -> SpawnSpec {
+        self.template.spec_for(convoy, member)
+    }
+}
+
+/// Sanitize a bead id / member into a tmux-safe name component: tmux session names may not
+/// contain `.` or `:` and dislike whitespace. Maps any non-`[A-Za-z0-9_-]` byte to `-` so
+/// `hq-abc.1` → `hq-abc-1`.
+fn sanitize_name(member: &str) -> String {
+    member
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect()
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use crate::tmux::{FakeTmux, Tmux};
+    use crate::GT_HOOK_BEAD;
+
+    fn template() -> SpawnTemplate {
+        SpawnTemplate {
+            rig: "granite".to_string(),
+            prefix: "gt".to_string(),
+            workdir: std::env::temp_dir(),
+            command: "claude".to_string(),
+            args: vec!["--dangerously-skip-permissions".to_string()],
+            base_env: vec![("GT_ROLE".to_string(), "polecat".to_string())],
+            heartbeat_dir: std::env::temp_dir(),
+        }
+    }
+
+    #[test]
+    fn spec_for_derives_session_pins_hook_and_carries_convoy() {
+        let spec = template().spec_for("cv-1", "hq-abc.1");
+        // `.` is not tmux-safe → sanitized to `-`.
+        assert_eq!(spec.session, "gt-hq-abc-1");
+        assert_eq!(spec.polecat, "hq-abc-1");
+        assert_eq!(spec.rig, "granite");
+        assert_eq!(spec.hook_bead.as_deref(), Some("hq-abc.1"));
+        // GT_HOOK_BEAD is appended via env_with_hook, not base env.
+        assert!(spec.env.iter().any(|(k, v)| k == "GT_ROLE" && v == "polecat"));
+        assert!(spec.env.iter().any(|(k, v)| k == "GT_CONVOY" && v == "cv-1"));
+        let full = spec.env_with_hook();
+        assert!(full.iter().any(|(k, v)| k == GT_HOOK_BEAD && v == "hq-abc.1"));
+    }
+
+    #[test]
+    fn sling_creates_session_with_hook_pinned() {
+        let tmux = FakeTmux::new();
+        let lifecycle = PolecatLifecycle::new(Box::new(tmux), template());
+        let spec = lifecycle.sling("cv-9", "hq-9").unwrap();
+        assert_eq!(spec.session, "gt-hq-9");
+        // The FakeTmux is moved into the lifecycle; spawn via a fresh adapter to assert env,
+        // so re-build the same spec against a standalone fake and check the pin path.
+        let probe = FakeTmux::new();
+        spawn_tmux(&probe, &spec).unwrap();
+        assert_eq!(
+            probe.show_environment("gt-hq-9", GT_HOOK_BEAD).unwrap().as_deref(),
+            Some("hq-9")
+        );
+        assert_eq!(
+            probe.show_environment("gt-hq-9", "GT_CONVOY").unwrap().as_deref(),
+            Some("cv-9")
+        );
+    }
+}

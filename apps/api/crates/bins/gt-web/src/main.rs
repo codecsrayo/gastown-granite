@@ -6,8 +6,10 @@
 //! in-memory port so the API stays runnable on a host without Dolt. `GT_PG_AUDIT_URL`
 //! mirrors every appended `EventRecord` into Postgres (canonical audit per docs/04).
 //!
-//! Effects (hq-7pdl.1): wired with the production [`RealEffects`] adapter (`gt sling` child
-//! processes + `QuotaCommand::Rotate` chain). `gt` binary path comes from `GT_BIN`.
+//! Effects (hq-7pdl.1 / hq-mc72.12 D1): wired with the production [`RealEffects`] adapter.
+//! `sling` spawns Rust-managed `tmux` polecats via `gt_polecat::PolecatLifecycle` (the `gt
+//! sling` subprocess is gone — the Go binary is off the runtime path); `rotate` drives the
+//! `QuotaCommand::Rotate` chain. The polecat spawn template is sourced from the environment.
 //!
 //! IAM (hq-7pdl.2): bearer-token middleware sits in front of every `/api` route. The secret
 //! is read from `GT_WEB_TOKEN`; without it the bin refuses to start unless
@@ -30,7 +32,6 @@
 //!   final batch and exits, and the telemetry guard flushes the OTLP batch on drop. No
 //!   `task.abort()` on the hot drain path — that was the silent-data-loss seam.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use gt_agent::{InMemorySessions, SessionQueries, SessionWriter};
@@ -65,9 +66,6 @@ fn main() {
         let log_path = std::env::var("GT_EVENT_LOG")
             .unwrap_or_else(|_| "/tmp/gt.events.jsonl".to_string());
         let bind = std::env::var("GT_WEB_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
-        let gt_bin = std::env::var("GT_BIN")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("gt"));
 
         // IAM at the frontier (doc 07). Fail-closed: refuse to start without a token unless
         // GT_WEB_AUTH=disabled is set explicitly (intended for in-tree dev only).
@@ -141,7 +139,6 @@ fn main() {
                     Arc::new(dolt_orch),
                     &log_path,
                     &bind,
-                    gt_bin,
                     auth,
                     gate,
                     pg_audit,
@@ -161,7 +158,6 @@ fn main() {
                     Arc::new(InMemoryOrchRepo::default()),
                     &log_path,
                     &bind,
-                    gt_bin,
                     auth,
                     gate,
                     pg_audit,
@@ -180,7 +176,6 @@ async fn serve<R, SQ, MR, PR, OR>(
     orch_repo: Arc<OR>,
     log_path: &str,
     bind: &str,
-    gt_bin: PathBuf,
     auth: AuthConfig,
     gate: ReadinessGate,
     pg_audit: Option<Arc<PgAudit>>,
@@ -195,7 +190,7 @@ async fn serve<R, SQ, MR, PR, OR>(
     OR: OrchRepository + 'static,
     Arc<OR>: OrchRepository + 'static,
 {
-    let (effects, quota_slot) = RealEffects::new(gt_bin);
+    let (effects, quota_slot) = RealEffects::from_env();
 
     // Boot hydration (hq-8iur.1) — match the gt bin so a gt-web restart restores the same
     // in-flight state from the shared event log before serving the read-side.

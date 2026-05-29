@@ -12,9 +12,11 @@
 //! by the drain so a crash between broadcast and audit is recovered from the durable outbox
 //! instead of lost. The local `.events.jsonl` keeps writing in both modes as a spill.
 //!
-//! Effects (hq-7pdl.1): the composition root is wired with the production [`RealEffects`]
-//! adapter (`gt sling` child processes + the `QuotaCommand::Rotate` chain). The `gt` binary
-//! path is configurable via `GT_BIN`.
+//! Effects (hq-7pdl.1 / hq-mc72.12 D1): the composition root is wired with the production
+//! [`RealEffects`] adapter. `sling` now spawns Rust-managed `tmux` polecats via
+//! `gt_polecat::PolecatLifecycle` (no more `gt sling` subprocess — the Go binary is off the
+//! runtime path); `rotate` drives the `QuotaCommand::Rotate` chain. The polecat spawn template
+//! is sourced from the environment (`GT_RIG`/`GT_RIG_PATH`/`GT_POLECAT_CMD`/…).
 //!
 //! Graceful shutdown (paso 8.5, hq-8iur.5): SIGTERM and SIGINT trigger a deterministic
 //! tear-down — root reactor first (its broadcast `Sender` drops, which is the only way the
@@ -24,7 +26,6 @@
 //! OTLP batch flush sees a quiescent process. No `task.abort()` on the outbox path — that
 //! was the silent-data-loss seam (gate: `kill -TERM` → 0 outbox rows lost).
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -58,9 +59,6 @@ fn main() {
     runtime.block_on(async {
         let log_path = std::env::var("GT_EVENT_LOG")
             .unwrap_or_else(|_| "/tmp/gt.events.jsonl".to_string());
-        let gt_bin = std::env::var("GT_BIN")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("gt"));
 
         match std::env::var("GT_DOLT_URL").ok() {
             Some(url) => {
@@ -96,7 +94,6 @@ fn main() {
                     Arc::new(dolt_orch),
                     Some(Arc::new(dolt_sessions)),
                     &log_path,
-                    gt_bin,
                 )
                 .await;
             }
@@ -112,7 +109,6 @@ fn main() {
                     // No sessions read-side in headless in-memory mode — skip the projector.
                     None,
                     &log_path,
-                    gt_bin,
                 )
                 .await;
             }
@@ -127,7 +123,6 @@ async fn run<R, MR, PR, OR>(
     orch_repo: Arc<OR>,
     sessions_writer: Option<Arc<DoltSessions>>,
     log_path: &str,
-    gt_bin: PathBuf,
 ) where
     R: BeadRepository + 'static,
     Arc<R>: BeadRepository + Clone + 'static,
@@ -138,7 +133,7 @@ async fn run<R, MR, PR, OR>(
     OR: OrchRepository + 'static,
     Arc<OR>: OrchRepository + 'static,
 {
-    let (effects, quota_slot) = RealEffects::new(gt_bin);
+    let (effects, quota_slot) = RealEffects::from_env();
 
     // Boot hydration (hq-8iur.1): fold the audit log into per-domain state before spawning,
     // so a restart restores in-flight merge slots / patrol leases / convoy progress / quota

@@ -5,9 +5,10 @@
 //! task that does the actual work and reports back via `eprintln!` (the same channel
 //! `LogEffects` uses; tracing is a follow-up).
 //!
-//! - `sling(convoy, member)` spawns `gt sling <convoy> <member>` as a child process. The path
-//!   to the `gt` binary is configurable so deployments can swap binaries (and tests can point
-//!   at a stub script that records the launch).
+//! - `sling(convoy, member)` spawns a **real Rust-managed polecat** through
+//!   [`gt_polecat::PolecatLifecycle`] (a detached `tmux` session running the coding agent with
+//!   the slung bead pinned as `GT_HOOK_BEAD`). This replaced the old `gt sling` subprocess
+//!   (hq-mc72.12 D1): the orchestrator no longer execs the Go binary to dispatch work.
 //! - `rotate(account)` runs the [`QuotaCommand::Rotate`] chain. The quota actor holds the
 //!   only authoritative registry, so the adapter snapshots accounts via [`QuotaHandle::accounts`],
 //!   picks a healthy target distinct from the source, stamps `now_secs` at the edge and calls
@@ -19,14 +20,12 @@
 //! the audit log still has the upstream `QuotaEvent::BlockPredicted`/`AccountLimited`.
 
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 use tokio::sync::OnceCell;
 
+use gt_polecat::{PolecatLifecycle, SpawnTemplate, TmuxCli};
 use gt_quota::{Account, AccountQuotaStatus, QuotaCommand, QuotaHandle, RotateAccount};
 
 use crate::root::Effects;
@@ -35,24 +34,71 @@ use crate::root::Effects;
 /// fill it after `spawn` returns.
 pub type QuotaSlot = Arc<OnceCell<QuotaHandle>>;
 
-/// Real [`Effects`] adapter: launches `gt sling` subprocesses and drives the predictive
-/// rotation chain via the quota actor.
+/// Real [`Effects`] adapter: spawns Rust-managed polecats (via [`PolecatLifecycle`]) and drives
+/// the predictive rotation chain via the quota actor.
 pub struct RealEffects {
-    gt_bin: PathBuf,
+    lifecycle: Arc<PolecatLifecycle>,
     quota: QuotaSlot,
 }
 
 impl RealEffects {
-    /// Build a new adapter together with the quota slot the bin must fill in after `spawn`.
-    pub fn new(gt_bin: PathBuf) -> (Self, QuotaSlot) {
+    /// Build a new adapter from a caller-supplied polecat spawner, together with the quota slot
+    /// the bin must fill in after `spawn` returns.
+    pub fn new(lifecycle: PolecatLifecycle) -> (Self, QuotaSlot) {
         let slot: QuotaSlot = Arc::new(OnceCell::new());
         (
             Self {
-                gt_bin,
+                lifecycle: Arc::new(lifecycle),
                 quota: slot.clone(),
             },
             slot,
         )
+    }
+
+    /// Production constructor: a real `tmux` edge adapter plus a [`SpawnTemplate`] sourced from
+    /// the environment. This is what the bins wire — it replaces the old `gt sling` subprocess
+    /// path (hq-mc72.12 D1), so the running orchestrator no longer depends on the Go binary to
+    /// dispatch work.
+    pub fn from_env() -> (Self, QuotaSlot) {
+        Self::new(PolecatLifecycle::new(
+            Box::new(TmuxCli::new()),
+            spawn_template_from_env(),
+        ))
+    }
+}
+
+/// Build the production polecat [`SpawnTemplate`] from the environment. Every field has a sane
+/// default so the bin boots on a bare host; deployments override via:
+/// `GT_RIG` (name), `GT_RIG_PREFIX` (tmux session prefix), `GT_RIG_PATH` (workdir),
+/// `GT_POLECAT_CMD` (agent command), `GT_POLECAT_ARGS` (whitespace-split), and
+/// `GT_POLECAT_HEARTBEAT_DIR`. `GT_ROLE`/`GT_RIG`/`GT_RIG_PATH` are seeded into the base env
+/// so every spawned polecat can reorient itself.
+pub fn spawn_template_from_env() -> SpawnTemplate {
+    let rig = std::env::var("GT_RIG").unwrap_or_else(|_| "gastown".to_string());
+    let prefix = std::env::var("GT_RIG_PREFIX").unwrap_or_else(|_| "gt".to_string());
+    let workdir =
+        PathBuf::from(std::env::var("GT_RIG_PATH").unwrap_or_else(|_| "/gt".to_string()));
+    let command = std::env::var("GT_POLECAT_CMD").unwrap_or_else(|_| "claude".to_string());
+    let args = std::env::var("GT_POLECAT_ARGS")
+        .ok()
+        .map(|s| s.split_whitespace().map(str::to_string).collect())
+        .unwrap_or_default();
+    let heartbeat_dir = std::env::var("GT_POLECAT_HEARTBEAT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
+    let base_env = vec![
+        ("GT_ROLE".to_string(), "polecat".to_string()),
+        ("GT_RIG".to_string(), rig.clone()),
+        ("GT_RIG_PATH".to_string(), workdir.to_string_lossy().into_owned()),
+    ];
+    SpawnTemplate {
+        rig,
+        prefix,
+        workdir,
+        command,
+        args,
+        base_env,
+        heartbeat_dir,
     }
 }
 
@@ -72,46 +118,19 @@ fn pick_target(accounts: &[Account], from: &str) -> Option<String> {
 
 impl Effects for RealEffects {
     fn sling(&self, convoy: &str, member: &str) {
-        let gt_bin = self.gt_bin.clone();
+        let lifecycle = self.lifecycle.clone();
         let convoy = convoy.to_string();
         let member = member.to_string();
-        tokio::spawn(async move {
-            let mut cmd = Command::new(&gt_bin);
-            cmd.arg("sling")
-                .arg(&convoy)
-                .arg(&member)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-            // hq-63az / gg-0nb: pin the dispatched bead into the spawned process env as
-            // GT_HOOK_BEAD so the deferred-spawn path hands the polecat its hook without a
-            // bd read the embedded-scratch auto-import can flip. `member` is the convoy member
-            // (the work item) being slung — the bead the polecat picks up.
-            if let Some((key, value)) = gt_polecat::hook_env(Some(&member), None) {
-                cmd.env(key, value);
-            }
-            match cmd.spawn() {
-                Ok(mut child) => {
-                    if let Some(out) = child.stdout.take() {
-                        let tag = format!("[gt sling/{convoy}/{member}/out]");
-                        tokio::spawn(drain(tag, out));
-                    }
-                    if let Some(err) = child.stderr.take() {
-                        let tag = format!("[gt sling/{convoy}/{member}/err]");
-                        tokio::spawn(drain(tag, err));
-                    }
-                    match child.wait().await {
-                        Ok(status) => eprintln!(
-                            "[gt] sling convoy={convoy} member={member} exit={status}"
-                        ),
-                        Err(e) => eprintln!(
-                            "[gt] sling convoy={convoy} member={member} wait error: {e}"
-                        ),
-                    }
-                }
-                Err(e) => eprintln!(
-                    "[gt] sling spawn failed convoy={convoy} member={member} bin={}: {e}",
-                    gt_bin.display()
-                ),
+        // `tmux` calls are synchronous (`std::process`), so run the spawn off the async worker
+        // to keep the reactor's select-loop non-blocking. `member` is the slung bead — the
+        // lifecycle pins it as GT_HOOK_BEAD inside the new session (hq-63az / gg-0nb).
+        tokio::task::spawn_blocking(move || match lifecycle.sling(&convoy, &member) {
+            Ok(spec) => eprintln!(
+                "[gt] slung polecat session={} rig={} hook={member} (convoy={convoy})",
+                spec.session, spec.rig
+            ),
+            Err(e) => {
+                eprintln!("[gt] sling failed convoy={convoy} member={member}: {e}")
             }
         });
     }
@@ -138,16 +157,6 @@ impl Effects for RealEffects {
                 eprintln!("[gt] rotate exec failed from={from} to={to_account}: {e}");
             }
         });
-    }
-}
-
-async fn drain<R>(tag: String, reader: R)
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    let mut buf = BufReader::new(reader).lines();
-    while let Ok(Some(line)) = buf.next_line().await {
-        eprintln!("{tag} {line}");
     }
 }
 

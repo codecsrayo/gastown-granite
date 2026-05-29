@@ -76,7 +76,7 @@ write directly and emit **no domain event**, only a frontier audit record):
 
 | Edge | Behavior |
 |---|---|
-| `sling(convoy, member)` | spawns `gt sling <member>` subprocess (host Go binary) |
+| `sling(convoy, member)` | spawns a Rust-managed `tmux` polecat via `gt_polecat::PolecatLifecycle` — **no Go binary** (hq-mc72.12 D1, was `gt sling <member>` subprocess). `member` pinned as `GT_HOOK_BEAD` |
 | `rotate(account)` | flips quota active-account pointer via `gt-quota::Rotate` chain |
 
 Everything else the Rust API exposes is internal (bus, dolt/pg adapters, audit, replay).
@@ -94,7 +94,7 @@ this before traffic moves).
 
 | Go cmd | Purpose (from Short:) | Rust equivalent | Status |
 |---|---|---|---|
-| `gt sling` ★ | Unified work-dispatch (bead/formula → agent) | `RealEffects::sling` shells out to Go `gt sling` (so Rust still depends on Go binary); MCP `scheduling.enqueue` covers the enqueue facet only | **P★** |
+| `gt sling` ★ | Unified work-dispatch (bead/formula → agent) | `RealEffects::sling` now spawns a Rust-managed `tmux` polecat via `gt_polecat::PolecatLifecycle` — **no Go dependency** (hq-mc72.12 D1). MCP `scheduling.enqueue` covers the enqueue facet; the `gt sling` CLI verb + namepool/formula resolution remain (B-track) | **P★** |
 | `gt unsling` ★ | Reverse a sling (release a claim) | MCP `scheduling.mark_dispatched` cannot undo; no Rust path | **M★** |
 | `gt hook` | Show or attach work on a hook | none (hook protocol lives in Go) | **M** |
 | `gt claim` | (subcommand under several) atomic claim of an issue | partial: `BeadRepository::cas_release` exists in Dolt adapter, but no public claim/release route | **P** |
@@ -272,7 +272,7 @@ trait (`Effects`). Implementations:
 
 | Method | Production (`RealEffects`) | Notes |
 |---|---|---|
-| `sling(convoy, member)` | `tokio::process::Command` spawning host `gt sling` | **Bootstrap dependency — Rust currently *needs* the Go `gt` binary on PATH to actually dispatch work.** Critical-path to remove for true cutover. |
+| `sling(convoy, member)` | `gt_polecat::PolecatLifecycle` → detached `tmux` session running the agent | **Self-hosted (hq-mc72.12 D1)** — the Go-binary dependency is removed; the orchestrator spawns its own polecats. Spawn template (`GT_RIG`/`GT_RIG_PATH`/`GT_POLECAT_CMD`/…) comes from env. |
 | `rotate(account)` | hits `QuotaCommand::Rotate` chain via `QuotaSlot` | covers the predictive + manual rotation path; account CRUD is still Go-only |
 
 Anything not in this table (witness escalation actions, mayor delegations, mail

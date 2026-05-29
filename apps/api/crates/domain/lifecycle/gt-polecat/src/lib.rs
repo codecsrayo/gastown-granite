@@ -17,7 +17,9 @@ pub mod supervisor;
 pub mod tmux;
 
 pub use hooks::{hook_bead_for_spawn, hook_env, resolve_env_hook_bead, GT_HOOK_BEAD};
-pub use lifecycle::{spawn_process, spawn_tmux, SpawnSpec, SpawnedPolecat};
+pub use lifecycle::{
+    spawn_process, spawn_tmux, PolecatLifecycle, SpawnSpec, SpawnTemplate, SpawnedPolecat,
+};
 pub use restart::{RestartConfig, RestartTracker};
 pub use supervisor::{supervise_polecat, watch, RespawnPolicy, WatchOutcome};
 pub use tmux::{FakeTmux, Tmux, TmuxCli};
