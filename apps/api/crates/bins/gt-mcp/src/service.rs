@@ -48,6 +48,10 @@ use gt_quota::{
     Account, AccountQuotaStatus, AccountWindow, ProbeWindow, QuotaCommand, RotateAccount,
     SampleTokens, WindowKind,
 };
+use gt_rig::actor::RigHandle;
+use gt_rig::{
+    AddRig, AdoptRig, RemoveRig, RigCommand, SetRigDefaultBranch, SetRigPrefix,
+};
 
 use crate::audit::{AuditEvent, AuditSink, Outcome};
 use crate::auth::Scope;
@@ -194,6 +198,11 @@ struct Inner {
     patrol: PatrolHandle,
     orch: OrchHandle,
     quota: QuotaHandle,
+    /// Rig catalog handle (hq-mc72.12.29). `None` until the composition root spawns the
+    /// `gt-rig` actor (TODO hq-mc72.12.30 — see prompt-for-parallel-agent in commit body):
+    /// `rig.*` tools return `unavailable` and `gt://rigs` returns an empty array. Tests
+    /// built via [`McpService::new`] also default to `None` until they need rig coverage.
+    rig: Option<RigHandle>,
     scope: Scope,
     audit: Arc<dyn AuditSink>,
     /// Edge relay for agent events. The agent actor is relay-less by design (the supervisor
@@ -227,6 +236,9 @@ impl McpService {
     /// passes [`SessionsRead::Dolt`] when `GT_DOLT_URL` is set and `Some(root.agent_events)`
     /// so tool-driven session changes reach the log; tests keep the default actor backend
     /// and `None` relay via [`McpService::new`].
+    ///
+    /// Rig domain (hq-mc72.12.29) wires through [`McpService::with_rig`]; this constructor
+    /// keeps `rig=None` so existing test ctors stay one-call.
     #[allow(clippy::too_many_arguments)]
     pub fn with_sessions(
         agent: AgentHandle,
@@ -249,9 +261,36 @@ impl McpService {
                 patrol,
                 orch,
                 quota,
+                rig: None,
                 scope,
                 audit,
                 agent_events,
+            }),
+        }
+    }
+
+    /// Builder-style setter for the rig catalog handle (hq-mc72.12.29). Returns a fresh
+    /// [`McpService`] sharing the audit sink + scope; the composition root chains this after
+    /// [`McpService::with_sessions`] once `gt-rig::actor::spawn` is wired (see TODO
+    /// hq-mc72.12.30). When unset, the `rig.*` tools return `AppError::Other("rig domain
+    /// not wired")` and the `gt://rigs` resource returns an empty JSON array.
+    pub fn with_rig(self, rig: RigHandle) -> Self {
+        // Re-build Inner with the rig field populated. Cheap because actor handles are
+        // already `Clone` over an mpsc sender; the Arc dance is one allocation per call.
+        let prev = &*self.inner;
+        Self {
+            inner: Arc::new(Inner {
+                agent: prev.agent.clone(),
+                sessions: prev.sessions.clone(),
+                merge: prev.merge.clone(),
+                sched: prev.sched.clone(),
+                patrol: prev.patrol.clone(),
+                orch: prev.orch.clone(),
+                quota: prev.quota.clone(),
+                rig: Some(rig),
+                scope: prev.scope.clone(),
+                audit: prev.audit.clone(),
+                agent_events: prev.agent_events.clone(),
             }),
         }
     }
@@ -1213,6 +1252,187 @@ impl McpService {
         self.run_quota_retire("quota.retire.execute", args, false).await
     }
 
+    /// Rig-domain twin of [`McpService::run`]: same scope + audit boundary, dispatching to the
+    /// `gt-rig` catalog actor (hq-mc72.12.29). Unlike the other `run_*` helpers the handle is
+    /// optional: until the composition root spawns the actor (TODO hq-mc72.12.30), the tool
+    /// records an audit row with a `rig domain not wired` failure and returns it — the wire
+    /// surface is complete and testable, only the actor injection is pending.
+    pub async fn run_rig(
+        &self,
+        tool: &str,
+        arguments: serde_json::Value,
+        cmd: RigCommand,
+        validate_only: bool,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let domain_result = match &self.inner.rig {
+            Some(rig) => {
+                if validate_only {
+                    rig.validate(cmd).await
+                } else {
+                    rig.exec(cmd).await
+                }
+            }
+            None => Err(AppError::Other("rig domain not wired".into())),
+        };
+
+        let outcome = match &domain_result {
+            Ok(()) => Outcome::Ok,
+            Err(e) => Outcome::Failed { error: e.to_string() },
+        };
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments,
+            outcome,
+        });
+
+        match domain_result {
+            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
+            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "rig.add.validate",
+        description = "Check whether registering a new rig would be accepted (name/prefix grammar, no name/prefix collision). No state change."
+    )]
+    async fn rig_add_validate(
+        &self,
+        Parameters(args): Parameters<AddRig>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("AddRig is Serialize");
+        self.run_rig("rig.add.validate", json, RigCommand::Add(args), true).await
+    }
+
+    #[tool(
+        name = "rig.add.execute",
+        description = "Register a new rig in the catalog (orchestrator state only; the on-disk clone is a deploy-edge step). Emits rig.added."
+    )]
+    async fn rig_add_execute(
+        &self,
+        Parameters(args): Parameters<AddRig>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("AddRig is Serialize");
+        self.run_rig("rig.add.execute", json, RigCommand::Add(args), false).await
+    }
+
+    #[tool(
+        name = "rig.adopt.validate",
+        description = "Check whether adopting an existing on-disk rig directory would be accepted. Same validation as rig.add. No state change."
+    )]
+    async fn rig_adopt_validate(
+        &self,
+        Parameters(args): Parameters<AdoptRig>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("AdoptRig is Serialize");
+        self.run_rig("rig.adopt.validate", json, RigCommand::Adopt(args), true).await
+    }
+
+    #[tool(
+        name = "rig.adopt.execute",
+        description = "Adopt an existing on-disk rig into the catalog without re-cloning. Emits rig.adopted."
+    )]
+    async fn rig_adopt_execute(
+        &self,
+        Parameters(args): Parameters<AdoptRig>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("AdoptRig is Serialize");
+        self.run_rig("rig.adopt.execute", json, RigCommand::Adopt(args), false).await
+    }
+
+    #[tool(
+        name = "rig.remove.validate",
+        description = "Check whether removing a rig from the catalog would be accepted (must exist). No state change."
+    )]
+    async fn rig_remove_validate(
+        &self,
+        Parameters(args): Parameters<RemoveRig>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("RemoveRig is Serialize");
+        self.run_rig("rig.remove.validate", json, RigCommand::Remove(args), true).await
+    }
+
+    #[tool(
+        name = "rig.remove.execute",
+        description = "Drop a rig from the catalog (orchestrator loses routing authority; on-disk teardown is a deploy-edge step). Emits rig.removed."
+    )]
+    async fn rig_remove_execute(
+        &self,
+        Parameters(args): Parameters<RemoveRig>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("RemoveRig is Serialize");
+        self.run_rig("rig.remove.execute", json, RigCommand::Remove(args), false).await
+    }
+
+    #[tool(
+        name = "rig.set_prefix.validate",
+        description = "Check whether changing a rig's beads prefix would be accepted (grammar, no collision, not a no-op). No state change."
+    )]
+    async fn rig_set_prefix_validate(
+        &self,
+        Parameters(args): Parameters<SetRigPrefix>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("SetRigPrefix is Serialize");
+        self.run_rig("rig.set_prefix.validate", json, RigCommand::SetPrefix(args), true).await
+    }
+
+    #[tool(
+        name = "rig.set_prefix.execute",
+        description = "Change a rig's beads prefix (the matching bd config set issue_prefix is a deploy-edge side-effect). Emits rig.prefix_changed."
+    )]
+    async fn rig_set_prefix_execute(
+        &self,
+        Parameters(args): Parameters<SetRigPrefix>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("SetRigPrefix is Serialize");
+        self.run_rig("rig.set_prefix.execute", json, RigCommand::SetPrefix(args), false).await
+    }
+
+    #[tool(
+        name = "rig.set_default_branch.validate",
+        description = "Check whether changing a rig's default branch would be accepted (non-empty, not a no-op). No state change."
+    )]
+    async fn rig_set_default_branch_validate(
+        &self,
+        Parameters(args): Parameters<SetRigDefaultBranch>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("SetRigDefaultBranch is Serialize");
+        self.run_rig(
+            "rig.set_default_branch.validate",
+            json,
+            RigCommand::SetDefaultBranch(args),
+            true,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "rig.set_default_branch.execute",
+        description = "Change the default branch tracked for a rig. Emits rig.default_branch_changed."
+    )]
+    async fn rig_set_default_branch_execute(
+        &self,
+        Parameters(args): Parameters<SetRigDefaultBranch>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_value(&args).expect("SetRigDefaultBranch is Serialize");
+        self.run_rig(
+            "rig.set_default_branch.execute",
+            json,
+            RigCommand::SetDefaultBranch(args),
+            false,
+        )
+        .await
+    }
+
     // --- read-side: domain snapshots exposed as MCP Resources (doc 09 row 1) ----------------
     //
     // These are the read queries the rmcp ServerHandler exposes via `list_resources` /
@@ -1235,6 +1455,7 @@ impl McpService {
             mk("gt://merge/slots", "merge.slots", "Merge slots and their state machine position."),
             mk("gt://orch/convoys", "orch.convoys", "Convoys, their state and per-member progress."),
             mk("gt://quota/accounts", "quota.accounts", "Tracked account count and predictions emitted."),
+            mk("gt://rigs", "rigs", "Registered rigs in the catalog (name, prefix, git remotes, default branch)."),
         ]
     }
 
@@ -1281,6 +1502,16 @@ impl McpService {
             "gt://quota/accounts" => {
                 let (accounts, predictions_emitted) = self.inner.quota.snapshot().await;
                 Ok(serde_json::json!({ "accounts": accounts, "predictions_emitted": predictions_emitted }))
+            }
+            "gt://rigs" => {
+                // Empty array until the composition root wires the actor (TODO hq-mc72.12.30).
+                // RigEntry is Serialize, so once `rig` is Some this is the catalog snapshot.
+                let rigs = match &self.inner.rig {
+                    Some(rig) => rig.rigs().await,
+                    None => Vec::new(),
+                };
+                serde_json::to_value(&rigs)
+                    .map_err(|e| AppError::Other(format!("encode rigs: {e}")))
             }
             other => Err(AppError::NotFound(format!("resource {other}"))),
         }

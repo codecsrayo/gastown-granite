@@ -28,6 +28,7 @@ gt-merge = { path = "../../domain/orchestration/gt-merge" }
 gt-patrol = { path = "../../domain/orchestration/gt-patrol" }
 gt-orchestration = { path = "../../domain/orchestration/gt-orchestration" }
 gt-quota = { path = "../../domain/orchestration/gt-quota" }
+gt-rig = { path = "../../domain/platform/gt-rig" }
 gt-beads = { path = "../../kernel/gt-beads" }
 gt-audit = { path = "../../kernel/gt-audit" }
 # Real persistence adapters: opt-in via env (GT_DOLT_URL / GT_PG_AUDIT_URL).

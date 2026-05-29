@@ -48,6 +48,10 @@ async fn resource_catalog_lists_every_domain_snapshot() {
             "gt://merge/slots",
             "gt://orch/convoys",
             "gt://quota/accounts",
+            // hq-mc72.12.29: rig catalog snapshot. `full_service` builds with no RigHandle
+            // (the unwired default), so read_resource_json("gt://rigs") returns an empty
+            // array — still readable, which the loop below asserts.
+            "gt://rigs",
         ],
     );
     // Every catalog entry must be readable.

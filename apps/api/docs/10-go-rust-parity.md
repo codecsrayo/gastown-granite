@@ -42,8 +42,9 @@ Refresh again when either side moves materially.
 | scheduling | `enqueue`, `mark_dispatched`, `create_bead` *(new — hq-mc72.10)* |
 | merge | `start`, `submit`, `complete`, `fail` |
 | patrol | `register`, `heartbeat`, `tick`, `close` |
-| quota | `sample`, `probe`, `rotate`, `register` *(new — hq-mc72.10)* |
+| quota | `sample`, `probe`, `rotate`, `register` *(new — hq-mc72.10)*, `retire` *(hq-mc72.12.25)* |
 | orch | `launch_convoy`, `complete_member`, `fail_member` |
+| rig | `add`, `adopt`, `remove`, `set_prefix`, `set_default_branch` *(new — hq-mc72.12.29; drive the `gt-rig` catalog `Command` path, emit domain events)* |
 
 Behaviour notes on the new tools (all bypass their domain `Command` path — they
 write directly and emit **no domain event**, only a frontier audit record):
@@ -55,9 +56,17 @@ write directly and emit **no domain event**, only a frontier audit record):
   `gt account`.
 - `rig.create` — **RETIRED (Paso 10 D2, hq-mc72.12.1).** It used to shell out to
   `gt rig add` via `RigCreator` (the last Go-binary exec inside gt-mcp). Removed:
-  gt-mcp has no rig domain, and rig creation is filesystem bootstrap (bare clone +
-  dir scaffold + bead seeding + tmux pattern update) — classified B1 (CLI/deploy),
-  not orchestrator state. Rig creation relocates to `gt-cli`/`deploy/` under B1.
+  the old surface had no rig domain, and rig *creation* is filesystem bootstrap
+  (bare clone + dir scaffold + bead seeding + tmux pattern update) — classified B1
+  (CLI/deploy), still relocating to `deploy/bootstrap` (hq-mc72.12.24).
+- `rig.{add,adopt,remove,set_prefix,set_default_branch}` *(hq-mc72.12.29)* —
+  **distinct from the retired `rig.create`.** These drive the new `gt-rig` catalog
+  `Command` path (orchestrator state only) and **do** emit domain events
+  (`rig.added` / `rig.adopted` / `rig.removed` / `rig.prefix_changed` /
+  `rig.default_branch_changed`). They mutate the registry, NOT the filesystem — the
+  bootstrap edge (B1) is what clones/inits and will *publish* `rig.added` into this
+  domain once wired. The `gt-mcp` `RigHandle` stays `None` (tools return `rig domain
+  not wired`) until the composition root spawns the actor (**TODO hq-mc72.12.30**).
 - `agent.add.execute` — now publishes `AgentEvent::Spawned` on the edge relay so
   the add reaches the log / SSE / sessions projector (hq-mc72.10). **But it
   hardcodes `role: Polecat, crew: None`** — MCP can only spawn polecats; mayor /
@@ -73,6 +82,7 @@ write directly and emit **no domain event**, only a frontier audit record):
 | `gt://merge/slots` | merge slots `[{bead, branch, state}]` |
 | `gt://orch/convoys` | convoys + per-member progress |
 | `gt://quota/accounts` | `{accounts, predictions_emitted}` (partial read-side of `gt quota status`) |
+| `gt://rigs` | registered rigs `[{name, prefix, git_url, default_branch, …}]` (read-side of `gt rig list`; empty until the composition root wires the `gt-rig` actor — hq-mc72.12.29/.30) |
 
 **`RealEffects`** (`bins/gt/src/effects_real.rs`) — production-only edges out of the core:
 
