@@ -102,7 +102,9 @@ services:
     image: gastown-gt-orch:latest
     container_name: gastown-gt
     restart: unless-stopped
-    command: ["gt-rs"]
+    # Bypass the base image's docker-entrypoint.sh (Go town bootstrap: bd init / dashboard).
+    # gt-rs is self-contained; tini reaps the tmux polecat children + forwards SIGTERM.
+    entrypoint: ["tini", "--", "gt-rs"]
     depends_on:
       - dolt
       - postgres
