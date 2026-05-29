@@ -88,6 +88,18 @@ es la especificación de referencia.
 | [11-cutover-roadmap.md](11-cutover-roadmap.md) | Roadmap cutover Go→Rust: épicas Paso 8 (`hq-8iur`) + Paso 9, dependencias, e instrucciones de despacho por agente |
 | [13-operator-signals.md](13-operator-signals.md) | Señales de operador (hq-mysw): activity log read-side, escalation action, Notifier PORT, y la tabla de ruteo mail vs feed-only |
 
+### Deployment / runtime (cómo se orquesta el sistema vivo)
+
+Docs atómicos del **stack desplegado** (compose), complemento operativo de la spec de código:
+
+| Doc | Contenido |
+|---|---|
+| [deployment/00-overview.md](deployment/00-overview.md) | Diagrama maestro: 5 servicios + clientes + 3 planos de datos; cómo se orquesta en una frase por pieza |
+| [deployment/01-services.md](deployment/01-services.md) | Los 5 servicios compose (dolt/postgres/gt-api/gt/gt-mcp): imagen, puertos, env, volumes |
+| [deployment/02-data-stores.md](deployment/02-data-stores.md) | Los 3 planos de datos: event log compartido, Dolt `hq`, Postgres (audit/outbox/projections) — quién escribe qué |
+| [deployment/03-orchestration.md](deployment/03-orchestration.md) | El daemon `gt`: pipeline de eventos/outbox, daemons vivos, spawn de polecats (claude/tmux) |
+| [deployment/04-mcp.md](deployment/04-mcp.md) | `gt-mcp`: tools validate/execute, resources, scope, `gt-mcp-cli`, y las dos instancias (stdio vs container) |
+
 ### Features
 
 | Doc | Contenido |
