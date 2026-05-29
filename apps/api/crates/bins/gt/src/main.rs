@@ -30,7 +30,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use gt_agent::{AgentEvent, DogKind, SessionRole};
 use gt_beads::{Bead, BeadRepository, BeadStatus, InMemoryBeads};
+use gt_events::Envelope;
+use gt_polecat::{spawn_tmux, SpawnSpec, Tmux, TmuxCli};
 use serde::Deserialize;
 use gt_merge::{InMemoryMergeRepo, MergeRepository};
 use gt_orchestration::{InMemoryOrchRepo, OrchRepository};
@@ -224,6 +227,11 @@ async fn run<R, MR, PR, OR>(
     // polecat at sling time; this loop is the live half.
     let polecat_ticker = spawn_polecat_supervisor(polecat_supervisor);
 
+    // hq-mc72.12 C10 — dog control. Watches a gt-channel for spawn/stop of named `hq-dog-<name>`
+    // sessions and tracks them as `role=dog` sessions via the agent relay. Operator-driven
+    // (gt-cli `gt emit-event`); same supervised channel shape as warrant/estop.
+    let dog_task = spawn_dog_daemon(&root);
+
     eprintln!(
         "[gt] composition root up — event log: {}",
         root.log_path().display()
@@ -280,6 +288,11 @@ async fn run<R, MR, PR, OR>(
     // bin is going down, not the town.
     polecat_ticker.abort();
     let _ = polecat_ticker.await;
+    // Dog control channel watcher: abort it; live dog sessions keep running.
+    if let Some(task) = dog_task {
+        task.abort();
+        let _ = task.await;
+    }
     if let Some(pipeline) = pipeline {
         pipeline.shutdown_graceful().await;
     }
@@ -525,6 +538,122 @@ where
             }
         };
         gt_polecat::supervise_daemon("estop", make, &mut tracker, u32::MAX, now_secs).await;
+    }))
+}
+
+/// JSON shape an operator emits on the `dog` channel (hq-mc72.12 C10). `action` is `spawn`
+/// or `stop`; `name` keys the `hq-dog-<name>` town session.
+#[derive(Debug, Deserialize)]
+struct DogRequest {
+    name: String,
+    action: String,
+}
+
+/// Spawn the supervised dog-control daemon (hq-mc72.12 C10). Watches `GT_DOG_CHANNEL`
+/// (default `dog`) under `GT_CHANNEL_ROOT`. `spawn` creates a detached `hq-dog-<name>` tmux
+/// session (a town-level supervisory agent, `GT_ROLE=dog`) and tracks it via the agent relay
+/// as a `role=dog` session; `stop` kills the session and emits `SessionEnd`. Operator-driven
+/// (gt-cli `gt emit-event`); malformed / unknown-action messages are acked + logged.
+fn spawn_dog_daemon<R>(root: &RootHandle<R>) -> Option<tokio::task::JoinHandle<()>>
+where
+    R: BeadRepository + Clone + 'static,
+{
+    let root_dir =
+        std::env::var("GT_CHANNEL_ROOT").unwrap_or_else(|_| "/gt/.channels".to_string());
+    let channel_name = std::env::var("GT_DOG_CHANNEL").unwrap_or_else(|_| "dog".to_string());
+    let channel = match gt_channel::Channel::open(&root_dir, &channel_name) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "[gt] dog control disabled — channel open failed at {root_dir}/{channel_name}: {e}"
+            );
+            return None;
+        }
+    };
+    eprintln!("[gt] dog control: operator channel {}", channel.dir().display());
+
+    let workdir = std::env::var("GT_RIG_PATH").unwrap_or_else(|_| "/gt".to_string());
+    let command = std::env::var("GT_POLECAT_CMD").unwrap_or_else(|_| "claude".to_string());
+    let agent_events = root.agent_events.clone();
+    Some(tokio::spawn(async move {
+        let mut tracker = gt_polecat::RestartTracker::new(gt_polecat::RestartConfig::default());
+        let make = move || {
+            let channel = channel.clone();
+            let agent_events = agent_events.clone();
+            let workdir = workdir.clone();
+            let command = command.clone();
+            async move {
+                let tmux = TmuxCli::new();
+                let mut rx = match channel.subscribe(64) {
+                    Ok(rx) => rx,
+                    Err(e) => {
+                        eprintln!("[gt] dog subscribe failed: {e} — supervisor will restart");
+                        return;
+                    }
+                };
+                while let Some(msg) = rx.recv().await {
+                    match serde_json::from_slice::<DogRequest>(&msg.payload) {
+                        Ok(req) => {
+                            let session = format!("hq-dog-{}", req.name);
+                            match req.action.as_str() {
+                                "spawn" => {
+                                    let spec = SpawnSpec {
+                                        session: session.clone(),
+                                        rig: "hq".to_string(),
+                                        polecat: req.name.clone(),
+                                        crew: None,
+                                        workdir: std::path::PathBuf::from(&workdir),
+                                        command: command.clone(),
+                                        args: Vec::new(),
+                                        env: vec![
+                                            ("GT_ROLE".to_string(), "dog".to_string()),
+                                            ("GT_DOG_NAME".to_string(), req.name.clone()),
+                                        ],
+                                        hook_bead: None,
+                                        issue: None,
+                                        heartbeat: std::env::temp_dir()
+                                            .join(format!("{session}.heartbeat")),
+                                    };
+                                    match spawn_tmux(&tmux, &spec) {
+                                        Ok(()) => {
+                                            let _ = agent_events
+                                                .send(Envelope::root(AgentEvent::Spawned {
+                                                    session: session.clone(),
+                                                    rig: "hq".to_string(),
+                                                    role: SessionRole::Dog(DogKind::Dog),
+                                                    crew: None,
+                                                }))
+                                                .await;
+                                            eprintln!("[gt] dog spawned session={session}");
+                                        }
+                                        Err(e) => eprintln!(
+                                            "[gt] dog spawn failed session={session}: {e}"
+                                        ),
+                                    }
+                                }
+                                "stop" => {
+                                    let _ = tmux.kill_session(&session);
+                                    let _ = agent_events
+                                        .send(Envelope::root(AgentEvent::SessionEnd {
+                                            session: session.clone(),
+                                        }))
+                                        .await;
+                                    eprintln!("[gt] dog stopped session={session}");
+                                }
+                                other => eprintln!(
+                                    "[gt] dog unknown action={other} (ack + drop)"
+                                ),
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[gt] dog malformed payload (ack + drop): {e}")
+                        }
+                    }
+                    let _ = channel.ack(&msg);
+                }
+            }
+        };
+        gt_polecat::supervise_daemon("dog", make, &mut tracker, u32::MAX, now_secs).await;
     }))
 }
 
