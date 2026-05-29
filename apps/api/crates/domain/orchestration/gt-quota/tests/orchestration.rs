@@ -276,3 +276,32 @@ async fn fresh_window_after_reset_allows_another_prediction() {
     let (_, predictions_total) = handle.snapshot().await;
     assert_eq!(predictions_total, 2, "one prediction per window");
 }
+
+#[tokio::test]
+async fn remove_account_drops_from_registry_and_is_idempotent() {
+    let (ev_tx, mut ev_rx) = mpsc::channel::<Envelope<QuotaEvent>>(16);
+    let handle = quota::spawn(ev_tx, HashMap::new());
+
+    handle.upsert_account(account_with_window()).await;
+    let accounts_before = handle.accounts().await;
+    assert_eq!(accounts_before.len(), 1, "upsert seeded the account");
+
+    // First remove: id existed → true.
+    assert!(handle.remove_account("acc-1").await, "registered account must be removed");
+
+    // Registry is now empty.
+    let accounts_after = handle.accounts().await;
+    assert!(accounts_after.is_empty(), "registry must be empty after remove");
+
+    // Second remove of the same id (idempotent): false, no panic.
+    assert!(
+        !handle.remove_account("acc-1").await,
+        "removing an absent id must return false (idempotent)"
+    );
+
+    // Edge op: no domain event is produced.
+    assert!(
+        ev_rx.try_recv().is_err(),
+        "remove_account must not emit a domain event"
+    );
+}

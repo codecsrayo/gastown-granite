@@ -129,6 +129,14 @@ impl AccountRegistry {
         self.accounts.insert(account.id.clone(), account);
     }
 
+    /// Symmetric to [`Self::upsert_account`]: drop an account from the registry. Returns
+    /// `true` if an account with `id` existed and was removed, `false` if it was not present.
+    /// Like upsert, this is an **edge** mutation — no domain event is produced; predictions and
+    /// rate EWMA naturally stop firing for the id because no more samples reach it.
+    pub fn remove_account(&mut self, id: &str) -> bool {
+        self.accounts.remove(id).is_some()
+    }
+
     pub fn get(&self, id: &str) -> Option<&Account> {
         self.accounts.get(id)
     }

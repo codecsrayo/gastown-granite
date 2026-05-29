@@ -23,6 +23,12 @@ pub enum QuotaMsg {
     UpsertAccount {
         account: Account,
     },
+    /// Drop an account from the registry (symmetric to `UpsertAccount`; an edge op, no event).
+    /// Replies `true` if the id existed and was removed, `false` otherwise.
+    RemoveAccount {
+        account_id: String,
+        reply: oneshot::Sender<bool>,
+    },
     /// A model response: feeds the account consumption and the per-session rate.
     Sample {
         account: String,
@@ -93,6 +99,24 @@ pub struct QuotaHandle {
 impl QuotaHandle {
     pub async fn upsert_account(&self, account: Account) {
         let _ = self.tx.send(QuotaMsg::UpsertAccount { account }).await;
+    }
+
+    /// Symmetric to [`Self::upsert_account`]. Returns `true` if an account with `id` was
+    /// removed, `false` otherwise (including when the actor has shut down).
+    pub async fn remove_account(&self, account_id: impl Into<String>) -> bool {
+        let (reply, rx) = oneshot::channel();
+        if self
+            .tx
+            .send(QuotaMsg::RemoveAccount {
+                account_id: account_id.into(),
+                reply,
+            })
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        rx.await.unwrap_or(false)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -282,6 +306,10 @@ pub fn spawn_hydrated(
             match msg {
                 QuotaMsg::UpsertAccount { account } => {
                     registry.upsert_account(account);
+                }
+                QuotaMsg::RemoveAccount { account_id, reply } => {
+                    let removed = registry.remove_account(&account_id);
+                    let _ = reply.send(removed);
                 }
                 QuotaMsg::Sample {
                     account,

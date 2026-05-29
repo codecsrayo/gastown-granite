@@ -24,7 +24,7 @@ use gt_events::Envelope;
 use gt_mcp::{
     audit::{AuditEvent, AuditSink, InMemoryAudit, Outcome},
     auth::Scope,
-    CreateBead, McpService, RegisterAccount, SessionsRead,
+    CreateBead, McpService, RegisterAccount, RetireAccount, SessionsRead,
 };
 use gt_quota::actor::{self as quota_actor, QuotaHandle};
 use gt_scheduling::actor::{self as sched_actor, SchedHandle};
@@ -258,3 +258,82 @@ async fn quota_register_makes_account_visible() {
     );
 }
 
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn quota_retire_drops_account_and_is_idempotent() {
+    let repo = Arc::new(InMemoryBeads::default());
+    let (sched_tx, _sched_rx) = mpsc::channel::<Envelope<SchedEvent>>(16);
+    let sched = sched_actor::spawn(repo, sched_tx, 1);
+    let audit = Arc::new(InMemoryAudit::new());
+    let (svc, _agent_rx, quota) = service(
+        sched,
+        Scope::admin("max"),
+        Arc::clone(&audit) as Arc<dyn AuditSink>,
+    );
+
+    // Seed an account so retire has something to drop.
+    svc.run_quota_register(
+        "quota.register.execute",
+        RegisterAccount {
+            account: "acct-1".into(),
+            limit: 1000,
+            started_at_secs: 1000,
+            resets_at_secs: 19000,
+            weekly: false,
+        },
+        false,
+    )
+    .await
+    .expect("seed register");
+    let (before, _) = quota.snapshot().await;
+    assert_eq!(before, 1);
+
+    // validate-only never touches the registry.
+    svc.run_quota_retire(
+        "quota.retire.validate",
+        RetireAccount { account: "acct-1".into() },
+        true,
+    )
+    .await
+    .expect("validate ok");
+    let (still_there, _) = quota.snapshot().await;
+    assert_eq!(still_there, 1, "validate-only must not remove");
+
+    // First execute drops the account.
+    svc.run_quota_retire(
+        "quota.retire.execute",
+        RetireAccount { account: "acct-1".into() },
+        false,
+    )
+    .await
+    .expect("retire execute");
+    let (after, _) = quota.snapshot().await;
+    assert_eq!(after, 0, "execute must remove the account");
+
+    // Idempotent: retiring an absent id still succeeds (audited Ok), no panic.
+    svc.run_quota_retire(
+        "quota.retire.execute",
+        RetireAccount { account: "acct-1".into() },
+        false,
+    )
+    .await
+    .expect("idempotent retire");
+
+    // Bad input is rejected.
+    let bad = svc
+        .run_quota_retire(
+            "quota.retire.execute",
+            RetireAccount { account: "".into() },
+            false,
+        )
+        .await;
+    assert!(bad.is_err(), "empty account id must fail");
+    assert!(
+        audit.snapshot().iter().any(|e| matches!(
+            e,
+            AuditEvent::Invoked { tool, outcome: Outcome::Failed { .. }, .. }
+                if tool == "quota.retire.execute"
+        )),
+        "the rejected retire must be audited as a failed invocation",
+    );
+}

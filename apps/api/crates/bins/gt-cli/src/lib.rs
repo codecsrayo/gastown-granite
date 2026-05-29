@@ -1649,12 +1649,16 @@ async fn run_account(action: AccountAction) -> Result<i32> {
             ];
             run_passthrough("gt-mcp-cli", &call).await
         }
-        AccountAction::Retire { account } => Ok(blocked(
-            &format!("account retire {account}"),
-            "`gt-quota::remove_account` + a new `quota.retire` MCP tool (both outside the \
-             PISTA-B crate set `bins/gt-cli` + `bins/gt-mcp` + `deploy/`); track via a \
-             follow-up bead under hq-mc72.12",
-        )),
+        AccountAction::Retire { account } => {
+            let payload = serde_json::json!({ "account": account });
+            let call = vec![
+                "call".to_string(),
+                "quota.retire.execute".to_string(),
+                "--json".to_string(),
+                serde_json::to_string(&payload).expect("RetireAccount payload serializes"),
+            ];
+            run_passthrough("gt-mcp-cli", &call).await
+        }
     }
 }
 
@@ -1722,11 +1726,6 @@ async fn run_passthrough(bin: &str, args: &[String]) -> Result<i32> {
         .await
         .with_context(|| format!("failed to spawn `{bin}` (is it on PATH?)"))?;
     Ok(status.code().unwrap_or(1))
-}
-
-fn blocked(cmd: &str, reason: &str) -> i32 {
-    eprintln!("gt {cmd}: not yet ported to Rust — blocked by {reason}.");
-    2
 }
 
 fn print_json<T: serde::Serialize>(rows: &T) -> Result<()> {

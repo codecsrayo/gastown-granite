@@ -134,6 +134,25 @@ impl RegisterAccount {
     }
 }
 
+/// Input for the `quota.retire` tool (hq-mc72.12.25). Symmetric edge op to
+/// [`RegisterAccount`]: removes an account from the registry. Like register, it is **not** a
+/// `QuotaCommand` — there is no domain event. The predictive machinery (per-account rate EWMA,
+/// remaining-window probes) naturally goes quiet for the id once no more samples reach it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct RetireAccount {
+    /// Account id to drop from the registry. Must be non-empty.
+    pub account: String,
+}
+
+impl RetireAccount {
+    fn validate(&self) -> Result<(), AppError> {
+        if self.account.is_empty() {
+            return Err(AppError::Validation("account is empty".into()));
+        }
+        Ok(())
+    }
+}
+
 /// Input for the `scheduling.create_bead` tool (hq-mc72.10). Mints a `pending` bead in the
 /// repo so the dispatcher's CAS-claim has work to find — closing the loop the MCP surface
 /// otherwise couldn't drive (`scheduling.enqueue` dispatches nothing if no `pending` bead
@@ -1119,6 +1138,79 @@ impl McpService {
         Parameters(args): Parameters<RegisterAccount>,
     ) -> Result<CallToolResult, McpError> {
         self.run_quota_register("quota.register.execute", args, false).await
+    }
+
+    /// Scope check + (validate | remove) + audit for `quota.retire` (hq-mc72.12.25). Symmetric
+    /// to [`McpService::run_quota_register`]: drops an account from the registry. Returns
+    /// `removed=true` only when an account with the id existed; an id that was not present is
+    /// treated as success (`removed=false`) so retire is idempotent.
+    pub async fn run_quota_retire(
+        &self,
+        tool: &str,
+        args: RetireAccount,
+        validate_only: bool,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let json = serde_json::to_value(&args).expect("RetireAccount is Serialize");
+        let validate_result = args.validate();
+        let removed = if validate_result.is_ok() && !validate_only {
+            self.inner.quota.remove_account(args.account.clone()).await
+        } else {
+            false
+        };
+
+        let outcome = match &validate_result {
+            Ok(()) => Outcome::Ok,
+            Err(e) => Outcome::Failed { error: e.to_string() },
+        };
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments: json,
+            outcome,
+        });
+
+        match validate_result {
+            Ok(()) => {
+                let text = if validate_only {
+                    "ok".to_string()
+                } else {
+                    format!("removed={removed}")
+                };
+                Ok(CallToolResult::success(vec![Content::text(text)]))
+            }
+            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "quota.retire.validate",
+        description = "Check whether retiring a quota account would be accepted (non-empty id). No state change."
+    )]
+    async fn quota_retire_validate(
+        &self,
+        Parameters(args): Parameters<RetireAccount>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_quota_retire("quota.retire.validate", args, true).await
+    }
+
+    #[tool(
+        name = "quota.retire.execute",
+        description = "Drop an account from the quota registry. Returns `removed=true` when the id existed, `removed=false` otherwise (idempotent). Not event-logged."
+    )]
+    async fn quota_retire_execute(
+        &self,
+        Parameters(args): Parameters<RetireAccount>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_quota_retire("quota.retire.execute", args, false).await
     }
 
     // --- read-side: domain snapshots exposed as MCP Resources (doc 09 row 1) ----------------
