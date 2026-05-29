@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -160,6 +161,58 @@ func computeQuotaSnapshot(townRoot string, now time.Time) (QuotaSummaryResponse,
 	return resp, nil
 }
 
+// Process-wide snapshot cache. computeQuotaSnapshot walks every account's
+// transcript tree on each call; with multiple dashboards connected, each SSE
+// stream ticking independently would trigger its own full walk, multiplying CPU
+// by the client count. Cache the result for one tick interval and collapse
+// concurrent recomputes through a single in-flight computation so the cost is
+// one walk per interval regardless of how many clients are streaming.
+var (
+	quotaSnapMu       sync.Mutex
+	quotaSnapTown     string
+	quotaSnapResp     QuotaSummaryResponse
+	quotaSnapErr      error
+	quotaSnapAt       time.Time
+	quotaSnapInflight *sync.WaitGroup
+)
+
+// cachedQuotaSnapshot returns a shared snapshot no older than ttl. Concurrent
+// callers that arrive during a recompute wait for the in-flight result instead
+// of launching their own walk. force=true invalidates the cache (used for
+// quota.json writes, where staleness would hide a just-completed rotation).
+// The cache is keyed by townRoot: a different town always recomputes.
+func cachedQuotaSnapshot(townRoot string, now time.Time, ttl time.Duration, force bool) (QuotaSummaryResponse, error) {
+	quotaSnapMu.Lock()
+	if !force && quotaSnapTown == townRoot && !quotaSnapAt.IsZero() && now.Sub(quotaSnapAt) < ttl {
+		resp, err := quotaSnapResp, quotaSnapErr
+		quotaSnapMu.Unlock()
+		return resp, err
+	}
+	if quotaSnapInflight != nil {
+		// A recompute is already running; wait for it rather than piling on.
+		wg := quotaSnapInflight
+		quotaSnapMu.Unlock()
+		wg.Wait()
+		quotaSnapMu.Lock()
+		resp, err := quotaSnapResp, quotaSnapErr
+		quotaSnapMu.Unlock()
+		return resp, err
+	}
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	quotaSnapInflight = wg
+	quotaSnapMu.Unlock()
+
+	resp, err := computeQuotaSnapshot(townRoot, now)
+
+	quotaSnapMu.Lock()
+	quotaSnapTown, quotaSnapResp, quotaSnapErr, quotaSnapAt = townRoot, resp, err, time.Now()
+	quotaSnapInflight = nil
+	quotaSnapMu.Unlock()
+	wg.Done()
+	return resp, err
+}
+
 // snapshotHash returns a content fingerprint of the snapshot that ignores
 // GeneratedAt — that field ticks every call and would defeat the dedupe.
 func snapshotHash(resp QuotaSummaryResponse) (string, []byte, error) {
@@ -220,7 +273,10 @@ func streamQuotaSnapshots(
 	var lastHash string
 
 	emit := func(reason string) {
-		resp, err := computeQuotaSnapshot(townRoot, time.Now())
+		// quota.json writes must bypass the cache so a rotation/status flip is
+		// reflected immediately; ticks share the cached walk across clients.
+		force := reason == "quota.json"
+		resp, err := cachedQuotaSnapshot(townRoot, time.Now(), tickEvery, force)
 		if err != nil {
 			log.Printf("quota stream: snapshot (%s): %v", reason, err)
 			return

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/steveyegge/gastown/internal/config"
@@ -465,18 +466,75 @@ func sumProjectWindows(claudeConfigRoot, workDir string, sessionStart, weekStart
 	return session, week, newestPath, newestMod, nil
 }
 
-// sumTranscriptPartitioned parses a Claude Code transcript JSONL and produces
-// four token totals: tokens before splitAt (pre) and at-or-after splitAt
-// (post), each split again into the session (5h) and week (7d) windows.
-//
-// splitAt = zero time routes every in-window token into the post bucket, so
-// callers that only want raw windowed totals can sum pre+post — and callers
-// that intend a swap partition but lack a recorded start time conservatively
-// treat all in-window history as post-split.
-func sumTranscriptPartitioned(path string, sessionStart, weekStart, splitAt time.Time) (preSess, preWeek, postSess, postWeek TokenCounts, err error) {
+// transcriptRecord is one assistant message's window-independent token usage:
+// its own timestamp plus the raw counts. Windowing is applied by callers at
+// summation time so a single parse serves every (sessionStart, weekStart,
+// splitAt) the dashboard ticks through.
+type transcriptRecord struct {
+	ts time.Time
+	c  TokenCounts
+}
+
+type transcriptCacheEntry struct {
+	size    int64
+	modTime time.Time
+	records []transcriptRecord
+}
+
+// maxTranscriptCacheEntries bounds the per-file record cache. The quota walk
+// only ever requests transcripts modified within the week window, so the live
+// working set is small; the cap is a backstop against unbounded growth over a
+// long-running dashboard. On overflow the cache is dropped wholesale (cheap,
+// rare) rather than maintaining LRU bookkeeping.
+const maxTranscriptCacheEntries = 8192
+
+var (
+	transcriptCacheMu sync.Mutex
+	transcriptCache   = map[string]transcriptCacheEntry{}
+)
+
+// loadTranscriptRecords returns the assistant token-usage records for a
+// transcript, parsing the file at most once per (size, modTime). Quota walks
+// re-run every few seconds across many unchanged historical transcripts;
+// without this memo each tick re-opened and re-parsed every JSONL line,
+// burning CPU proportional to total transcript bytes × connected clients.
+// A changed file (append/rotate flips size or modTime) misses and re-parses.
+func loadTranscriptRecords(path string) ([]transcriptRecord, error) {
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		return nil, statErr
+	}
+	size, mod := info.Size(), info.ModTime()
+
+	transcriptCacheMu.Lock()
+	if e, ok := transcriptCache[path]; ok && e.size == size && e.modTime.Equal(mod) {
+		recs := e.records
+		transcriptCacheMu.Unlock()
+		return recs, nil
+	}
+	transcriptCacheMu.Unlock()
+
+	recs, perr := parseTranscriptRecords(path)
+	if perr != nil {
+		return nil, perr
+	}
+
+	transcriptCacheMu.Lock()
+	if len(transcriptCache) >= maxTranscriptCacheEntries {
+		transcriptCache = make(map[string]transcriptCacheEntry, maxTranscriptCacheEntries)
+	}
+	transcriptCache[path] = transcriptCacheEntry{size: size, modTime: mod, records: recs}
+	transcriptCacheMu.Unlock()
+	return recs, nil
+}
+
+// parseTranscriptRecords scans a Claude Code transcript JSONL once and extracts
+// every assistant message that carries usage and a parseable timestamp. No time
+// filter is applied so the result is reusable across windows (see loadTranscriptRecords).
+func parseTranscriptRecords(path string) ([]transcriptRecord, error) {
 	f, ferr := os.Open(path) //nolint:gosec // G304: transcript path derived from local filesystem walk
 	if ferr != nil {
-		return preSess, preWeek, postSess, postWeek, ferr
+		return nil, ferr
 	}
 	defer func() { _ = f.Close() }()
 
@@ -484,11 +542,15 @@ func sumTranscriptPartitioned(path string, sessionStart, weekStart, splitAt time
 	buf := make([]byte, 0, 256*1024)
 	scanner.Buffer(buf, 4*1024*1024)
 
+	var recs []transcriptRecord
 	for scanner.Scan() {
 		raw := scanner.Bytes()
 		if len(raw) == 0 {
 			continue
 		}
+		// Declare per iteration: json.Unmarshal into a non-nil pointer field
+		// reuses the pointed-to struct, which would let cache token fields from
+		// the previous line bleed into a turn that omitted them.
 		var line struct {
 			Type      string `json:"type"`
 			Timestamp string `json:"timestamp"`
@@ -508,30 +570,54 @@ func sumTranscriptPartitioned(path string, sessionStart, weekStart, splitAt time
 			continue
 		}
 		ts, terr := time.Parse(time.RFC3339, line.Timestamp)
-		if terr != nil || ts.Before(weekStart) {
+		if terr != nil {
 			continue
 		}
 		u := line.Message.Usage
-		c := TokenCounts{
-			InputTokens:         int64(u.InputTokens),
-			OutputTokens:        int64(u.OutputTokens),
-			CacheReadTokens:     int64(u.CacheReadInputTokens),
-			CacheCreationTokens: int64(u.CacheCreationInputTokens),
+		recs = append(recs, transcriptRecord{
+			ts: ts,
+			c: TokenCounts{
+				InputTokens:         int64(u.InputTokens),
+				OutputTokens:        int64(u.OutputTokens),
+				CacheReadTokens:     int64(u.CacheReadInputTokens),
+				CacheCreationTokens: int64(u.CacheCreationInputTokens),
+			},
+		})
+	}
+	return recs, scanner.Err()
+}
+
+// sumTranscriptPartitioned produces four token totals: tokens before splitAt
+// (pre) and at-or-after splitAt (post), each split again into the session (5h)
+// and week (7d) windows.
+//
+// splitAt = zero time routes every in-window token into the post bucket, so
+// callers that only want raw windowed totals can sum pre+post — and callers
+// that intend a swap partition but lack a recorded start time conservatively
+// treat all in-window history as post-split.
+func sumTranscriptPartitioned(path string, sessionStart, weekStart, splitAt time.Time) (preSess, preWeek, postSess, postWeek TokenCounts, err error) {
+	recs, rerr := loadTranscriptRecords(path)
+	if rerr != nil {
+		return preSess, preWeek, postSess, postWeek, rerr
+	}
+	for _, r := range recs {
+		if r.ts.Before(weekStart) {
+			continue
 		}
-		post := splitAt.IsZero() || !ts.Before(splitAt)
+		post := splitAt.IsZero() || !r.ts.Before(splitAt)
 		if post {
-			postWeek.Add(c)
-			if !ts.Before(sessionStart) {
-				postSess.Add(c)
+			postWeek.Add(r.c)
+			if !r.ts.Before(sessionStart) {
+				postSess.Add(r.c)
 			}
 		} else {
-			preWeek.Add(c)
-			if !ts.Before(sessionStart) {
-				preSess.Add(c)
+			preWeek.Add(r.c)
+			if !r.ts.Before(sessionStart) {
+				preSess.Add(r.c)
 			}
 		}
 	}
-	return preSess, preWeek, postSess, postWeek, scanner.Err()
+	return preSess, preWeek, postSess, postWeek, nil
 }
 
 // sumTranscriptWindows parses a Claude Code transcript JSONL file and sums the
@@ -540,57 +626,18 @@ func sumTranscriptPartitioned(path string, sessionStart, weekStart, splitAt time
 // without a parseable RFC3339 timestamp are skipped — they can't be attributed
 // to a window.
 func sumTranscriptWindows(path string, sessionStart, weekStart time.Time) (session, week TokenCounts, err error) {
-	f, ferr := os.Open(path) //nolint:gosec // G304: transcript path derived from local filesystem walk
-	if ferr != nil {
-		return session, week, ferr
+	recs, rerr := loadTranscriptRecords(path)
+	if rerr != nil {
+		return session, week, rerr
 	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 0, 256*1024)
-	scanner.Buffer(buf, 4*1024*1024)
-
-	for scanner.Scan() {
-		raw := scanner.Bytes()
-		if len(raw) == 0 {
+	for _, r := range recs {
+		if r.ts.Before(weekStart) {
 			continue
 		}
-		// Declare per iteration: json.Unmarshal into a non-nil pointer field
-		// reuses the pointed-to struct, which would let cache token fields
-		// from the previous line bleed into a turn that omitted them.
-		var line struct {
-			Type      string `json:"type"`
-			Timestamp string `json:"timestamp"`
-			Message   struct {
-				Usage *struct {
-					InputTokens              int `json:"input_tokens"`
-					OutputTokens             int `json:"output_tokens"`
-					CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-				} `json:"usage,omitempty"`
-			} `json:"message,omitempty"`
-		}
-		if err := json.Unmarshal(raw, &line); err != nil {
-			continue
-		}
-		if line.Type != "assistant" || line.Message.Usage == nil {
-			continue
-		}
-		ts, terr := time.Parse(time.RFC3339, line.Timestamp)
-		if terr != nil || ts.Before(weekStart) {
-			continue
-		}
-		u := line.Message.Usage
-		c := TokenCounts{
-			InputTokens:         int64(u.InputTokens),
-			OutputTokens:        int64(u.OutputTokens),
-			CacheReadTokens:     int64(u.CacheReadInputTokens),
-			CacheCreationTokens: int64(u.CacheCreationInputTokens),
-		}
-		week.Add(c)
-		if !ts.Before(sessionStart) {
-			session.Add(c)
+		week.Add(r.c)
+		if !r.ts.Before(sessionStart) {
+			session.Add(r.c)
 		}
 	}
-	return session, week, scanner.Err()
+	return session, week, nil
 }
