@@ -34,7 +34,7 @@ use gt_agent::{
     TransitionSession,
 };
 use gt_beads::{Bead, BeadStatus};
-use gt_store_dolt::DoltSessions;
+use gt_store_dolt::{DoltIssues, DoltSessions, IssueFilter};
 use gt_merge::actor::MergeHandle;
 use gt_merge::{CompleteMerge, FailMerge, MergeCommand, SubmitMerge};
 use gt_orchestration::actor::OrchHandle;
@@ -78,6 +78,41 @@ impl SessionsRead {
                     Vec::new()
                 }
             },
+        }
+    }
+}
+
+/// Read-side backend for the `gt://issues` resource (hq-mcp-issues.1). Unlike
+/// [`SessionsRead`] there is no in-memory actor for the canonical `issues` table
+/// — it is owned by `bd` / Dolt and the MCP boundary only reads it. `None`
+/// means the gt-mcp boot did not get a Dolt URL (in-memory dev runs); the
+/// resource then returns an empty JSON array, matching the early-return shape
+/// `gt://rigs` uses before its actor is wired.
+#[derive(Clone, Default)]
+pub struct IssuesRead {
+    inner: Option<Arc<DoltIssues>>,
+}
+
+impl IssuesRead {
+    pub fn dolt(d: Arc<DoltIssues>) -> Self {
+        Self { inner: Some(d) }
+    }
+
+    pub fn none() -> Self {
+        Self { inner: None }
+    }
+
+    pub async fn snapshot(
+        &self,
+        filter: &IssueFilter,
+    ) -> Result<serde_json::Value, AppError> {
+        match &self.inner {
+            Some(d) => {
+                let rows = d.list(filter).await?;
+                serde_json::to_value(&rows)
+                    .map_err(|e| AppError::Other(format!("encode issues: {e}")))
+            }
+            None => Ok(serde_json::Value::Array(Vec::new())),
         }
     }
 }
@@ -193,6 +228,10 @@ pub struct McpService {
 struct Inner {
     agent: AgentHandle,
     sessions: SessionsRead,
+    /// Read-side for the `gt://issues` snapshot (hq-mcp-issues.1). Default is
+    /// the [`IssuesRead::none`] variant so the existing test ctors keep one
+    /// call; `with_issues` wires the Dolt-backed reader.
+    issues: IssuesRead,
     merge: MergeHandle,
     sched: SchedHandle,
     patrol: PatrolHandle,
@@ -231,6 +270,31 @@ impl McpService {
         )
     }
 
+    /// Builder-style setter for the Dolt-backed `gt://issues` snapshot
+    /// (hq-mcp-issues.1). Returns a fresh [`McpService`] sharing the same
+    /// actors/audit; the composition root chains this after
+    /// [`McpService::with_sessions`] when `GT_DOLT_URL` is set. Unset = empty
+    /// JSON array, matching the `gt://rigs` early-return shape.
+    pub fn with_issues(self, issues: IssuesRead) -> Self {
+        let prev = &*self.inner;
+        Self {
+            inner: Arc::new(Inner {
+                agent: prev.agent.clone(),
+                sessions: prev.sessions.clone(),
+                issues,
+                merge: prev.merge.clone(),
+                sched: prev.sched.clone(),
+                patrol: prev.patrol.clone(),
+                orch: prev.orch.clone(),
+                quota: prev.quota.clone(),
+                rig: prev.rig.clone(),
+                scope: prev.scope.clone(),
+                audit: prev.audit.clone(),
+                agent_events: prev.agent_events.clone(),
+            }),
+        }
+    }
+
     /// Same as [`McpService::new`] but lets the caller override the sessions read-side
     /// (Paso 6.h epic A, hq-u955) and supply the agent event relay (hq-mc72.10). `main.rs`
     /// passes [`SessionsRead::Dolt`] when `GT_DOLT_URL` is set and `Some(root.agent_events)`
@@ -256,6 +320,7 @@ impl McpService {
             inner: Arc::new(Inner {
                 agent,
                 sessions,
+                issues: IssuesRead::none(),
                 merge,
                 sched,
                 patrol,
@@ -282,6 +347,7 @@ impl McpService {
             inner: Arc::new(Inner {
                 agent: prev.agent.clone(),
                 sessions: prev.sessions.clone(),
+                issues: prev.issues.clone(),
                 merge: prev.merge.clone(),
                 sched: prev.sched.clone(),
                 patrol: prev.patrol.clone(),
@@ -1437,12 +1503,31 @@ impl McpService {
             mk("gt://orch/convoys", "orch.convoys", "Convoys, their state and per-member progress."),
             mk("gt://quota/accounts", "quota.accounts", "Tracked account count and predictions emitted."),
             mk("gt://rigs", "rigs", "Registered rigs in the catalog (name, prefix, git remotes, default branch)."),
+            mk(
+                "gt://issues",
+                "issues",
+                "Canonical issues snapshot from Dolt. Filters via querystring: status=open[,working], priority_max=2, assignee=X, external_ref=Y, issue_type=epic, limit=N.",
+            ),
         ]
     }
 
     /// Read one snapshot resource as JSON. Unknown uri → `NotFound`. Pure read: it only
     /// snapshots the shared actors, never mutates.
     pub async fn read_resource_json(&self, uri: &str) -> Result<serde_json::Value, AppError> {
+        // `gt://issues` is the only resource that consumes a querystring today
+        // (hq-mcp-issues.1). Split once on '?' so the other resource arms keep
+        // matching the exact-string URIs they already handle. The bare path and
+        // the `?...`-prefixed form both route here; anything else (e.g.
+        // `gt://issuesX`) falls through to the `NotFound` arm below.
+        let issues_match = match uri.strip_prefix("gt://issues") {
+            Some("") => Some(""),
+            Some(rest) if rest.starts_with('?') => Some(&rest[1..]),
+            _ => None,
+        };
+        if let Some(qs) = issues_match {
+            let filter = parse_issue_filter(qs)?;
+            return self.inner.issues.snapshot(&filter).await;
+        }
         match uri {
             "gt://agent/sessions" => {
                 let sessions = self.inner.sessions.snapshot().await;
@@ -1497,6 +1582,55 @@ impl McpService {
             other => Err(AppError::NotFound(format!("resource {other}"))),
         }
     }
+}
+
+/// Parse the optional `gt://issues?...` querystring into an [`IssueFilter`].
+/// Empty input → default filter (no `WHERE` clauses). Percent-decoding is not
+/// applied because every supported field carries ASCII tokens (status names,
+/// bead ids, ints); unknown keys are returned as `Validation` so the operator
+/// learns about typos instead of silently getting the unfiltered set.
+fn parse_issue_filter(qs: &str) -> Result<IssueFilter, AppError> {
+    let mut filter = IssueFilter::default();
+    if qs.is_empty() {
+        return Ok(filter);
+    }
+    for pair in qs.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (key, value) = match pair.split_once('=') {
+            Some(kv) => kv,
+            None => return Err(AppError::Validation(format!("missing `=` in `{pair}`"))),
+        };
+        match key {
+            "status" => {
+                filter.status = value
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect();
+            }
+            "priority_max" => {
+                filter.priority_max = Some(
+                    value
+                        .parse::<u8>()
+                        .map_err(|e| AppError::Validation(format!("priority_max: {e}")))?,
+                );
+            }
+            "assignee" => filter.assignee = Some(value.to_string()),
+            "external_ref" => filter.external_ref = Some(value.to_string()),
+            "issue_type" => filter.issue_type = Some(value.to_string()),
+            "limit" => {
+                filter.limit = Some(
+                    value
+                        .parse::<u32>()
+                        .map_err(|e| AppError::Validation(format!("limit: {e}")))?,
+                );
+            }
+            other => return Err(AppError::Validation(format!("unknown filter `{other}`"))),
+        }
+    }
+    Ok(filter)
 }
 
 /// The rmcp server handler. `#[tool_handler]` injects `call_tool`/`list_tools`/`get_tool`

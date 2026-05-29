@@ -17,12 +17,12 @@ use gt_merge::InMemoryMergeRepo;
 use gt_orchestration::InMemoryOrchRepo;
 use gt_patrol::InMemoryPatrolRepo;
 use gt_root::{spawn, LogEffects, RootConfig, RootHandle, SystemClock};
-use gt_store_dolt::{DoltBeads, DoltMerge, DoltOrch, DoltPatrol, DoltSessions};
+use gt_store_dolt::{DoltBeads, DoltIssues, DoltMerge, DoltOrch, DoltPatrol, DoltSessions};
 use gt_store_pg::PgAudit;
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 
 use gt_mcp::{
-    audit::AuditSink, auth::Scope, JsonlAudit, McpService, ScopeConfig, SessionsRead,
+    audit::AuditSink, auth::Scope, IssuesRead, JsonlAudit, McpService, ScopeConfig, SessionsRead,
 };
 
 #[tokio::main]
@@ -46,10 +46,16 @@ async fn main() -> anyhow::Result<()> {
             dolt_patrol.ensure_schema().await?;
             let dolt_orch = DoltOrch::connect(&url)?;
             dolt_orch.ensure_schema().await?;
-            eprintln!("[gt-mcp] beads + sessions + merge/patrol/orch: Dolt @ {url}");
+            // hq-mcp-issues.1 — probe the canonical `issues` table so the
+            // `gt://issues` resource has a backend. Schema is owned by `bd`,
+            // so this is a presence check, not a CREATE.
+            let dolt_issues = DoltIssues::connect(&url)?;
+            dolt_issues.ensure_schema().await?;
+            eprintln!("[gt-mcp] beads + sessions + merge/patrol/orch + issues: Dolt @ {url}");
             serve(
                 Arc::new(dolt),
                 Some(Arc::new(dolt_sessions)),
+                Some(Arc::new(dolt_issues)),
                 Arc::new(dolt_merge),
                 Arc::new(dolt_patrol),
                 Arc::new(dolt_orch),
@@ -64,6 +70,7 @@ async fn main() -> anyhow::Result<()> {
             serve(
                 Arc::new(InMemoryBeads::default()),
                 None,
+                None,
                 Arc::new(InMemoryMergeRepo::default()),
                 Arc::new(InMemoryPatrolRepo::default()),
                 Arc::new(InMemoryOrchRepo::default()),
@@ -77,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
 async fn serve<R, MR, PR, OR>(
     beads: Arc<R>,
     dolt_sessions: Option<Arc<DoltSessions>>,
+    dolt_issues: Option<Arc<DoltIssues>>,
     merge_repo: Arc<MR>,
     patrol_repo: Arc<PR>,
     orch_repo: Arc<OR>,
@@ -152,6 +160,15 @@ where
     // drive the same catalog actor the root persists — its `RigEvent`s land in the shared log
     // and stream out over SSE like every other domain.
     let service = service.with_rig(root.rig.clone());
+
+    // hq-mcp-issues.1 — wire the canonical issues snapshot when Dolt is
+    // configured. Without `GT_DOLT_URL` the reader stays `none` and the
+    // `gt://issues` resource returns `[]`, matching the `gt://rigs` shape.
+    let issues = match dolt_issues {
+        Some(d) => IssuesRead::dolt(d),
+        None => IssuesRead::none(),
+    };
+    let service = service.with_issues(issues);
 
     // Transport selection (Paso 6.f.12). `GT_MCP_TRANSPORT=http` serves the streamable-HTTP
     // transport (bind via `GT_MCP_HTTP_BIND`); anything else keeps the default stdio transport.

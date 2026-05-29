@@ -52,12 +52,49 @@ async fn resource_catalog_lists_every_domain_snapshot() {
             // (the unwired default), so read_resource_json("gt://rigs") returns an empty
             // array — still readable, which the loop below asserts.
             "gt://rigs",
+            // hq-mcp-issues.1: canonical issues snapshot. `full_service` builds
+            // with the `IssuesRead::none` default, so the resource returns an
+            // empty array — still readable, which the loop below asserts.
+            "gt://issues",
         ],
     );
     // Every catalog entry must be readable.
     for uri in &uris {
         svc.read_resource_json(uri).await.unwrap_or_else(|e| panic!("read {uri}: {e}"));
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issues_resource_defaults_to_empty_without_dolt() {
+    let svc = full_service(Scope::admin("max"));
+    let bare = svc.read_resource_json("gt://issues").await.unwrap();
+    assert_eq!(bare, json!([]), "unwired backend returns empty array");
+    let filtered = svc
+        .read_resource_json("gt://issues?status=open&priority_max=1")
+        .await
+        .unwrap();
+    assert_eq!(filtered, json!([]), "filter parse succeeds without backend");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issues_resource_rejects_unknown_filter_key() {
+    let svc = full_service(Scope::admin("max"));
+    let err = svc
+        .read_resource_json("gt://issues?bogus=1")
+        .await
+        .expect_err("unknown key must error");
+    let msg = err.to_string();
+    assert!(msg.contains("bogus"), "error mentions the offending key: {msg}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issues_resource_rejects_malformed_pair() {
+    let svc = full_service(Scope::admin("max"));
+    let err = svc
+        .read_resource_json("gt://issues?status")
+        .await
+        .expect_err("missing `=` must error");
+    assert!(err.to_string().contains("="));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

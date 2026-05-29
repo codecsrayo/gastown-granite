@@ -16,7 +16,11 @@ el protocolo MCP (rmcp) en vez de HTTP-REST.
   `agent.*`, `merge.*`, `orch.launch_convoy.*`, `patrol.*`, `quota.probe.*`, `rig.*`.
   `*.validate` = dry-run (sin cambio de estado); `*.execute` = muta vía el actor.
 - **Resources** — snapshots `gt://*`: `agent/sessions`, `scheduling/queue`, `patrol/leases`,
-  `merge/slots`, `orch/convoys`, `quota/accounts`, `rigs`.
+  `merge/slots`, `orch/convoys`, `quota/accounts`, `rigs`, `issues`.
+- **`gt://issues`** (hq-mcp-issues.1) acepta filtros via querystring:
+  `gt://issues?status=open,working&priority_max=1&assignee=alice&external_ref=hq-root&issue_type=epic&limit=50`.
+  Sin querystring devuelve los últimos 200 (orden por `updated_at DESC`). Backend = Dolt
+  `hq.issues`; sin `GT_DOLT_URL` (stdio dev) devuelve `[]`.
 
 ## Scope (autorización)
 

@@ -13,6 +13,7 @@ gt-patrol = { path = "../../domain/orchestration/gt-patrol" }
 gt-orchestration = { path = "../../domain/orchestration/gt-orchestration" }
 gt-wisp = { path = "../../domain/platform/gt-wisp" }
 mysql_async = { workspace = true }
+serde.workspace = true
 time.workspace = true
 
 [dev-dependencies]
