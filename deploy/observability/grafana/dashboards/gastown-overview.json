@@ -200,7 +200,147 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT seq, event_id, kind, ts, extract(epoch FROM now() - ts)::int AS age_s FROM outbox_events WHERE drained_at IS NULL ORDER BY seq ASC LIMIT 50;"
+          "rawSql": "SELECT seq, event_id, kind, ts, attempts, last_attempt_at, last_error, extract(epoch FROM now() - ts)::int AS age_s FROM outbox_events WHERE drained_at IS NULL ORDER BY seq ASC LIMIT 50;"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "rows with last_error (failing)",
+      "datasource": { "type": "postgres", "uid": "pg-gastown" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 28 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT count(*) AS value FROM outbox_events WHERE drained_at IS NULL AND last_error IS NOT NULL;"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "rows with retries (attempts > 1)",
+      "datasource": { "type": "postgres", "uid": "pg-gastown" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 28 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT count(*) AS value FROM outbox_events WHERE attempts > 1;"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "p95 drain latency (s, last 1h)",
+      "datasource": { "type": "postgres", "uid": "pg-gastown" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 28 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY drain_latency_s), 0) AS value FROM v_event_lifecycle WHERE drained_at > now() - interval '1 hour' AND drain_latency_s IS NOT NULL;"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "max attempts (any row)",
+      "datasource": { "type": "postgres", "uid": "pg-gastown" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 28 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT coalesce(max(attempts), 0) AS value FROM outbox_events;"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "id": 16,
+      "type": "table",
+      "title": "Top last_error messages (failing rows)",
+      "datasource": { "type": "postgres", "uid": "pg-gastown" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT substring(last_error, 1, 200) AS error, count(*) AS rows, max(attempts) AS max_attempts FROM outbox_events WHERE drained_at IS NULL AND last_error IS NOT NULL GROUP BY 1 ORDER BY rows DESC LIMIT 20;"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "drain latency distribution (s, per minute)",
+      "datasource": { "type": "postgres", "uid": "pg-gastown" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT date_trunc('minute', drained_at) AS time, 'p50' AS metric, percentile_cont(0.5) WITHIN GROUP (ORDER BY drain_latency_s) AS value FROM v_event_lifecycle WHERE $__timeFilter(drained_at) AND drain_latency_s IS NOT NULL GROUP BY 1 UNION ALL SELECT date_trunc('minute', drained_at), 'p95', percentile_cont(0.95) WITHIN GROUP (ORDER BY drain_latency_s) FROM v_event_lifecycle WHERE $__timeFilter(drained_at) AND drain_latency_s IS NOT NULL GROUP BY 1 ORDER BY 1;"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "table",
+      "title": "Event lifecycle (recent, all stages)",
+      "datasource": { "type": "postgres", "uid": "pg-gastown" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 40 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT event_id, kind, enqueued_at, drained_at, audit_inserted_at, feed_updated_at, attempts, last_error, round(drain_latency_s::numeric, 3) AS drain_s, round(age_s::numeric, 0) AS age_s FROM v_event_lifecycle ORDER BY enqueued_at DESC LIMIT 100;"
         }
       ]
     }

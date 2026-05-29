@@ -200,7 +200,44 @@ impl PgOutboxDrain {
     }
 
     async fn drain_one(&self) -> Result<bool, AppError> {
-        let mut tx: Transaction<'_, Postgres> = self.pool.begin().await.map_err(map_err)?;
+        // Capture seq up-front so a mid-drain failure can still tag the row with
+        // `attempts++` + `last_error` in a separate transaction after the main one rolls
+        // back. The main tx holds `FOR UPDATE SKIP LOCKED` so a concurrent worker cannot
+        // race in for the same row while we're inside it.
+        let claim = self.attempt_drain().await;
+        match claim {
+            Ok(None) => Ok(false),
+            Ok(Some(())) => Ok(true),
+            Err(DrainErr::Empty) => Ok(false),
+            Err(DrainErr::Failed { seq, source }) => {
+                // Best-effort failure telemetry: bump attempts + record the truncated
+                // error message on a fresh connection. A race window opens here (another
+                // worker can claim `seq` between rollback and this UPDATE); we accept
+                // that — their success will reset `last_error` to NULL via the happy
+                // path, which is the correct semantic.
+                let msg: String = source.to_string().chars().take(2000).collect();
+                let _ = sqlx::query(
+                    "UPDATE outbox_events
+                       SET attempts = attempts + 1,
+                           last_attempt_at = now(),
+                           last_error = $1
+                     WHERE seq = $2",
+                )
+                .bind(&msg)
+                .bind(seq)
+                .execute(&self.pool)
+                .await;
+                Err(source)
+            }
+        }
+    }
+
+    async fn attempt_drain(&self) -> Result<Option<()>, DrainErr> {
+        let mut tx: Transaction<'_, Postgres> = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| DrainErr::no_seq(map_err(e)))?;
         let row = sqlx::query(
             "SELECT seq, event_id, correlation_id, causation_id, ts, kind, payload::text AS payload
              FROM outbox_events
@@ -211,25 +248,39 @@ impl PgOutboxDrain {
         )
         .fetch_optional(&mut *tx)
         .await
-        .map_err(map_err)?;
+        .map_err(|e| DrainErr::no_seq(map_err(e)))?;
 
         let Some(row) = row else {
-            tx.rollback().await.map_err(map_err)?;
-            return Ok(false);
+            tx.rollback()
+                .await
+                .map_err(|e| DrainErr::no_seq(map_err(e)))?;
+            return Err(DrainErr::Empty);
         };
 
-        let seq: i64 = row.try_get("seq").map_err(map_err)?;
-        let event_id: String = row.try_get("event_id").map_err(map_err)?;
-        let correlation_id: String = row.try_get("correlation_id").map_err(map_err)?;
-        let causation_id: Option<String> = row.try_get("causation_id").map_err(map_err)?;
-        let ts: OffsetDateTime = row.try_get("ts").map_err(map_err)?;
+        let seq: i64 = row
+            .try_get("seq")
+            .map_err(|e| DrainErr::no_seq(map_err(e)))?;
+        // From here on, the seq is known: every error gets tagged with it so the
+        // post-rollback bookkeeping can find the right row.
+        let event_id: String = row.try_get("event_id").map_err(|e| DrainErr::tagged(seq, map_err(e)))?;
+        let correlation_id: String = row
+            .try_get("correlation_id")
+            .map_err(|e| DrainErr::tagged(seq, map_err(e)))?;
+        let causation_id: Option<String> = row
+            .try_get("causation_id")
+            .map_err(|e| DrainErr::tagged(seq, map_err(e)))?;
+        let ts: OffsetDateTime = row.try_get("ts").map_err(|e| DrainErr::tagged(seq, map_err(e)))?;
         let ts_str = ts
             .format(&Rfc3339)
-            .map_err(|e| AppError::Other(format!("ts format: {e}")))?;
-        let kind: String = row.try_get("kind").map_err(map_err)?;
-        let payload_text: String = row.try_get("payload").map_err(map_err)?;
+            .map_err(|e| DrainErr::tagged(seq, AppError::Other(format!("ts format: {e}"))))?;
+        let kind: String = row
+            .try_get("kind")
+            .map_err(|e| DrainErr::tagged(seq, map_err(e)))?;
+        let payload_text: String = row
+            .try_get("payload")
+            .map_err(|e| DrainErr::tagged(seq, map_err(e)))?;
         let payload: serde_json::Value = serde_json::from_str(&payload_text)
-            .map_err(|e| AppError::Other(format!("payload decode: {e}")))?;
+            .map_err(|e| DrainErr::tagged(seq, AppError::Other(format!("payload decode: {e}"))))?;
 
         // 1) Canonical audit append. Idempotent on event_id.
         sqlx::query(
@@ -246,7 +297,7 @@ impl PgOutboxDrain {
         .bind(&payload)
         .execute(&mut *tx)
         .await
-        .map_err(map_err)?;
+        .map_err(|e| DrainErr::tagged(seq, map_err(e)))?;
 
         // 2) Feed projection upserts derived from this event.
         let rec = EventRecord {
@@ -257,17 +308,47 @@ impl PgOutboxDrain {
             kind: kind.clone(),
             payload,
         };
-        apply_projection(&mut tx, &rec).await?;
-
-        // 3) Mark drained.
-        sqlx::query("UPDATE outbox_events SET drained_at = now() WHERE seq = $1")
-            .bind(seq)
-            .execute(&mut *tx)
+        apply_projection(&mut tx, &rec)
             .await
-            .map_err(map_err)?;
+            .map_err(|e| DrainErr::tagged(seq, e))?;
 
-        tx.commit().await.map_err(map_err)?;
-        Ok(true)
+        // 3) Mark drained + bump attempts + clear any prior last_error. Same tx as the
+        // audit/projection writes so the row only transitions to "drained" if everything
+        // committed atomically.
+        sqlx::query(
+            "UPDATE outbox_events
+               SET drained_at = now(),
+                   attempts = attempts + 1,
+                   last_attempt_at = now(),
+                   last_error = NULL
+             WHERE seq = $1",
+        )
+        .bind(seq)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| DrainErr::tagged(seq, map_err(e)))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| DrainErr::tagged(seq, map_err(e)))?;
+        Ok(Some(()))
+    }
+}
+
+/// Internal: carries the row's `seq` alongside the underlying error so the wrapper can
+/// record `last_error` in a follow-up tx after the main one rolls back. `Empty` lets the
+/// caller distinguish "no work" from a real failure without forcing it into the seq path.
+enum DrainErr {
+    Empty,
+    Failed { seq: i64, source: AppError },
+}
+
+impl DrainErr {
+    fn no_seq(source: AppError) -> Self {
+        DrainErr::Failed { seq: -1, source }
+    }
+    fn tagged(seq: i64, source: AppError) -> Self {
+        DrainErr::Failed { seq, source }
     }
 }
 

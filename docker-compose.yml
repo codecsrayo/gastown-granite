@@ -67,6 +67,8 @@ services:
       GT_PG_AUDIT_URL: postgres://gastown:gastown@postgres:5432/gastown
       GT_EVENT_LOG: /var/lib/gastown/events.jsonl
       RUST_LOG: ${RUST_LOG:-info}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4318/v1/traces}
+      OTEL_SERVICE_NAME: gt-api
     volumes:
       - gt-eventlog:/var/lib/gastown
     expose:
@@ -116,6 +118,8 @@ services:
       GT_BIN: /usr/local/bin/gt-rs
       GT_POLECAT_CMD: ${GT_POLECAT_CMD:-claude}
       RUST_LOG: ${RUST_LOG:-info}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4318/v1/traces}
+      OTEL_SERVICE_NAME: gt
     volumes:
       - ${FOLDER:-/home/nixos/gastown}:/gt
       - agent-home:/home/agent
@@ -147,6 +151,8 @@ services:
       GT_MCP_ACTOR: ${GT_MCP_ACTOR:-mcp-local}
       GT_MCP_SCOPE_CONFIG: /etc/gastown/mcp-scope.toml
       RUST_LOG: ${RUST_LOG:-info}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4318/v1/traces}
+      OTEL_SERVICE_NAME: gt-mcp
     volumes:
       - gt-eventlog:/var/lib/gastown
     ports:
@@ -174,6 +180,25 @@ services:
     networks:
       - default
 
+  # Tempo: OTLP receiver + local trace store. Sinks spans exported by gt-telemetry
+  # (gt-api/gt/gt-mcp set OTEL_EXPORTER_OTLP_ENDPOINT below). Internal-only on the
+  # compose network; Grafana proxies queries against it.
+  tempo:
+    image: grafana/tempo:2.6.0
+    container_name: gastown-tempo
+    restart: unless-stopped
+    user: "0"
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./deploy/observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - gt-tempo:/var/tempo
+    expose:
+      - "3200"
+      - "4317"
+      - "4318"
+    networks:
+      - default
+
   # Grafana: dashboards + datasources provisioned from deploy/observability/grafana/.
   # Default datasource = Prometheus; Postgres-gastown reads audit/outbox/projections
   # tables. Bound to host loopback on 3000 for local validation; add a traefik label
@@ -185,6 +210,7 @@ services:
     depends_on:
       - prometheus
       - postgres
+      - tempo
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
@@ -229,3 +255,4 @@ volumes:
   gt-pgdata:
   gt-prometheus:
   gt-grafana:
+  gt-tempo:

@@ -94,6 +94,31 @@ async fn outbox_pipeline_round_trip() {
     let pending_after = writer.pending_count().await.unwrap();
     assert_eq!(pending_after, 0, "drain marks every row drained");
 
+    // 3a) Outbox telemetry columns must reflect a successful drain on each row:
+    // attempts >= 1, last_attempt_at set, last_error NULL (no failure).
+    let telemetry: Vec<(i32, Option<time::OffsetDateTime>, Option<String>)> = sqlx::query_as(
+        "SELECT attempts, last_attempt_at, last_error FROM outbox_events ORDER BY seq ASC",
+    )
+    .fetch_all(writer.pool())
+    .await
+    .unwrap();
+    assert_eq!(telemetry.len(), 4);
+    for (i, (attempts, last_at, last_err)) in telemetry.iter().enumerate() {
+        assert!(*attempts >= 1, "row {i}: attempts must be at least 1, got {attempts}");
+        assert!(last_at.is_some(), "row {i}: last_attempt_at must be set after drain");
+        assert!(last_err.is_none(), "row {i}: last_error must be NULL on success");
+    }
+
+    // 3b) The lifecycle view joins outbox + audit + projections; every drained row should
+    // surface with a non-null drain_latency_s (the column the dashboards key off).
+    let lifecycle_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM v_event_lifecycle WHERE drained_at IS NOT NULL AND drain_latency_s IS NOT NULL",
+    )
+    .fetch_one(writer.pool())
+    .await
+    .unwrap();
+    assert_eq!(lifecycle_count, 4, "v_event_lifecycle exposes every drained row with a latency");
+
     let acct_tokens = projections
         .get("account", acct, "tokens_total")
         .await
