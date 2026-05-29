@@ -11,3 +11,8 @@ tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
+
+[dev-dependencies]
+# Replay gate: round-trips Envelope -> EventRecord -> WitnessEvent through the audit log.
+gt-audit = { path = "../../kernel/gt-audit" }
+ulid.workspace = true

@@ -1,12 +1,17 @@
-//! `gt-witness` — patrol vivo + escalation (Paso 9.D).
+//! `gt-witness` — patrol vivo + escalation (Paso 9.D, hq-92z9).
 //!
-//! **Scaffolding (hq-92z9 paso 1):** estructura de archivos según patrón `gt-merge`
-//! (actor + commands + events + state + repo + producer). Las variantes reales de
-//! commands/events y el loop del actor/productor se rellenan en commits subsiguientes
-//! del mismo bead. Mantener este crate compilable es la única invariante de este pase.
+//! Tracks worker-level "stuck" state: an operator (or a cross-domain reaction at the
+//! composition root) registers a `Watch` per worker; periodic `Tick`s advance
+//! `last_seen_secs` and raise an escalation once `age_secs >= threshold_secs`. Cleared by
+//! an explicit operator command. Same actor + commands + events + state + repo pattern as
+//! `gt-sheriff`.
 //!
-//! Aislamiento: depende solo del kernel (`gt-events`, `gt-channel`). La integración
-//! cross-dominio se cablea en el composition root vía eventos.
+//! Relationship to `gt-patrol`: patrol owns lease lifecycle (register, heartbeat, expire)
+//! and is the producer of `PatrolEvent::LeaseExpired`. Witness sits **above** that as a
+//! pure escalation observer — it does not duplicate lease detection. The cross-domain wire
+//! (`Patrol::LeaseExpired -> Witness::Tick` or `Watch`) is deferred to the composition
+//! root and is **not** added in this commit so the per-role fill stays isolated; the
+//! reactor arm can be enabled later without touching this crate.
 
 pub mod actor;
 pub mod commands;
@@ -15,8 +20,8 @@ mod events;
 mod repo;
 mod state;
 
-pub use actor::{spawn, WitnessHandle, WitnessMsg};
-pub use commands::WitnessCommand;
+pub use actor::{spawn, spawn_hydrated, WitnessHandle, WitnessMsg};
+pub use commands::{ClearTarget, TickTarget, WatchTarget, WitnessCommand};
 pub use events::WitnessEvent;
 pub use repo::{InMemoryWitnessRepo, WitnessRepository};
-pub use state::{WitnessBoard, WitnessItem};
+pub use state::{StuckTarget, WitnessState};

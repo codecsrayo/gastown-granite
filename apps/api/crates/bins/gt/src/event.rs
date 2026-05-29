@@ -29,6 +29,7 @@ use gt_scheduling::{SchedEvent, SchedState};
 use gt_sheriff::{SheriffEvent, SheriffState};
 use gt_deacon::{DeaconEvent, DeaconState};
 use gt_refinery::{RefineryEvent, RefineryState};
+use gt_witness::{WitnessEvent, WitnessState};
 
 /// The sum of every domain event. Owned (no lifetimes, trivially `Send`); the `kind()`
 /// match is exhaustive, so adding a domain forces a new arm here — the compiler enforces
@@ -44,6 +45,7 @@ pub enum GtEvent {
     Sheriff(SheriffEvent),
     Deacon(DeaconEvent),
     Refinery(RefineryEvent),
+    Witness(WitnessEvent),
 }
 
 impl EventKind for GtEvent {
@@ -60,6 +62,7 @@ impl EventKind for GtEvent {
             GtEvent::Sheriff(e) => e.kind(),
             GtEvent::Deacon(e) => e.kind(),
             GtEvent::Refinery(e) => e.kind(),
+            GtEvent::Witness(e) => e.kind(),
         }
     }
 }
@@ -82,6 +85,7 @@ gt_from!(Orch, OrchEvent);
 gt_from!(Sheriff, SheriffEvent);
 gt_from!(Deacon, DeaconEvent);
 gt_from!(Refinery, RefineryEvent);
+gt_from!(Witness, WitnessEvent);
 
 /// Wire prefixes that ride in the event log but are **not** domain state: frontier-audit
 /// observability (e.g. `mcp.invoked` from `gt-mcp`). Domain replay skips them so reconstructed
@@ -118,6 +122,7 @@ impl GtEvent {
             "sheriff" => GtEvent::Sheriff(rec.decode()?),
             "deacon" => GtEvent::Deacon(rec.decode()?),
             "refinery" => GtEvent::Refinery(rec.decode()?),
+            "witness" => GtEvent::Witness(rec.decode()?),
             other => return Err(AppError::Other(format!("unknown event domain: {other}"))),
         })
     }
@@ -142,6 +147,7 @@ pub struct GtState {
     pub sheriff: SheriffState,
     pub deacon: DeaconState,
     pub refinery: RefineryState,
+    pub witness: WitnessState,
     pub feed: FeedState,
 }
 
@@ -167,6 +173,11 @@ impl GtState {
             }
             GtEvent::Refinery(e) => {
                 let _ = self.refinery.apply(e);
+            }
+            // WitnessState::apply mirrors the SheriffState shape (Result for symmetry; the
+            // fold is total in practice).
+            GtEvent::Witness(e) => {
+                let _ = self.witness.apply(e);
             }
         }
     }

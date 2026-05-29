@@ -37,6 +37,8 @@ gt-sheriff = { path = "../../domain/gt-sheriff" }
 gt-deacon = { path = "../../domain/gt-deacon" }
 # hq-92z9 Paso 9.D — Refinery merge-ready projection (fourth role fill).
 gt-refinery = { path = "../../domain/gt-refinery" }
+# hq-92z9 Paso 9.D — Witness escalation observer (per-role fill on top of scaffolding).
+gt-witness = { path = "../../domain/gt-witness" }
 # Pure consumer projection of the audit log; the root folds it into `GtState.feed`.
 gt-feed = { path = "../../domain/gt-feed" }
 # Real persistence adapters wired in by the bin when env URLs are set; otherwise the bin

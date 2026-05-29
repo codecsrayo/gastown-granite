@@ -42,6 +42,8 @@ use gt_deacon::actor::{self as deacon_actor, DeaconHandle};
 use gt_deacon::{DeaconEvent, InMemoryDeaconRepo};
 use gt_refinery::actor::{self as refinery_actor, RefineryHandle};
 use gt_refinery::{InMemoryRefineryRepo, RefineryEvent};
+use gt_witness::actor::{self as witness_actor, WitnessHandle};
+use gt_witness::{InMemoryWitnessRepo, WitnessEvent};
 use gt_quota::actor::{self as quota_actor, QuotaHandle};
 use gt_quota::{AccountRegistry, InMemoryKeychain, Keychain, ModelWeights, QuotaEvent};
 use gt_scheduling::actor::{self as sched_actor, SchedHandle};
@@ -116,6 +118,11 @@ pub struct RootHandle<R: BeadRepository + Clone> {
     /// with the existing `gt_merge::refinery` channel watcher (which stays authoritative
     /// for driving the merge slot).
     pub refinery: RefineryHandle,
+    /// hq-92z9 Paso 9.D — Witness escalation observer. Operators register worker watches
+    /// (`WitnessCommand::Watch`) and drive ticks (`Tick`/`Clear`) from the edge (gt-mcp
+    /// / CLI). No automatic cross-domain wiring yet — the actor only acts on explicit
+    /// commands sent through this handle.
+    pub witness: WitnessHandle,
     /// Relay for edge producers of agent events (the supervisor's `SessionEnd`, the spawn
     /// edge's `Spawned`). The agent actor has no relay of its own by design; its events
     /// reach the log through here.
@@ -381,6 +388,7 @@ where
     let (sheriff_tx, sheriff_rx) = mpsc::channel::<Envelope<SheriffEvent>>(256);
     let (deacon_tx, deacon_rx) = mpsc::channel::<Envelope<DeaconEvent>>(256);
     let (refinery_tx, refinery_rx) = mpsc::channel::<Envelope<RefineryEvent>>(256);
+    let (witness_tx, witness_rx) = mpsc::channel::<Envelope<WitnessEvent>>(256);
 
     // Convert the replay reducer state into each actor's live owner type. The conversions
     // live inside the domain crates (Ports & Adapters: the live-vs-replay distinction is a
@@ -395,6 +403,7 @@ where
         sheriff: sheriff_initial,
         deacon: deacon_initial,
         refinery: refinery_initial,
+        witness: witness_initial,
         feed: _,
     } = hydration.state;
     let merge_initial = MergeBoard::from_state(&merge_state);
@@ -431,6 +440,14 @@ where
         refinery_tx,
         refinery_initial,
     );
+    // Witness repo is in-memory for now — same rationale as Sheriff. The reducer + replay
+    // are authoritative for state; the Dolt adapter lands when a per-target panel surfaces
+    // in `gt-web`.
+    let witness = witness_actor::spawn_hydrated(
+        InMemoryWitnessRepo::default(),
+        witness_tx,
+        witness_initial,
+    );
 
     let dead_count = Arc::new(AtomicUsize::new(0));
     let (events_tx, _) = broadcast::channel::<EventRecord>(config.event_buffer.max(1));
@@ -460,6 +477,7 @@ where
     let mut sheriff_rx = sheriff_rx;
     let mut deacon_rx = deacon_rx;
     let mut refinery_rx = refinery_rx;
+    let mut witness_rx = witness_rx;
 
     let join = tokio::spawn(async move {
         loop {
@@ -473,6 +491,7 @@ where
                 Some(env) = sheriff_rx.recv() => reactor.ingest(env).await,
                 Some(env) = deacon_rx.recv() => reactor.ingest(env).await,
                 Some(env) = refinery_rx.recv() => reactor.ingest(env).await,
+                Some(env) = witness_rx.recv() => reactor.ingest(env).await,
                 else => break,
             }
         }
@@ -488,6 +507,7 @@ where
         sheriff,
         deacon,
         refinery,
+        witness,
         agent_events: agent_tx,
         repo,
         log_path,
