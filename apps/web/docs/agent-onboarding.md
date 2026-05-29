@@ -215,9 +215,84 @@ el `mcp__<server>__a_b_c_phase` → `a.b_c.phase` con la regla de §2.3.
 
 ---
 
+## 3. Why-rationale: por qué todo pasa por MCP (`hq-mcp-onboard.3`)
+
+Hay APIs alternas para casi todo lo que MCP expone: `docker exec dolt sql`,
+edición directa de jsonl, scripts contra el event-log, llamadas HTTP a
+`gt-api`. Funcionan. Y casi todas están **prohibidas** para agentes. Cuatro
+razones, en orden de importancia:
+
+### 3.1 Audit
+
+Cada `execute` deja un evento en el event-log con `actor`, `target`, payload,
+y timestamp. El log es la **única** fuente de verdad sobre qué pasó y quién
+lo hizo. Si un cambio entra por fuera (Dolt SQL, jsonl manual), no hay
+evento — y para el resto del sistema **no pasó**. Forensics, replay, y
+reconciliación quedan inservibles.
+
+Concretamente: cuando una corrida se cae a la mitad o un agente actúa
+incorrectamente, lo primero que se pregunta es "muéstrame el orden exacto
+de comandos". Si tu cambio no está en ese orden, sales del modelo causal y
+nadie puede ayudarte (incluido tú mismo, una hora después).
+
+### 3.2 Scope (RBAC)
+
+Cada tool tiene un scope asociado en `mcp-scope.toml`. El server chequea el
+scope contra el rol del caller antes de despachar al actor — un sheriff no
+puede correr `quota.rotate`, un agent normal no puede `merge.fail`, etc.
+Bypassear MCP es bypassear el RBAC. La consola de operador (`docker exec`)
+existe porque alguien tiene que poder romper el sistema; no porque sea el
+camino normal.
+
+Regla: si tu identidad pide un tool y el server dice `403`, el problema es
+de scope, no del tool. Abre bead pidiendo el scope, no fuerces el camino.
+
+### 3.3 Invariantes
+
+Los actores son los únicos owners legítimos de su estado (scheduling owns la
+queue, patrol owns leases, merge owns slots). Toda mutación pasa por una
+mailbox **serializada** — el actor procesa un comando a la vez. Eso te da
+invariantes de máquina-de-estados gratis: no puedes hacer `transition X→Y`
+mientras alguien más hace `transition X→Z` con el mismo recurso; uno gana,
+el otro ve el estado nuevo y falla limpio.
+
+Si saltas el actor (Dolt SQL directo), pisoteas la mailbox: dos escrituras
+concurrentes pueden corromper el estado sin que nadie emita evento de error.
+Y si el actor mantiene caché en memoria (sessions, slots, leases), tu
+escritura ni siquiera será visible hasta el próximo rebuild — ver memoria
+`Dolt split-brain 2026-05`.
+
+### 3.4 Replay
+
+El event-log es replay-able: dado un snapshot vacío y la secuencia de
+eventos, reconstruyes el estado actual completo. Eso permite migraciones,
+debugging post-mortem, tests de regresión basados en logs de producción, y
+recovery limpio tras corrupción de Dolt.
+
+Cualquier cambio que no pasa por un tool MCP **rompe el replay** — porque
+no está en el log y el estado reconstruido divergerá del actual. Cuando
+eso pasa en producción no se nota inmediatamente; se nota meses después
+cuando algo no cuadra y nadie recuerda qué se editó a mano.
+
+### 3.5 Resumen operativo
+
+| Acción | Quién | Vía |
+|---|---|---|
+| Cambiar estado observable | Agente | MCP `<tool>.execute` |
+| Leer estado canónico | Agente | MCP recurso (`gt://*`) |
+| Romper invariante (emergencia) | Operador | `docker exec dolt sql` |
+| Reconstruir estado | Sistema | replay del event-log |
+| Inspeccionar histórico | Operador | dolt diff / event-log query |
+
+Si te encuentras escribiendo SQL para Dolt o `bd` directamente, **detente**:
+o estás en escape hatch de operador (autorización explícita del humano), o
+estás creando un hueco que será imposible de debuggear después. La salida
+correcta es bead — ver §4.
+
+---
+
 ## Secciones pendientes
 
-- `hq-mcp-onboard.3` — why-rationale (audit + scope + invariantes + replay)
 - `hq-mcp-onboard.4` — gap discipline workflow
 - `hq-mcp-onboard.5` — in-session vs out-of-session split
 - `hq-mcp-onboard.6` — memory frontmatter version/status
