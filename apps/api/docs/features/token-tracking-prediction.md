@@ -128,6 +128,25 @@ Queda alineado con la cadena de rotación secuencial existente (`--only`, cooldo
 El bloqueo real (`AccountLimited`/`Blocked`) sigue siendo la red de seguridad si la
 predicción falla.
 
+### Warmup observable (hq-mcyc.5)
+
+La MCP resource `gt://quota/accounts` expone `{accounts, predictions_emitted}`. El contador
+`predictions_emitted` puede quedarse en **0** durante un periodo de calentamiento aun cuando
+hay cuentas registradas y muestras llegando — no es bug. Causas legítimas:
+
+1. **EWMA sin masa:** una sola muestra no fija una tendencia; el rate inicial es ruido. La
+   predicción se emite solo cuando el `rate_per_min` se estabiliza por encima del piso interno.
+2. **ETA fuera de la ventana actual:** el algoritmo solo emite `BlockPredicted` si
+   `now + eta_to_block ≤ window_resets_at`. Con consumo bajo respecto al `window_limit`, el
+   reset llega antes que el bloqueo y la predicción no dispara (cobertura intencional, no
+   silencio).
+3. **Probe sin sample posterior:** `quota.probe` reconcilia la ventana pero no alimenta la
+   media; hace falta tráfico real (`quota.sample`) para que el EWMA arranque.
+
+Operadores: si el dashboard muestra `predictions_emitted=0` justo después de boot/rotación,
+revisar primero `accounts > 0` y el log de `quota.tokens_sampled`. Si el flujo de samples es
+sano y la ventana es ancha, la predicción simplemente no aplica todavía.
+
 ## Trazabilidad / Grafana
 
 Coherente con la decisión de observabilidad (OTEL + Postgres, **sin Mongo** —

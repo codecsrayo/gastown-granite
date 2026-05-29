@@ -84,7 +84,7 @@ write directly and emit **no domain event**, only a frontier audit record):
 | `gt://patrol/leases` | `{live_leases, expired_emitted}` |
 | `gt://merge/slots` | merge slots `[{bead, branch, state}]` |
 | `gt://orch/convoys` | convoys + per-member progress |
-| `gt://quota/accounts` | `{accounts, predictions_emitted}` (partial read-side of `gt quota status`) |
+| `gt://quota/accounts` | `{accounts, predictions_emitted}` (partial read-side of `gt quota status`). **Warmup note (hq-mcyc.5):** `predictions_emitted` stays at 0 until the EWMA has enough samples for `rate_per_min` to stabilize AND the projected ETA falls inside the live window — see `features/token-tracking-prediction.md` for the prediction math. Zero on a freshly-booted process is expected, not a bug. |
 | `gt://rigs` | registered rigs `[{name, prefix, git_url, default_branch, …}]` (read-side of `gt rig list`; **LIVE** — the composition root wires the `gt-rig` actor, hq-mc72.12.30) |
 
 **`RealEffects`** (`bins/gt/src/effects_real.rs`) — production-only edges out of the core:
@@ -126,7 +126,7 @@ this before traffic moves).
 | `gt assign` | Assign issue | none | **M** |
 | `gt ready` | Show ready beads | partial: `GET /api/beads?status=ready` exists | **P** |
 | `gt blocked` | Show blocked beads | partial: `GET /api/beads?status=blocked` exists | **P** |
-| `gt done` ★ | Signal work ready for merge queue (writes MERGE_READY channel event) | `gt-merge` domain owns `MergeEvent::Ready`, `MergeBoard`. MCP `merge.start` accepts a Ready slot, but the **producer side** (refinery polls `gt-channel` for the `.event` file) is wired in `bins/gt` via the channel watcher, NOT exposed as a CLI verb a polecat can call. The Go `gt done` writes the channel event; in Rust the polecat would have to call MCP `merge.start` directly. | **P★** |
+| `gt done` ★ | Signal work ready for merge queue (writes MERGE_READY channel event) | `gt-merge` domain owns `MergeEvent::Ready`, `MergeBoard`. MCP `merge.submit.{validate,execute}` registers a new slot in `Ready`; the composition root (`bins/gt::root::handle_event`) **auto-advances** `Ready → Merging` when it observes `MergeEvent::Ready`, so `merge.start` is reactor-internal and **NOT** exposed over MCP (was a dead surface that always hit `merging → merging`, removed in hq-mcyc.1). The producer side (refinery polls `gt-channel` for the `.event` file) is wired in `bins/gt` via the channel watcher, NOT exposed as a CLI verb a polecat can call. In Rust the polecat would call MCP `merge.submit` instead. | **P★** |
 | `gt cat` | Display bead content | none | **M** |
 | `gt peek` | View recent output from polecat/crew session | none (would need tmux capture-pane wrapper) | **M** |
 | `gt show` | Show issue details | partial: covered by `bd show` (separate binary) | **C** (via bd) |
