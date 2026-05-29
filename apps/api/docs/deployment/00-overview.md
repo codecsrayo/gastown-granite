@@ -61,6 +61,9 @@ flowchart TB
 
 Detalle de cada servicio (imagen, puertos, env): [`01-services.md`](01-services.md).
 
+Para el stack de observabilidad (Prometheus + Grafana sobre el mismo compose):
+[`05-observability.md`](05-observability.md).
+
 ## Regla clave
 
 Los 3 bins (`gt`, `gt-api`, `gt-mcp`) son **procesos independientes**, cada uno con su propio

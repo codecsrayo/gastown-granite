@@ -1,0 +1,15 @@
+# Grafana dashboard file provider. Picks up any .json under /var/lib/grafana/dashboards.
+
+apiVersion: 1
+
+providers:
+  - name: gastown
+    orgId: 1
+    folder: Gastown
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

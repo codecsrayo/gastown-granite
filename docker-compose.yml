@@ -154,6 +154,69 @@ services:
     networks:
       - default
 
+  # Prometheus: scrapes /metrics from gt-web (and future bins). Internal-only —
+  # no host port, no traefik label; Grafana reads it on the compose network.
+  # Config under deploy/observability/prometheus/.
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: gastown-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./deploy/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - gt-prometheus:/prometheus
+    expose:
+      - "9090"
+    networks:
+      - default
+
+  # Grafana: dashboards + datasources provisioned from deploy/observability/grafana/.
+  # Default datasource = Prometheus; Postgres-gastown reads audit/outbox/projections
+  # tables. Bound to host loopback on 3000 for local validation; add a traefik label
+  # block below to expose publicly (commented out — opt-in per environment).
+  grafana:
+    image: grafana/grafana-oss:11.3.0
+    container_name: gastown-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - postgres
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_SERVER_DOMAIN: ${GRAFANA_DOMAIN:-grafana.gastown.codecsrayo.com}
+      GF_SERVER_ROOT_URL: https://${GRAFANA_DOMAIN:-grafana.gastown.codecsrayo.com}
+      GF_SERVER_ENFORCE_DOMAIN: "false"
+    volumes:
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - gt-grafana:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - default
+      - traefik-public
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_PUBLIC_NETWORK:-proyectos-bi-quare}
+      - traefik.http.routers.gastown-grafana-http.rule=Host(`${GRAFANA_DOMAIN:-grafana.gastown.codecsrayo.com}`)
+      - traefik.http.routers.gastown-grafana-http.entrypoints=web
+      - traefik.http.routers.gastown-grafana-http.middlewares=gastown-grafana-https
+      - traefik.http.routers.gastown-grafana.rule=Host(`${GRAFANA_DOMAIN:-grafana.gastown.codecsrayo.com}`)
+      - traefik.http.routers.gastown-grafana.entrypoints=websecure
+      - traefik.http.routers.gastown-grafana.tls=true
+      - traefik.http.routers.gastown-grafana.tls.certresolver=netlify
+      - traefik.http.services.gastown-grafana.loadbalancer.server.port=3000
+      - traefik.http.middlewares.gastown-grafana-https.redirectscheme.scheme=https
+
 networks:
   traefik-public:
     name: ${TRAEFIK_PUBLIC_NETWORK:-proyectos-bi-quare}
@@ -164,3 +227,5 @@ volumes:
   dolt-data:
   gt-eventlog:
   gt-pgdata:
+  gt-prometheus:
+  gt-grafana:
