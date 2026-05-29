@@ -168,6 +168,30 @@ pub enum Command {
         action: DaemonAction,
     },
 
+    /// Emit a message onto a `gt-channel` (`<root>/<channel>/<ulid>.event`). Payload from
+    /// `--payload`, `--payload-file`, or stdin. Prints the message id.
+    EmitEvent {
+        /// Channel name (subdir of the channel root), e.g. `merge`.
+        channel: String,
+        /// Inline payload string. Mutually exclusive with `--payload-file`.
+        #[arg(long)]
+        payload: Option<String>,
+        /// Read payload from a file (`-` for stdin).
+        #[arg(long = "payload-file")]
+        payload_file: Option<String>,
+    },
+    /// Block until a message arrives on a `gt-channel`. By default the message is left on the
+    /// channel (peek); pass `--ack` to consume it.
+    AwaitEvent {
+        channel: String,
+        /// Max seconds to wait. Omitted / 0 = wait until a message arrives or interrupted.
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Consume the message (delete the backing file) after printing.
+        #[arg(long)]
+        ack: bool,
+    },
+
     // --- Stub: backend not yet in Rust. ---
     /// [BLOCKED] Dispatch work to an agent. Needs RealEffects self-host (hq-oap5.2 / was hq-8iur.6).
     Sling {
@@ -272,6 +296,12 @@ pub async fn run(cli: Cli, cfg: Config) -> Result<i32> {
         }
         Command::Doctor => run_doctor(&client, &cfg, cli.json).await,
         Command::Daemon { action } => run_daemon(action).await,
+        Command::EmitEvent { channel, payload, payload_file } => {
+            run_emit_event(&channel, payload, payload_file, cli.json).await
+        }
+        Command::AwaitEvent { channel, timeout, ack } => {
+            run_await_event(&channel, timeout, ack, cli.json).await
+        }
 
         Command::Sling { .. } => Ok(blocked(
             "sling",
@@ -951,6 +981,162 @@ async fn daemon_logs(lines: usize, follow: bool) -> Result<i32> {
     run_passthrough("tail", &args).await
 }
 
+// --- channel events --------------------------------------------------------
+
+/// Resolve the channel root directory consumers (refinery etc.) and the CLI agree on.
+///
+/// Precedence:
+///   1. `GT_CHANNEL_ROOT` env (explicit override).
+///   2. `<town_root>/.channels` (town root = walking up for `mayor/town.json`, shared with `gt prime`).
+///   3. `$GT_WORKSPACE/.channels`.
+///   4. `./.channels` relative to cwd.
+fn channel_root() -> PathBuf {
+    if let Ok(r) = std::env::var("GT_CHANNEL_ROOT") {
+        if !r.is_empty() {
+            return PathBuf::from(r);
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(tr) = find_town_root(&cwd) {
+            return tr.join(".channels");
+        }
+    }
+    if let Ok(ws) = std::env::var("GT_WORKSPACE") {
+        if !ws.is_empty() {
+            return PathBuf::from(ws).join(".channels");
+        }
+    }
+    PathBuf::from(".channels")
+}
+
+/// Testable core: emit `payload` on `<root>/<channel>`, returning the assigned message id.
+fn emit_message(
+    root: &std::path::Path,
+    channel: &str,
+    payload: &[u8],
+) -> Result<String> {
+    let ch = gt_channel::Channel::open(root, channel)
+        .map_err(|e| anyhow::anyhow!("open channel `{channel}` under {}: {e}", root.display()))?;
+    ch.emit(payload).map_err(|e| anyhow::anyhow!("emit on `{channel}`: {e}"))
+}
+
+/// Testable core: wait for one message on `<root>/<channel>`. `timeout` of `None` or `Some(0)`
+/// means wait forever (only the caller's `ctrl-c` cancels). `ack` deletes the backing file
+/// after read. Returns `None` on timeout, `Some((id, payload))` otherwise. The receiver is held
+/// open for the duration so `gt-channel`'s notify watcher stays alive.
+async fn await_message(
+    root: &std::path::Path,
+    channel: &str,
+    timeout: Option<u64>,
+    ack: bool,
+) -> Result<Option<(String, Vec<u8>)>> {
+    let ch = gt_channel::Channel::open(root, channel)
+        .map_err(|e| anyhow::anyhow!("open channel `{channel}` under {}: {e}", root.display()))?;
+    let mut rx = ch
+        .subscribe(16)
+        .map_err(|e| anyhow::anyhow!("subscribe `{channel}`: {e}"))?;
+    let msg_opt = match timeout {
+        Some(secs) if secs > 0 => {
+            match tokio::time::timeout(std::time::Duration::from_secs(secs), rx.recv()).await {
+                Ok(m) => m,
+                Err(_) => return Ok(None),
+            }
+        }
+        _ => rx.recv().await,
+    };
+    let Some(msg) = msg_opt else {
+        bail!("channel `{channel}` closed before a message arrived");
+    };
+    if ack {
+        ch.ack(&msg).map_err(|e| anyhow::anyhow!("ack: {e}"))?;
+    }
+    Ok(Some((msg.id, msg.payload)))
+}
+
+/// `gt emit-event <channel>` — write a payload to the channel. Payload source priority:
+/// `--payload` (inline) > `--payload-file <path>` (or `-` for stdin) > stdin (default).
+async fn run_emit_event(
+    channel: &str,
+    payload: Option<String>,
+    payload_file: Option<String>,
+    json: bool,
+) -> Result<i32> {
+    let bytes: Vec<u8> = match (payload, payload_file) {
+        (Some(_), Some(_)) => bail!("pass only one of --payload / --payload-file"),
+        (Some(p), None) => p.into_bytes(),
+        (None, Some(f)) if f == "-" => read_stdin_bytes()?,
+        (None, Some(f)) => std::fs::read(&f).with_context(|| format!("read payload file `{f}`"))?,
+        (None, None) => read_stdin_bytes()?,
+    };
+    let root = channel_root();
+    let id = emit_message(&root, channel, &bytes)?;
+    if json {
+        print_json(&serde_json::json!({
+            "channel": channel,
+            "id": id,
+            "root": root.display().to_string(),
+            "bytes": bytes.len(),
+        }))?;
+    } else {
+        println!("{id}");
+    }
+    Ok(0)
+}
+
+/// `gt await-event <channel>` — block for one message; exit 1 on timeout, 130 on `ctrl-c`.
+async fn run_await_event(
+    channel: &str,
+    timeout: Option<u64>,
+    ack: bool,
+    json: bool,
+) -> Result<i32> {
+    let root = channel_root();
+    let wait = await_message(&root, channel, timeout, ack);
+    let result = tokio::select! {
+        r = wait => r,
+        _ = tokio::signal::ctrl_c() => {
+            eprintln!("gt await-event: interrupted");
+            return Ok(130);
+        }
+    };
+    match result? {
+        None => {
+            if json {
+                print_json(&serde_json::json!({ "channel": channel, "timed_out": true }))?;
+            } else {
+                eprintln!(
+                    "gt await-event: timed out after {}s",
+                    timeout.unwrap_or(0)
+                );
+            }
+            Ok(1)
+        }
+        Some((id, payload)) => {
+            let payload_str = String::from_utf8_lossy(&payload).into_owned();
+            if json {
+                print_json(&serde_json::json!({
+                    "channel": channel,
+                    "id": id,
+                    "payload": payload_str,
+                    "acked": ack,
+                }))?;
+            } else {
+                println!("{id}\t{payload_str}");
+            }
+            Ok(0)
+        }
+    }
+}
+
+fn read_stdin_bytes() -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    std::io::stdin()
+        .read_to_end(&mut buf)
+        .context("read payload from stdin")?;
+    Ok(buf)
+}
+
 // --- shared helpers --------------------------------------------------------
 
 fn env_or(key: &str, default: &str) -> String {
@@ -1163,5 +1349,66 @@ mod prime_tests {
         assert_eq!(find_town_root(&base), None);
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod channel_tests {
+    use super::*;
+
+    fn fresh_root(tag: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "gt-cli-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn emit_then_await_round_trip() {
+        let root = fresh_root("ch-rt");
+        let id = emit_message(&root, "merge", b"hello").expect("emit");
+        let got = await_message(&root, "merge", Some(2), true)
+            .await
+            .expect("await")
+            .expect("not timed out");
+        assert_eq!(got.0, id);
+        assert_eq!(got.1, b"hello");
+        // ack removed the backing file.
+        let listing: Vec<_> = std::fs::read_dir(root.join("merge")).unwrap().collect();
+        assert!(listing.is_empty(), "channel dir should be empty after ack");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn await_times_out_on_empty_channel() {
+        let root = fresh_root("ch-to");
+        let got = await_message(&root, "merge", Some(1), true).await.expect("await");
+        assert!(got.is_none(), "no message arrived within 1s; expected timeout");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn no_ack_leaves_message_on_channel() {
+        let root = fresh_root("ch-peek");
+        let _id = emit_message(&root, "x", b"keep me").expect("emit");
+        let got = await_message(&root, "x", Some(2), false)
+            .await
+            .expect("await")
+            .expect("not timed out");
+        assert_eq!(got.1, b"keep me");
+        // No ack → the .event file is still on disk for the next subscriber.
+        let listing: Vec<_> = std::fs::read_dir(root.join("x"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("event"))
+            .collect();
+        assert_eq!(listing.len(), 1, "peek (no --ack) must leave the file in place");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

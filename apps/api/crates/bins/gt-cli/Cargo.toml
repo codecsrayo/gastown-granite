@@ -30,6 +30,8 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 # `gt done` generates a ULID for the merge-submit channel-event id when one isn't supplied.
 ulid = { workspace = true }
+# `gt emit-event` / `gt await-event` operate on file-backed channels (Paso 10 C7).
+gt-channel = { path = "../../kernel/gt-channel" }
 
 [dev-dependencies]
 # Integration tests boot the real gt-web router in-process on a transient socket (the same
