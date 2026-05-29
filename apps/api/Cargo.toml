@@ -30,6 +30,7 @@ members = [
     "crates/bins/gt",
     "crates/bins/gt-web",
     "crates/bins/gt-mcp",
+    "crates/bins/gt-cli",
 ]
 
 [workspace.package]
