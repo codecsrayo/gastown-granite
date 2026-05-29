@@ -1,0 +1,17 @@
+# Orchestrator runtime image for the Rust `gt` daemon (composition root + actor fan-out +
+# PG outbox + live daemons + real polecat spawn). Unlike apps/api/Dockerfile (slim, read-side
+# gt-web only), `gt` spawns `claude` polecats inside tmux, so it needs the FULL agent runtime
+# (claude CLI, tmux, git, bd, dolt) — that lives in the gastown-gastown base image.
+#
+# Stage 1 builds the current Rust gt from source; stage 2 lays it onto the runtime base.
+
+FROM rust:1.95-slim-bookworm AS builder
+WORKDIR /build
+COPY . .
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --release -p gt && cp target/release/gt /gt-rs
+
+FROM gastown-gastown:latest
+# claude, tmux, git, bd, dolt, gh, the /app/gastown source + /gt workspace mount come from base.
+COPY --from=builder /gt-rs /usr/local/bin/gt-rs

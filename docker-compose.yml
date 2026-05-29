@@ -89,6 +89,39 @@ services:
       - traefik.http.services.gastown.loadbalancer.server.port=8787
       - traefik.http.middlewares.gastown-https.redirectscheme.scheme=https
 
+  # Rust orchestrator daemon (composition root): actor fan-out, PG outbox pipeline, live
+  # daemons (refinery MERGE_READY watcher, witness escalation, deacon/e-stop drain), and
+  # REAL polecat spawn — `claude` agents inside tmux. Needs the full agent runtime image
+  # (claude/tmux/git/bd/dolt), built by Dockerfile.orchestrator onto the gastown-gastown base.
+  # Shares the event-log volume with gt-api (both append events.jsonl, per the daemon design).
+  # GT_POLECAT_CMD overridable to a no-op for safe validation before unleashing on live beads.
+  gt:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.orchestrator
+    image: gastown-gt-orch:latest
+    container_name: gastown-gt
+    restart: unless-stopped
+    command: ["gt-rs"]
+    depends_on:
+      - dolt
+      - postgres
+    environment:
+      GT_DOLT_URL: mysql://gastown@dolt:3307/hq
+      GT_PG_AUDIT_URL: postgres://gastown:gastown@postgres:5432/gastown
+      GT_EVENT_LOG: /var/lib/gastown/events.jsonl
+      GT_RIG_PATH: /gt
+      GT_BIN: /usr/local/bin/gt-rs
+      GT_POLECAT_CMD: ${GT_POLECAT_CMD:-claude}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - ${FOLDER:-/home/nixos/gastown}:/gt
+      - agent-home:/home/agent
+      - gt-eventlog:/var/lib/gastown
+      - ${HOST_SSH_DIR:-${HOME}/.ssh}:/host-ssh:ro
+    networks:
+      - default
+
 networks:
   traefik-public:
     name: ${TRAEFIK_PUBLIC_NETWORK:-proyectos-bi-quare}
