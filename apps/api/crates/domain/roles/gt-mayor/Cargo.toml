@@ -1,0 +1,17 @@
+[package]
+name = "gt-mayor"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+gt-events = { path = "../../../kernel/gt-events" }
+gt-channel = { path = "../../../kernel/gt-channel" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+gt-audit = { path = "../../../kernel/gt-audit" }
+ulid.workspace = true

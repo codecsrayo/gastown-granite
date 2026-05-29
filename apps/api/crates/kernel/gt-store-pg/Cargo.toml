@@ -8,10 +8,10 @@ rust-version.workspace = true
 gt-events = { path = "../gt-events" }
 gt-beads = { path = "../gt-beads" }
 gt-audit = { path = "../gt-audit" }
-gt-quota = { path = "../../domain/gt-quota" }
+gt-quota = { path = "../../domain/orchestration/gt-quota" }
 # hq-mysw: the activity projection reuses gt-feed's color/age calculator + RFC3339 parse so the
 # SQL read-side and the in-memory `activity_view` share ONE threshold source of truth.
-gt-feed = { path = "../../domain/gt-feed" }
+gt-feed = { path = "../../domain/platform/gt-feed" }
 tokio.workspace = true
 time = { workspace = true, features = ["std", "formatting", "macros"] }
 serde_json.workspace = true

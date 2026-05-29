@@ -34,11 +34,11 @@ anyhow = { workspace = true }
 # harness pattern as gt-web/tests/e2e.rs) and drive the CLI's typed fetchers against it.
 gt = { path = "../gt" }
 gt-web = { path = "../gt-web" }
-gt-agent = { path = "../../domain/gt-agent" }
+gt-agent = { path = "../../domain/lifecycle/gt-agent" }
 gt-beads = { path = "../../kernel/gt-beads" }
 gt-events = { path = "../../kernel/gt-events" }
-gt-merge = { path = "../../domain/gt-merge" }
-gt-patrol = { path = "../../domain/gt-patrol" }
-gt-orchestration = { path = "../../domain/gt-orchestration" }
+gt-merge = { path = "../../domain/orchestration/gt-merge" }
+gt-patrol = { path = "../../domain/orchestration/gt-patrol" }
+gt-orchestration = { path = "../../domain/orchestration/gt-orchestration" }
 ulid = { workspace = true }
 axum = "0.7"

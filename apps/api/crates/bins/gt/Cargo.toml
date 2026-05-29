@@ -25,29 +25,29 @@ gt-telemetry = { path = "../../kernel/gt-telemetry" }
 # Observer plugin chain (hq-evks): `root::spawn_plugin_relay` wires it onto the broadcast.
 gt-plugin = { path = "../../kernel/gt-plugin" }
 # Every domain — only the composition root is allowed this fan-in.
-gt-agent = { path = "../../domain/gt-agent" }
-gt-scheduling = { path = "../../domain/gt-scheduling" }
-gt-patrol = { path = "../../domain/gt-patrol" }
-gt-merge = { path = "../../domain/gt-merge" }
-gt-quota = { path = "../../domain/gt-quota" }
-gt-orchestration = { path = "../../domain/gt-orchestration" }
+gt-agent = { path = "../../domain/lifecycle/gt-agent" }
+gt-scheduling = { path = "../../domain/orchestration/gt-scheduling" }
+gt-patrol = { path = "../../domain/orchestration/gt-patrol" }
+gt-merge = { path = "../../domain/orchestration/gt-merge" }
+gt-quota = { path = "../../domain/orchestration/gt-quota" }
+gt-orchestration = { path = "../../domain/orchestration/gt-orchestration" }
 # hq-92z9 Paso 9.D — Mayor orchestration-loop role (delegations actor).
-gt-mayor = { path = "../../domain/gt-mayor" }
+gt-mayor = { path = "../../domain/roles/gt-mayor" }
 # hq-92z9 Paso 9.D — Sheriff watchdog Plugin (first role fill on top of scaffolding).
-gt-sheriff = { path = "../../domain/gt-sheriff" }
+gt-sheriff = { path = "../../domain/roles/gt-sheriff" }
 # hq-92z9 Paso 9.D — Deacon drain coordination (third role fill).
-gt-deacon = { path = "../../domain/gt-deacon" }
+gt-deacon = { path = "../../domain/roles/gt-deacon" }
 # hq-92z9 Paso 9.D — Refinery merge-ready projection (fourth role fill).
-gt-refinery = { path = "../../domain/gt-refinery" }
+gt-refinery = { path = "../../domain/roles/gt-refinery" }
 # hq-92z9 Paso 9.D — Witness escalation observer (per-role fill on top of scaffolding).
-gt-witness = { path = "../../domain/gt-witness" }
+gt-witness = { path = "../../domain/roles/gt-witness" }
 # Pure consumer projection of the audit log; the root folds it into `GtState.feed`.
-gt-feed = { path = "../../domain/gt-feed" }
+gt-feed = { path = "../../domain/platform/gt-feed" }
 # hq-63az Paso 9.E — polecat lifecycle + GT_HOOK_BEAD hooks; the sling edge pins the bead.
-gt-polecat = { path = "../../domain/gt-polecat" }
+gt-polecat = { path = "../../domain/lifecycle/gt-polecat" }
 # hq-mysw Paso 9.F — Notifier PORT. The root injects an `Arc<dyn Notifier>` (real bead-backed
 # mail adapter in prod, fake in the gate) and routes operator signals through it.
-gt-notify = { path = "../../domain/gt-notify" }
+gt-notify = { path = "../../domain/platform/gt-notify" }
 # Real persistence adapters wired in by the bin when env URLs are set; otherwise the bin
 # falls back to the in-memory port for host runs without Dolt/Postgres.
 gt-store-dolt = { path = "../../kernel/gt-store-dolt" }

@@ -12,7 +12,7 @@ name = "gt-reaper"
 path = "src/main.rs"
 
 [dependencies]
-gt-wisp = { path = "../../domain/gt-wisp" }
+gt-wisp = { path = "../../domain/platform/gt-wisp" }
 gt-store-dolt = { path = "../../kernel/gt-store-dolt" }
 gt-events = { path = "../../kernel/gt-events" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

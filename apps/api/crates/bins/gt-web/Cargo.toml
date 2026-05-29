@@ -24,10 +24,10 @@ gt-audit = { path = "../../kernel/gt-audit" }
 gt-beads = { path = "../../kernel/gt-beads" }
 gt-events = { path = "../../kernel/gt-events" }
 gt-telemetry = { path = "../../kernel/gt-telemetry" }
-gt-agent = { path = "../../domain/gt-agent" }
-gt-merge = { path = "../../domain/gt-merge" }
-gt-patrol = { path = "../../domain/gt-patrol" }
-gt-orchestration = { path = "../../domain/gt-orchestration" }
+gt-agent = { path = "../../domain/lifecycle/gt-agent" }
+gt-merge = { path = "../../domain/orchestration/gt-merge" }
+gt-patrol = { path = "../../domain/orchestration/gt-patrol" }
+gt-orchestration = { path = "../../domain/orchestration/gt-orchestration" }
 # Real persistence adapters: opt-in via env (GT_DOLT_URL / GT_PG_AUDIT_URL).
 gt-store-dolt = { path = "../../kernel/gt-store-dolt" }
 gt-store-pg = { path = "../../kernel/gt-store-pg" }

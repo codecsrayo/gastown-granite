@@ -7,11 +7,11 @@ rust-version.workspace = true
 [dependencies]
 gt-events = { path = "../gt-events" }
 gt-beads = { path = "../gt-beads" }
-gt-agent = { path = "../../domain/gt-agent" }
-gt-merge = { path = "../../domain/gt-merge" }
-gt-patrol = { path = "../../domain/gt-patrol" }
-gt-orchestration = { path = "../../domain/gt-orchestration" }
-gt-wisp = { path = "../../domain/gt-wisp" }
+gt-agent = { path = "../../domain/lifecycle/gt-agent" }
+gt-merge = { path = "../../domain/orchestration/gt-merge" }
+gt-patrol = { path = "../../domain/orchestration/gt-patrol" }
+gt-orchestration = { path = "../../domain/orchestration/gt-orchestration" }
+gt-wisp = { path = "../../domain/platform/gt-wisp" }
 mysql_async = { workspace = true }
 time.workspace = true
 
