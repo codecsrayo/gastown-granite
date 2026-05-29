@@ -1,18 +1,22 @@
 # `deploy/tmux/`
 
-Shell scripts that replace the Go `gt` **B2** tmux + host-process surface:
+Shell scripts that replace the Go `gt` **B2** tmux + host-process surface.
 
-| Future script | Replaces Go `gt …` | What it does |
+## Shipped (hq-mc72.12.19 — read-only)
+
+| Script | Replaces Go `gt …` | What it does |
 |---|---|---|
-| `cycle.sh` | `cycle` | Cycle between sessions in a tmux group (C-b n/p semantics). |
-| `peek.sh` | `peek` | `tmux capture-pane` against a polecat/crew session. |
-| `cleanup.sh` | `cleanup` | Reap orphaned Claude processes. |
-| `orphans.sh` | `orphans` | Report tmux sessions / PIDs with no matching DB row. |
+| `lib.sh` | (shared) | Resolve town root + the per-town tmux socket (`<basename>-<sha256(path)[:6]>`, mirrors Go `townSocketName`; `GT_TMUX_SOCKET` overrides). |
+| `peek.sh` | `peek` | `tmux capture-pane` against a session. Town-agent shorthand (`mayor`/`deacon`/`boot`/`overseer` → `hq-*`); else a literal session name. `[lines]` (default 200) or `--all`. |
 
-These are pure tmux + process-list operations: shell + `tmux` + `pgrep` is the
-right tool, and putting them under `deploy/` keeps the orchestrator binary
-free of process-management code.
+## Pending (interactive / destructive — separate follow-up beads)
 
-Skeleton-only in `hq-mc72.12.9`. Implementation: follow-up
-`hq-mc72.12.B2.*` beads. See
+| Script | Replaces | Why deferred |
+|---|---|---|
+| `cycle.sh` | `cycle` | Switches the attached tmux client between group sessions — interactive/stateful, not meaningfully testable headless. |
+| `cleanup.sh` | `cleanup` | **Kills** orphaned Claude processes — destructive; needs careful guards + a sandbox. |
+| `orphans.sh` | `orphans` (report) / `orphans kill` | The bare report is portable; the `kill` subcommand is destructive. Split when ported. |
+
+`peek.sh` resolves the same per-town tmux socket the orchestrator uses, so it
+reaches the live sessions. See
 [`apps/api/docs/13-bootstrap-decision.md`](../../apps/api/docs/13-bootstrap-decision.md).
