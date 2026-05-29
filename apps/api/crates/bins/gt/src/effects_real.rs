@@ -25,7 +25,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::OnceCell;
 
-use gt_polecat::{PolecatLifecycle, SpawnTemplate, TmuxCli};
+use gt_polecat::{
+    PolecatLifecycle, PolecatSupervisor, RestartConfig, SpawnTemplate, TmuxCli,
+};
 use gt_quota::{Account, AccountQuotaStatus, QuotaCommand, QuotaHandle, RotateAccount};
 
 use crate::root::Effects;
@@ -34,21 +36,30 @@ use crate::root::Effects;
 /// fill it after `spawn` returns.
 pub type QuotaSlot = Arc<OnceCell<QuotaHandle>>;
 
-/// Real [`Effects`] adapter: spawns Rust-managed polecats (via [`PolecatLifecycle`]) and drives
-/// the predictive rotation chain via the quota actor.
+/// Real [`Effects`] adapter: spawns Rust-managed polecats (via [`PolecatLifecycle`]), keeps them
+/// alive through a [`PolecatSupervisor`], and drives the predictive rotation chain via the quota
+/// actor.
 pub struct RealEffects {
     lifecycle: Arc<PolecatLifecycle>,
+    /// hq-mc72.12 C5 — every slung polecat is registered here so a dead tmux session is
+    /// re-slung. `release` (Effects) unwatches when the work terminates. The bin drives the
+    /// supervision pass (`tick`) on a timer and shares this same `Arc`.
+    supervisor: Arc<PolecatSupervisor>,
     quota: QuotaSlot,
 }
 
 impl RealEffects {
-    /// Build a new adapter from a caller-supplied polecat spawner, together with the quota slot
-    /// the bin must fill in after `spawn` returns.
-    pub fn new(lifecycle: PolecatLifecycle) -> (Self, QuotaSlot) {
+    /// Build a new adapter from a caller-supplied polecat spawner + supervisor, together with
+    /// the quota slot the bin must fill in after `spawn` returns.
+    pub fn new(
+        lifecycle: PolecatLifecycle,
+        supervisor: Arc<PolecatSupervisor>,
+    ) -> (Self, QuotaSlot) {
         let slot: QuotaSlot = Arc::new(OnceCell::new());
         (
             Self {
                 lifecycle: Arc::new(lifecycle),
+                supervisor,
                 quota: slot.clone(),
             },
             slot,
@@ -58,12 +69,24 @@ impl RealEffects {
     /// Production constructor: a real `tmux` edge adapter plus a [`SpawnTemplate`] sourced from
     /// the environment. This is what the bins wire — it replaces the old `gt sling` subprocess
     /// path (hq-mc72.12 D1), so the running orchestrator no longer depends on the Go binary to
-    /// dispatch work.
-    pub fn from_env() -> (Self, QuotaSlot) {
-        Self::new(PolecatLifecycle::new(
-            Box::new(TmuxCli::new()),
-            spawn_template_from_env(),
-        ))
+    /// dispatch work. Returns the shared [`PolecatSupervisor`] so the bin can drive its
+    /// supervision pass on a timer (hq-mc72.12 C5).
+    pub fn from_env() -> (Self, QuotaSlot, Arc<PolecatSupervisor>) {
+        let lifecycle =
+            PolecatLifecycle::new(Box::new(TmuxCli::new()), spawn_template_from_env());
+        // The supervisor uses its own `tmux` handle (same default server, so it observes the
+        // sessions the lifecycle created). Hard restart cap from GT_POLECAT_MAX_RESTARTS.
+        let max_restarts = std::env::var("GT_POLECAT_MAX_RESTARTS")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(10);
+        let supervisor = Arc::new(PolecatSupervisor::new(
+            Arc::new(TmuxCli::new()),
+            RestartConfig::default(),
+            max_restarts,
+        ));
+        let (effects, slot) = Self::new(lifecycle, supervisor.clone());
+        (effects, slot, supervisor)
     }
 }
 
@@ -119,20 +142,32 @@ fn pick_target(accounts: &[Account], from: &str) -> Option<String> {
 impl Effects for RealEffects {
     fn sling(&self, convoy: &str, member: &str) {
         let lifecycle = self.lifecycle.clone();
+        let supervisor = self.supervisor.clone();
         let convoy = convoy.to_string();
         let member = member.to_string();
         // `tmux` calls are synchronous (`std::process`), so run the spawn off the async worker
         // to keep the reactor's select-loop non-blocking. `member` is the slung bead — the
-        // lifecycle pins it as GT_HOOK_BEAD inside the new session (hq-63az / gg-0nb).
+        // lifecycle pins it as GT_HOOK_BEAD inside the new session (hq-63az / gg-0nb). On a
+        // successful spawn the polecat is registered with the supervisor so a dead session is
+        // re-slung until the work completes (hq-mc72.12 C5).
         tokio::task::spawn_blocking(move || match lifecycle.sling(&convoy, &member) {
-            Ok(spec) => eprintln!(
-                "[gt] slung polecat session={} rig={} hook={member} (convoy={convoy})",
-                spec.session, spec.rig
-            ),
+            Ok(spec) => {
+                eprintln!(
+                    "[gt] slung polecat session={} rig={} hook={member} (convoy={convoy})",
+                    spec.session, spec.rig
+                );
+                supervisor.watch(spec);
+            }
             Err(e) => {
                 eprintln!("[gt] sling failed convoy={convoy} member={member}: {e}")
             }
         });
+    }
+
+    fn release(&self, member: &str) {
+        // Work for `member` terminated (merged or failed) — stop supervising its polecat so a
+        // completed session is never resurrected (hq-mc72.12 C5).
+        self.supervisor.unwatch_member(member);
     }
 
     fn rotate(&self, account: &str) {

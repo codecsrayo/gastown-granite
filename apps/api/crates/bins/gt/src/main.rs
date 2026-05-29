@@ -134,7 +134,7 @@ async fn run<R, MR, PR, OR>(
     OR: OrchRepository + 'static,
     Arc<OR>: OrchRepository + 'static,
 {
-    let (effects, quota_slot) = RealEffects::from_env();
+    let (effects, quota_slot, polecat_supervisor) = RealEffects::from_env();
 
     // Boot hydration (hq-8iur.1): fold the audit log into per-domain state before spawning,
     // so a restart restores in-flight merge slots / patrol leases / convoy progress / quota
@@ -218,6 +218,12 @@ async fn run<R, MR, PR, OR>(
     // threshold actually raises an escalation without an external tick source.
     let witness_ticker = spawn_witness_ticker(&root);
 
+    // hq-mc72.12 C5 — polecat re-supervision. Drive the PolecatSupervisor's pass on a timer:
+    // a slung polecat whose tmux session died is re-slung with backoff until the work
+    // completes (the reactor's Effects::release unwatches it). `RealEffects` registered each
+    // polecat at sling time; this loop is the live half.
+    let polecat_ticker = spawn_polecat_supervisor(polecat_supervisor);
+
     eprintln!(
         "[gt] composition root up — event log: {}",
         root.log_path().display()
@@ -270,6 +276,10 @@ async fn run<R, MR, PR, OR>(
     // Witness ticker: a pure timer with no downstream consumer — abort it.
     witness_ticker.abort();
     let _ = witness_ticker.await;
+    // Polecat supervisor ticker: same — abort the timer. Live tmux polecats keep running; the
+    // bin is going down, not the town.
+    polecat_ticker.abort();
+    let _ = polecat_ticker.await;
     if let Some(pipeline) = pipeline {
         pipeline.shutdown_graceful().await;
     }
@@ -551,6 +561,37 @@ where
                 if let Err(e) = gt_witness::witness::tick(&witness, &target.worker, now).await {
                     eprintln!("[gt] witness tick failed worker={}: {e}", target.worker);
                 }
+            }
+        }
+    })
+}
+
+/// Drive the [`gt_polecat::PolecatSupervisor`] supervision pass on a timer (hq-mc72.12 C5).
+/// Every `GT_POLECAT_TICK_SECS` (default 15, floored at 1) it re-slings any watched polecat
+/// whose tmux session has died (subject to backoff + the restart cap). `tick` is synchronous
+/// `tmux` I/O, so it runs on the blocking pool to keep the runtime workers free. Aborted on
+/// shutdown.
+fn spawn_polecat_supervisor(
+    supervisor: std::sync::Arc<gt_polecat::PolecatSupervisor>,
+) -> tokio::task::JoinHandle<()> {
+    let interval_secs = std::env::var("GT_POLECAT_TICK_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(15)
+        .max(1);
+    eprintln!("[gt] polecat supervisor: re-sling check every {interval_secs}s");
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(interval_secs));
+        tick.tick().await; // skip the immediate first fire
+        loop {
+            tick.tick().await;
+            let sup = supervisor.clone();
+            // `tick` is blocking tmux I/O; keep it off the runtime workers.
+            let reslung = tokio::task::spawn_blocking(move || sup.tick(now_secs()))
+                .await
+                .unwrap_or(0);
+            if reslung > 0 {
+                eprintln!("[gt] polecat supervisor re-slung {reslung} dead polecat(s)");
             }
         }
     })

@@ -83,6 +83,10 @@ pub trait Effects: Send + 'static {
     /// An account will block (predicted) or just blocked (reactive): rotate off it. Emitted
     /// from `QuotaEvent::BlockPredicted` / `AccountLimited`.
     fn rotate(&self, account: &str);
+    /// Work for `member` terminated (merged or failed): release any edge resources tied to it
+    /// — in production, stop supervising its polecat so a completed session is not re-slung
+    /// (hq-mc72.12 C5). Default no-op so log / test adapters need not implement it.
+    fn release(&self, _member: &str) {}
 }
 
 /// Default effects: log to stderr. The real subprocess/rotation adapter is a follow-up
@@ -710,6 +714,8 @@ where
                 self.sched.capacity_freed().await;
                 let now = self.clock.now_secs();
                 gt_deacon::deacon::finish(&self.deacon, bead, now).await?;
+                // hq-mc72.12 C5: work done — stop supervising its polecat.
+                self.effects.release(bead);
             }
             // Predictive rotation (Paso 6.c): the account will block (or just did) — rotate.
             // hq-mysw: also raise the quota-block operator signal (notification-only; rotation
@@ -752,6 +758,9 @@ where
                 .await?;
                 let now = self.clock.now_secs();
                 gt_deacon::deacon::finish(&self.deacon, bead, now).await?;
+                // hq-mc72.12 C5: terminal failure — the polecat won't recover this bead; stop
+                // supervising its session (a retry is a fresh sling with a new watch).
+                self.effects.release(bead);
             }
             // hq-0bko.2 gate: a rotation landed. Flip the keychain's live pointer so the next
             // edge call uses the new account's credentials. Failure here is a real bug — log

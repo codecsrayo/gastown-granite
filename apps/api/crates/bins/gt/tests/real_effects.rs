@@ -10,9 +10,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gt_beads::InMemoryBeads;
-use gt_polecat::{FakeTmux, PolecatLifecycle, SpawnTemplate, TmuxCli, GT_HOOK_BEAD};
+use gt_polecat::{
+    FakeTmux, PolecatLifecycle, PolecatSupervisor, RestartConfig, SpawnTemplate, TmuxCli,
+    GT_HOOK_BEAD,
+};
 use gt_quota::{Account, AccountQuotaStatus, QuotaState};
-use gt_root::{spawn, RealEffects, RootConfig, SystemClock};
+use gt_root::{spawn, Effects, RealEffects, RootConfig, SystemClock};
 
 /// Spawn-template whose command is a harmless long-lived process so `respawn-pane` succeeds
 /// on hosts without the real coding agent installed.
@@ -49,7 +52,7 @@ async fn sling_spawns_polecat_session_via_lifecycle() {
 
     let repo = Arc::new(InMemoryBeads::default());
     let log = dir.join("events.jsonl");
-    let (effects, quota_slot) = RealEffects::new(lifecycle);
+    let (effects, quota_slot) = RealEffects::new(lifecycle, test_polecat_supervisor());
     let root = spawn(
         repo,
         Arc::new(gt_merge::InMemoryMergeRepo::default()),
@@ -104,7 +107,7 @@ async fn sling_pins_dispatched_bead_as_gt_hook_bead() {
 
     let repo = Arc::new(InMemoryBeads::default());
     let log = dir.join("events.jsonl");
-    let (effects, quota_slot) = RealEffects::new(lifecycle);
+    let (effects, quota_slot) = RealEffects::new(lifecycle, test_polecat_supervisor());
     let root = spawn(
         repo,
         Arc::new(gt_merge::InMemoryMergeRepo::default()),
@@ -150,7 +153,7 @@ async fn rotate_invokes_quota_command_chain_with_healthy_target() {
     let repo = Arc::new(InMemoryBeads::default());
     let log = dir.join("events.jsonl");
 
-    let (effects, quota_slot) = RealEffects::new(fake_lifecycle());
+    let (effects, quota_slot) = RealEffects::new(fake_lifecycle(), test_polecat_supervisor());
     let root = spawn(
         repo,
         Arc::new(gt_merge::InMemoryMergeRepo::default()),
@@ -215,7 +218,7 @@ async fn rotate_with_no_healthy_target_is_a_noop() {
     let repo = Arc::new(InMemoryBeads::default());
     let log = dir.join("events.jsonl");
 
-    let (effects, quota_slot) = RealEffects::new(fake_lifecycle());
+    let (effects, quota_slot) = RealEffects::new(fake_lifecycle(), test_polecat_supervisor());
     let root = spawn(
         repo,
         Arc::new(gt_merge::InMemoryMergeRepo::default()),
@@ -252,6 +255,36 @@ async fn rotate_with_no_healthy_target_is_a_noop() {
 /// A lifecycle that never reaches a real tmux server — the rotate tests don't sling.
 fn fake_lifecycle() -> PolecatLifecycle {
     PolecatLifecycle::new(Box::new(FakeTmux::new()), test_template())
+}
+
+#[tokio::test]
+async fn sling_registers_with_supervisor_and_release_unwatches() {
+    // hq-mc72.12 C5b: a slung polecat is registered with the supervisor (so a dead session is
+    // re-slung), and Effects::release (driven by Merge::Merged/Failed) unwatches it.
+    let supervisor = Arc::new(PolecatSupervisor::new(
+        Arc::new(FakeTmux::new()),
+        RestartConfig::default(),
+        u32::MAX,
+    ));
+    let lifecycle = PolecatLifecycle::new(Box::new(FakeTmux::new()), test_template());
+    let (effects, _slot) = RealEffects::new(lifecycle, supervisor.clone());
+
+    // sling is fire-and-forget (spawn_blocking); poll until the watch lands.
+    effects.sling("cv-c5", "hq-c5");
+    let watched = wait_for(Duration::from_secs(5), || supervisor.watched_count() == 1).await;
+    assert!(watched, "sling did not register the polecat with the supervisor");
+
+    // Work terminated → release unwatches it (no resurrection).
+    effects.release("hq-c5");
+    assert_eq!(supervisor.watched_count(), 0, "release did not unwatch the polecat");
+}
+
+fn test_polecat_supervisor() -> Arc<gt_polecat::PolecatSupervisor> {
+    Arc::new(gt_polecat::PolecatSupervisor::new(
+        Arc::new(FakeTmux::new()),
+        gt_polecat::RestartConfig::default(),
+        u32::MAX,
+    ))
 }
 
 fn tempdir() -> PathBuf {

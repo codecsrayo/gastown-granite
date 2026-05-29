@@ -17,7 +17,7 @@ async fn patrol_lease_expiry_auto_arms_witness_watch() {
     let log = dir.join("events.jsonl");
 
     let lifecycle = PolecatLifecycle::new(Box::new(FakeTmux::new()), template());
-    let (effects, quota_slot) = RealEffects::new(lifecycle);
+    let (effects, quota_slot) = RealEffects::new(lifecycle, test_polecat_supervisor());
     let repo = Arc::new(InMemoryBeads::default());
     let root = spawn(
         repo,
@@ -69,6 +69,14 @@ fn template() -> SpawnTemplate {
         base_env: vec![("GT_ROLE".to_string(), "polecat".to_string())],
         heartbeat_dir: std::env::temp_dir(),
     }
+}
+
+fn test_polecat_supervisor() -> Arc<gt_polecat::PolecatSupervisor> {
+    Arc::new(gt_polecat::PolecatSupervisor::new(
+        Arc::new(FakeTmux::new()),
+        gt_polecat::RestartConfig::default(),
+        u32::MAX,
+    ))
 }
 
 fn tempdir() -> PathBuf {

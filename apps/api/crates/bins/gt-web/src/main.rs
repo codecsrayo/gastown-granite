@@ -190,7 +190,10 @@ async fn serve<R, SQ, MR, PR, OR>(
     OR: OrchRepository + 'static,
     Arc<OR>: OrchRepository + 'static,
 {
-    let (effects, quota_slot) = RealEffects::from_env();
+    // gt-web is the read-side: it wires RealEffects for parity but does not drive the polecat
+    // supervision pass (the orchestrator `gt` bin owns that timer), so the supervisor handle
+    // is dropped here.
+    let (effects, quota_slot, _polecat_supervisor) = RealEffects::from_env();
 
     // Boot hydration (hq-8iur.1) — match the gt bin so a gt-web restart restores the same
     // in-flight state from the shared event log before serving the read-side.

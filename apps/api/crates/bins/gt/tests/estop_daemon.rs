@@ -18,7 +18,7 @@ async fn estop_message_triggers_deacon_drain() {
     let channel = Channel::open(&dir, "estop").expect("open channel");
 
     let lifecycle = PolecatLifecycle::new(Box::new(FakeTmux::new()), template());
-    let (effects, quota_slot) = RealEffects::new(lifecycle);
+    let (effects, quota_slot) = RealEffects::new(lifecycle, test_polecat_supervisor());
     let repo = Arc::new(InMemoryBeads::default());
     let root = spawn(
         repo,
@@ -101,6 +101,14 @@ fn template() -> SpawnTemplate {
         base_env: vec![("GT_ROLE".to_string(), "polecat".to_string())],
         heartbeat_dir: std::env::temp_dir(),
     }
+}
+
+fn test_polecat_supervisor() -> Arc<gt_polecat::PolecatSupervisor> {
+    Arc::new(gt_polecat::PolecatSupervisor::new(
+        Arc::new(FakeTmux::new()),
+        RestartConfig::default(),
+        u32::MAX,
+    ))
 }
 
 fn tempdir() -> PathBuf {
