@@ -28,6 +28,8 @@ futures = "0.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
+# `gt done` generates a ULID for the merge-submit channel-event id when one isn't supplied.
+ulid = { workspace = true }
 
 [dev-dependencies]
 # Integration tests boot the real gt-web router in-process on a transient socket (the same
