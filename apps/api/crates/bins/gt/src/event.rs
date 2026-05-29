@@ -21,6 +21,7 @@ use gt_events::{AppError, EventKind};
 
 use gt_agent::{AgentEvent, SessionRegistry};
 use gt_feed::{Curator, FeedState};
+use gt_mayor::{MayorEvent, MayorState};
 use gt_merge::{MergeEvent, MergeState};
 use gt_orchestration::{OrchEvent, OrchState};
 use gt_patrol::{PatrolEvent, PatrolState};
@@ -46,6 +47,7 @@ pub enum GtEvent {
     Deacon(DeaconEvent),
     Refinery(RefineryEvent),
     Witness(WitnessEvent),
+    Mayor(MayorEvent),
 }
 
 impl EventKind for GtEvent {
@@ -63,6 +65,7 @@ impl EventKind for GtEvent {
             GtEvent::Deacon(e) => e.kind(),
             GtEvent::Refinery(e) => e.kind(),
             GtEvent::Witness(e) => e.kind(),
+            GtEvent::Mayor(e) => e.kind(),
         }
     }
 }
@@ -86,6 +89,7 @@ gt_from!(Sheriff, SheriffEvent);
 gt_from!(Deacon, DeaconEvent);
 gt_from!(Refinery, RefineryEvent);
 gt_from!(Witness, WitnessEvent);
+gt_from!(Mayor, MayorEvent);
 
 /// Wire prefixes that ride in the event log but are **not** domain state: frontier-audit
 /// observability (e.g. `mcp.invoked` from `gt-mcp`). Domain replay skips them so reconstructed
@@ -123,6 +127,7 @@ impl GtEvent {
             "deacon" => GtEvent::Deacon(rec.decode()?),
             "refinery" => GtEvent::Refinery(rec.decode()?),
             "witness" => GtEvent::Witness(rec.decode()?),
+            "mayor" => GtEvent::Mayor(rec.decode()?),
             other => return Err(AppError::Other(format!("unknown event domain: {other}"))),
         })
     }
@@ -148,6 +153,7 @@ pub struct GtState {
     pub deacon: DeaconState,
     pub refinery: RefineryState,
     pub witness: WitnessState,
+    pub mayor: MayorState,
     pub feed: FeedState,
 }
 
@@ -178,6 +184,11 @@ impl GtState {
             // fold is total in practice).
             GtEvent::Witness(e) => {
                 let _ = self.witness.apply(e);
+            }
+            // Same pattern as Sheriff: the typed apply returns Result for actor symmetry,
+            // but the reducer here is total — fold and discard.
+            GtEvent::Mayor(e) => {
+                let _ = self.mayor.apply(e);
             }
         }
     }
