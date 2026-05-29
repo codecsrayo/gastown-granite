@@ -70,7 +70,7 @@ Docs hermanos (lectura obligada antes de tocar nada):
 | **hq-fe-view** | Vistas + componentes (UI) | 13 | hq-fe-build + hq-fe-api-r | PLANEADO |
 | **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | PLANEADO |
 | **hq-mcp-issues** | MCP `issues.*` CRUD (cerrar bypass docker exec) | 5 | hq-fe-api-w.1 | PLANEADO |
-| **hq-mcp-onboard** | MCP agent onboarding + discoverability (slogan-feedback gaps) | 10 | parcial hq-mcp-issues.2 + hq-fe-api-w.1 | PLANEADO |
+| **hq-mcp-onboard** | MCP agent onboarding + discoverability (slogan-feedback gaps) | 10 | parcial hq-mcp-issues.2 + hq-fe-api-w.1 | WORKING · claude-host-onboard |
 
 Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 
