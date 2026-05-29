@@ -96,3 +96,42 @@ system_variables:
   dolt_stats_enabled: 0
 EOF
 }
+
+# Extract a flag value (`--flag value` or `--flag=value`) from a NUL-separated cmdline.
+# Reads $2's /proc cmdline; echoes the value or nothing. Linux-only (the deploy target).
+dolt_proc_flag() {
+  local pid="$1" flag="$2" args arg want=0
+  [ -r "/proc/$pid/cmdline" ] || return 0
+  while IFS= read -r -d '' arg; do
+    if [ "$want" = 1 ]; then printf '%s\n' "$arg"; return 0; fi
+    case "$arg" in
+      "$flag") want=1 ;;
+      "$flag="*) printf '%s\n' "${arg#"$flag"=}"; return 0 ;;
+    esac
+  done < "/proc/$pid/cmdline"
+}
+
+# Does the dolt process `pid` belong to THIS town? Mirrors Go `doltProcessMatchesTownPaths`:
+# match if its --data-dir, or --config (== <DATA_DIR>/config.yaml), or cwd resolves to our
+# data dir. Used to tell our own server apart from a foreign "imposter" on the same port.
+dolt_proc_is_ours() {
+  local pid="$1" want actual
+  want="$(realpath "$DATA_DIR" 2>/dev/null || printf '%s' "$DATA_DIR")"
+
+  actual="$(dolt_proc_flag "$pid" --data-dir)"
+  if [ -n "$actual" ]; then
+    [ "$(realpath "$actual" 2>/dev/null || printf '%s' "$actual")" = "$want" ]
+    return
+  fi
+  actual="$(dolt_proc_flag "$pid" --config)"
+  if [ -n "$actual" ]; then
+    [ "$(realpath "$actual" 2>/dev/null || printf '%s' "$actual")" = "$want/config.yaml" ]
+    return
+  fi
+  actual="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
+  if [ -n "$actual" ]; then
+    [ "$actual" = "$want" ] || [ "$actual" = "$(dirname "$want")" ]
+    return
+  fi
+  return 1
+}

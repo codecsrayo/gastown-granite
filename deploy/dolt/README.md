@@ -23,12 +23,15 @@ Verified invocation form for this Dolt build: `--host`/`--port`/`--no-tls` are
 `start.sh`/`stop.sh` were tested on a throwaway server (`GT_DOLT_PORT=3399`,
 temp `GT_DOLT_DATA_DIR`) — never against the shared live `:3307`.
 
-## Pending (separate follow-up beads)
+## Shipped (hq-mc72.12.22 — admin)
 
-| Script | Replaces | Why deferred |
+| Script | Replaces Go `gt dolt …` | What it does |
 |---|---|---|
-| `restart.sh` | `dolt restart` | Compose of stop + kill-imposters + start; land after kill-imposters. |
-| `kill-imposters.sh` | `dolt kill` (imposter) | **Destructive** (kills a foreign Dolt holding the port) — needs careful process-identity checks. |
+| `kill-imposters.sh` | `dolt kill` (imposter) | SIGTERM a **foreign** dolt holding our port (identity via `/proc` `--data-dir`/`--config`/cwd vs our data dir — our own server is never touched). `--dry-run` previews. |
+| `restart.sh` | `dolt restart` | `stop.sh` then `start.sh`. Non-destructive: refuses + points at `kill-imposters.sh` if a foreign dolt still holds the port. |
+
+Imposter identity mirrors Go `doltProcessMatchesTownPaths`. Sandbox-tested
+against a throwaway foreign server on a non-live port.
 
 The orchestrator (`apps/api/crates/kernel/gt-store-dolt`) connects to Dolt as
 a **client** (MySQL wire on `:3307`); it has no business starting the server.
