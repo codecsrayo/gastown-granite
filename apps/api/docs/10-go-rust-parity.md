@@ -472,7 +472,7 @@ When updating this doc:
    refresh the RealEffects edges.
 6. `grep -rEn 'Role[A-Z][a-zA-Z]* Role =' internal/session/identity.go` —
    refresh the Go role taxonomy; cross-check the shipped Rust enum at
-   `apps/api/crates/domain/gt-agent/src/state.rs` (`SessionRole` / `DogKind`)
+   `apps/api/crates/domain/lifecycle/gt-agent/src/state.rs` (`SessionRole` / `DogKind`)
    and re-validate the D1–D5 divergence table.
 
 Anything that drifts between this doc and the source is a parity regression —

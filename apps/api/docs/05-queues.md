@@ -52,7 +52,7 @@ El CAS es la red para crash/recuperación o un segundo dispatcher, no el camino 
 ### Lease / visibility-timeout = heartbeat + witness
 
 Un bead `dispatched` cuyo polecat muere (heartbeat stale) **vuelve a `pending`**. Eso lo
-hace `gt-patrol` (Paso 6.a, `crates/domain/gt-patrol`): el actor mantiene el set de leases
+hace `gt-patrol` (Paso 6.a, `crates/domain/orchestration/gt-patrol`): el actor mantiene el set de leases
 vivos, el detector puro (`expectations::expired_leases`) compara `now_secs - last_seen`
 contra el timeout, y al expirar emite `PatrolEvent::LeaseExpired { bead, worker, priority }`.
 El composition root reacciona invocando `BeadRepository::cas_release(bead, worker)` (sólo

@@ -183,7 +183,7 @@ GROUP BY account_id;
 ## Estado
 
 **Núcleo DONE** (Paso 6.c, al 2026-05-27, bead hq-mc72.3). Implementado en
-`crates/domain/gt-quota` + `crates/kernel/gt-store-pg`:
+`crates/domain/orchestration/gt-quota` + `crates/kernel/gt-store-pg`:
 
 - `QuotaEvent` con `TokensSampled` / `UsageProbed` / `WindowReset` / `BlockPredicted` /
   `AccountLimited` / `Rotated` / `Blocked`. El reloj viaja como `now_secs` en cada evento.

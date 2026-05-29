@@ -131,7 +131,7 @@ Mismo patrón aplicado en orden:
    `Register`/`Heartbeat`/`Close`/`Tick(now_secs, timeout)` desde el borde, el detector
    puro emite `LeaseExpired { bead, worker, priority }`, y el composition root reacciona
    con `BeadRepository::cas_release` + re-encolar. El reloj entra como dato en cada
-   evento → replay determinista (regla de `docs/06`). Crate: `crates/domain/gt-patrol`.
+   evento → replay determinista (regla de `docs/06`). Crate: `crates/domain/orchestration/gt-patrol`.
    Gate test: `orchestrated_flow_with_stale_polecat_recovers_via_patrol`.
 2. **`gt-merge` + `gt-channel`** ✅ DONE — introduce el mailbox de archivo *entre
    procesos* para `await MERGE_READY`. `gt-channel` expone `Channel::{open, emit,
@@ -144,7 +144,7 @@ Mismo patrón aplicado en orden:
    el actor), `MergeState` (reducer de replay) y la `refinery` (productor que traduce
    cada mensaje del canal a `Submit` y ackea **después** de empujar → at-least-once;
    payload corrupto se ackea para no entrar en bucle). Crates:
-   `crates/kernel/gt-channel`, `crates/domain/gt-merge`. Gates:
+   `crates/kernel/gt-channel`, `crates/domain/orchestration/gt-merge`. Gates:
    `refinery_drives_slot_to_merged_then_replay_matches`,
    `refinery_failed_merge_records_failed_event_and_replay_matches`.
 3. **`gt-quota` + `gt-store-pg`** ✅ DONE — primer Postgres del workspace. Trazabilidad de
@@ -156,7 +156,7 @@ Mismo patrón aplicado en orden:
    `cost::cost_units` (normaliza tokens a unidad de coste por modelo — no se suman tokens de
    modelos distintos). El puerto `QuotaRepository` (append-only `token_usage`, sin `UPDATE`
    de contadores) lo implementa `gt-store-pg::PgQuota` con `sqlx` (`query`/`query_as`
-   runtime, sin macros → no requiere BD en build-time). Crates: `crates/domain/gt-quota`,
+   runtime, sin macros → no requiere BD en build-time). Crates: `crates/domain/orchestration/gt-quota`,
    `crates/kernel/gt-store-pg`. Gates: contrato `QuotaRepository` corre 2× (in-memory +
    Postgres real si `GT_PG_URL`); `predictive_rotation_fires_before_account_limited_and_replay_matches`
    (seed de rate conocido → ETA < umbral → **un** `BlockPredicted` por ventana → rotación
@@ -176,7 +176,7 @@ Mismo patrón aplicado en orden:
    `OrchMsg`; lanzan convoys, observan beads miembro cerrando); `crew` ejecuta cada
    `MemberDispatched` que el composition root convierte en `gt sling`. Aislamiento: solo
    depende de `gt-events` (no `gt-scheduling`/`gt-merge`/`gt-beads`). Crate:
-   `crates/domain/gt-orchestration`. Gates:
+   `crates/domain/orchestration/gt-orchestration`. Gates:
    `convoy_drives_members_to_close_then_replay_matches` (3 miembros → handoff secuencial →
    cierre → replay reconstruye `OrchState` byte-idéntico) y
    `convoy_member_failure_halts_then_replay_matches` (fallo de miembro halta el convoy, el
