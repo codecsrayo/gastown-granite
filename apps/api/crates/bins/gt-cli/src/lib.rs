@@ -191,6 +191,35 @@ pub enum Command {
         #[arg(long)]
         ack: bool,
     },
+    /// Tail the audit log: print recent MCP audit records (`mcp.invoked` / `mcp.unauthorized`)
+    /// from the event log JSONL. Filterable by actor / tool.
+    Audit {
+        /// Match `payload.actor` exactly.
+        #[arg(long)]
+        actor: Option<String>,
+        /// Match `payload.tool` exactly.
+        #[arg(long)]
+        tool: Option<String>,
+        /// Max records to print, most recent first.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Override the log path. Default: `$GT_EVENT_LOG` or `/tmp/gt.events.jsonl`.
+        #[arg(long)]
+        log: Option<String>,
+    },
+    /// Roll up token usage from `quota.tokens_sampled` records in the event log JSONL. Sums
+    /// input + output + cache_read + cache_creation per account (or per (account, model)).
+    Costs {
+        /// Filter to one account.
+        #[arg(long)]
+        account: Option<String>,
+        /// Break the totals down by `(account, model)` instead of by account only.
+        #[arg(long)]
+        by_model: bool,
+        /// Override the log path. Default: `$GT_EVENT_LOG` or `/tmp/gt.events.jsonl`.
+        #[arg(long)]
+        log: Option<String>,
+    },
 
     // --- Stub: backend not yet in Rust. ---
     /// [BLOCKED] Dispatch work to an agent. Needs RealEffects self-host (hq-oap5.2 / was hq-8iur.6).
@@ -301,6 +330,12 @@ pub async fn run(cli: Cli, cfg: Config) -> Result<i32> {
         }
         Command::AwaitEvent { channel, timeout, ack } => {
             run_await_event(&channel, timeout, ack, cli.json).await
+        }
+        Command::Audit { actor, tool, limit, log } => {
+            run_audit(actor, tool, limit, log, cli.json)
+        }
+        Command::Costs { account, by_model, log } => {
+            run_costs(account, by_model, log, cli.json)
         }
 
         Command::Sling { .. } => Ok(blocked(
@@ -1137,6 +1172,239 @@ fn read_stdin_bytes() -> Result<Vec<u8>> {
     Ok(buf)
 }
 
+// --- audit + costs (event-log readers) -------------------------------------
+
+/// Resolve the event-log path: explicit `--log` > `$GT_EVENT_LOG` > `/tmp/gt.events.jsonl`
+/// (the same default `bins/gt::main` uses, so both the writer and the readers agree).
+fn event_log_path(override_path: Option<&str>) -> PathBuf {
+    if let Some(p) = override_path {
+        return PathBuf::from(p);
+    }
+    if let Ok(v) = std::env::var("GT_EVENT_LOG") {
+        if !v.is_empty() {
+            return PathBuf::from(v);
+        }
+    }
+    PathBuf::from("/tmp/gt.events.jsonl")
+}
+
+/// Stream one `serde_json::Value` per non-blank line from a JSONL file. Malformed lines are
+/// skipped (the log is append-only frontier audit, not a domain mutation — a partial line at
+/// the tail must not abort the read).
+fn read_jsonl(path: &std::path::Path) -> Result<Vec<serde_json::Value>> {
+    use std::io::{BufRead, BufReader};
+    let f = std::fs::File::open(path)
+        .with_context(|| format!("open event log {}", path.display()))?;
+    let mut out = Vec::new();
+    for line in BufReader::new(f).lines() {
+        let line = line.context("read event log line")?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
+            out.push(v);
+        }
+    }
+    Ok(out)
+}
+
+/// `gt audit` — print recent MCP audit records. Records are filtered by `type` starting with
+/// `mcp.` (the kind prefix `audit::AuditEvent::kind()` writes) and optionally by
+/// `payload.actor` / `payload.tool`.
+fn run_audit(
+    actor: Option<String>,
+    tool: Option<String>,
+    limit: usize,
+    log: Option<String>,
+    json: bool,
+) -> Result<i32> {
+    let path = event_log_path(log.as_deref());
+    let records = read_jsonl(&path)?;
+    let hits = filter_audit(&records, actor.as_deref(), tool.as_deref(), limit);
+
+    if json {
+        print_json(&hits)?;
+    } else if hits.is_empty() {
+        println!("(no audit records)");
+    } else {
+        println!("{:<20} {:<14} {:<26} {:<8} {}", "TS", "ACTOR", "TOOL", "OUTCOME", "KIND");
+        for r in &hits {
+            let ts = r.get("ts").and_then(|t| t.as_str()).unwrap_or("-");
+            let kind = r.get("type").and_then(|t| t.as_str()).unwrap_or("-");
+            let payload = r.get("payload");
+            let actor = payload.and_then(|p| p.get("actor")).and_then(|v| v.as_str()).unwrap_or("-");
+            let tool = payload.and_then(|p| p.get("tool")).and_then(|v| v.as_str()).unwrap_or("-");
+            let outcome = audit_outcome(r);
+            println!("{:<20} {:<14} {:<26} {:<8} {}", ts, actor, tool, outcome, kind);
+        }
+    }
+    Ok(0)
+}
+
+/// Pure filter for [`run_audit`]: applies the kind + actor + tool filters, then keeps the most
+/// recent `limit` rows (the JSONL is append order). Returns owned `Value`s to keep the test
+/// surface simple.
+fn filter_audit(
+    records: &[serde_json::Value],
+    actor: Option<&str>,
+    tool: Option<&str>,
+    limit: usize,
+) -> Vec<serde_json::Value> {
+    let mut hits: Vec<serde_json::Value> = records
+        .iter()
+        .filter(|r| {
+            let kind = r.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if !kind.starts_with("mcp.") {
+                return false;
+            }
+            let payload = r.get("payload");
+            if let Some(want) = actor {
+                let got = payload
+                    .and_then(|p| p.get("actor"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if got != want {
+                    return false;
+                }
+            }
+            if let Some(want) = tool {
+                let got = payload
+                    .and_then(|p| p.get("tool"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if got != want {
+                    return false;
+                }
+            }
+            true
+        })
+        .cloned()
+        .collect();
+    hits.reverse();
+    hits.truncate(limit);
+    hits
+}
+
+/// Render the audit outcome cell: `ok` / `failed` for `Invoked` (`payload.outcome.status`),
+/// `denied` for `Unauthorized`.
+fn audit_outcome(record: &serde_json::Value) -> String {
+    let kind = record.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    if kind == "mcp.unauthorized" {
+        return "denied".to_string();
+    }
+    record
+        .get("payload")
+        .and_then(|p| p.get("outcome"))
+        .and_then(|o| o.get("status"))
+        .and_then(|s| s.as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+/// One row of the cost rollup. Public-ish only for the test module.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+struct CostRow {
+    account: String,
+    model: Option<String>,
+    samples: u64,
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_creation: u64,
+}
+
+impl CostRow {
+    fn total(&self) -> u64 {
+        self.input + self.output + self.cache_read + self.cache_creation
+    }
+}
+
+/// `gt costs` — aggregate `quota.tokens_sampled` records by account (or by `(account, model)`).
+fn run_costs(
+    account: Option<String>,
+    by_model: bool,
+    log: Option<String>,
+    json: bool,
+) -> Result<i32> {
+    let path = event_log_path(log.as_deref());
+    let records = read_jsonl(&path)?;
+    let rows = aggregate_costs(&records, account.as_deref(), by_model);
+
+    if json {
+        print_json(&rows)?;
+    } else if rows.is_empty() {
+        println!("(no quota.tokens_sampled records)");
+    } else {
+        println!(
+            "{:<20} {:<24} {:>7} {:>12} {:>12} {:>12} {:>12} {:>12}",
+            "ACCOUNT", "MODEL", "N", "INPUT", "OUTPUT", "CACHE_R", "CACHE_W", "TOTAL"
+        );
+        for r in &rows {
+            println!(
+                "{:<20} {:<24} {:>7} {:>12} {:>12} {:>12} {:>12} {:>12}",
+                r.account,
+                r.model.as_deref().unwrap_or("-"),
+                r.samples,
+                r.input,
+                r.output,
+                r.cache_read,
+                r.cache_creation,
+                r.total()
+            );
+        }
+    }
+    Ok(0)
+}
+
+/// Pure aggregator for [`run_costs`]: walks the records once, keys by `account` (or
+/// `(account, model)` when `by_model` is set), sums the four token counters + sample count.
+/// The output is sorted descending by total tokens so the highest spenders surface first.
+fn aggregate_costs(
+    records: &[serde_json::Value],
+    account_filter: Option<&str>,
+    by_model: bool,
+) -> Vec<CostRow> {
+    use std::collections::BTreeMap;
+    let mut by_key: BTreeMap<(String, Option<String>), CostRow> = BTreeMap::new();
+    for r in records {
+        let kind = r.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if kind != "quota.tokens_sampled" {
+            continue;
+        }
+        let payload = match r.get("payload") {
+            Some(p) => p,
+            None => continue,
+        };
+        let acct = payload.get("account").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if acct.is_empty() {
+            continue;
+        }
+        if let Some(want) = account_filter {
+            if acct != want {
+                continue;
+            }
+        }
+        let model = payload
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        let key = (acct.clone(), if by_model { model.clone() } else { None });
+        let row = by_key.entry(key).or_insert_with(|| CostRow {
+            account: acct,
+            model: if by_model { model } else { None },
+            ..CostRow::default()
+        });
+        row.samples += 1;
+        row.input += payload.get("input").and_then(|v| v.as_u64()).unwrap_or(0);
+        row.output += payload.get("output").and_then(|v| v.as_u64()).unwrap_or(0);
+        row.cache_read += payload.get("cache_read").and_then(|v| v.as_u64()).unwrap_or(0);
+        row.cache_creation += payload.get("cache_creation").and_then(|v| v.as_u64()).unwrap_or(0);
+    }
+    let mut rows: Vec<CostRow> = by_key.into_values().collect();
+    rows.sort_by(|a, b| b.total().cmp(&a.total()));
+    rows
+}
+
 // --- shared helpers --------------------------------------------------------
 
 fn env_or(key: &str, default: &str) -> String {
@@ -1410,5 +1678,139 @@ mod channel_tests {
             .collect();
         assert_eq!(listing.len(), 1, "peek (no --ack) must leave the file in place");
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod audit_costs_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn rec(kind: &str, ts: &str, payload: serde_json::Value) -> serde_json::Value {
+        json!({
+            "event_id": format!("ev-{ts}"),
+            "correlation_id": format!("co-{ts}"),
+            "causation_id": null,
+            "ts": ts,
+            "type": kind,
+            "payload": payload,
+        })
+    }
+
+    #[test]
+    fn audit_filters_and_limits() {
+        let log = vec![
+            rec("mcp.invoked", "2026-05-29T00:00:01Z", json!({
+                "kind": "invoked", "actor": "max", "tool": "agent.add.execute",
+                "arguments": {}, "outcome": {"status": "ok"}
+            })),
+            rec("mcp.invoked", "2026-05-29T00:00:02Z", json!({
+                "kind": "invoked", "actor": "kev", "tool": "quota.rotate.execute",
+                "arguments": {}, "outcome": {"status": "failed", "error": "nope"}
+            })),
+            rec("mcp.unauthorized", "2026-05-29T00:00:03Z", json!({
+                "kind": "unauthorized", "actor": "max", "tool": "merge.start.execute",
+                "reason": "out of scope"
+            })),
+            // A non-audit record (must be ignored).
+            rec("agent.spawned", "2026-05-29T00:00:04Z", json!({"id": "p1"})),
+        ];
+
+        // Most-recent-first ordering.
+        let all = filter_audit(&log, None, None, 10);
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].get("type").and_then(|t| t.as_str()), Some("mcp.unauthorized"));
+
+        // Filter by actor.
+        let max = filter_audit(&log, Some("max"), None, 10);
+        assert_eq!(max.len(), 2);
+        assert!(max.iter().all(|r| {
+            r.get("payload").and_then(|p| p.get("actor")).and_then(|v| v.as_str()) == Some("max")
+        }));
+
+        // Filter by tool.
+        let rotate = filter_audit(&log, None, Some("quota.rotate.execute"), 10);
+        assert_eq!(rotate.len(), 1);
+        assert_eq!(audit_outcome(&rotate[0]), "failed");
+
+        // Limit truncates after the recency reverse.
+        let one = filter_audit(&log, None, None, 1);
+        assert_eq!(one.len(), 1);
+        assert_eq!(audit_outcome(&one[0]), "denied");
+    }
+
+    #[test]
+    fn costs_aggregates_by_account_and_model() {
+        let log = vec![
+            rec("quota.tokens_sampled", "t1", json!({
+                "account": "acme", "session": "s1", "model": "opus-4-7",
+                "input": 100u64, "output": 50u64, "cache_read": 10u64, "cache_creation": 0u64,
+                "now_secs": 1u64
+            })),
+            rec("quota.tokens_sampled", "t2", json!({
+                "account": "acme", "session": "s2", "model": "haiku-4-5",
+                "input": 1u64, "output": 2u64, "cache_read": 0u64, "cache_creation": 0u64,
+                "now_secs": 2u64
+            })),
+            rec("quota.tokens_sampled", "t3", json!({
+                "account": "beta", "session": "s3", "model": "opus-4-7",
+                "input": 7u64, "output": 3u64, "cache_read": 0u64, "cache_creation": 1u64,
+                "now_secs": 3u64
+            })),
+            // Non-quota records ignored.
+            rec("mcp.invoked", "t4", json!({"actor": "x", "tool": "y"})),
+        ];
+
+        // Per-account rollup (default).
+        let rows = aggregate_costs(&log, None, false);
+        assert_eq!(rows.len(), 2);
+        // Sorted descending by total: acme (163) > beta (11).
+        assert_eq!(rows[0].account, "acme");
+        assert_eq!(rows[0].samples, 2);
+        assert_eq!(rows[0].input, 101);
+        assert_eq!(rows[0].output, 52);
+        assert_eq!(rows[0].cache_read, 10);
+        assert_eq!(rows[0].model, None);
+        assert_eq!(rows[0].total(), 163);
+        assert_eq!(rows[1].account, "beta");
+        assert_eq!(rows[1].total(), 11);
+
+        // Account filter.
+        let only_acme = aggregate_costs(&log, Some("acme"), false);
+        assert_eq!(only_acme.len(), 1);
+        assert_eq!(only_acme[0].account, "acme");
+
+        // By-model splits acme into two rows.
+        let by_model = aggregate_costs(&log, None, true);
+        assert_eq!(by_model.len(), 3);
+        let acme_opus = by_model
+            .iter()
+            .find(|r| r.account == "acme" && r.model.as_deref() == Some("opus-4-7"))
+            .expect("acme/opus row");
+        assert_eq!(acme_opus.samples, 1);
+        assert_eq!(acme_opus.input, 100);
+    }
+
+    #[test]
+    fn read_jsonl_skips_blank_and_malformed_lines() {
+        let dir = std::env::temp_dir().join(format!(
+            "gt-cli-jsonl-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("log.jsonl");
+        let body = "\
+{\"type\":\"mcp.invoked\",\"ts\":\"t1\",\"payload\":{\"actor\":\"a\",\"tool\":\"x\"}}
+\n\
+{not json}\n\
+{\"type\":\"agent.spawned\",\"ts\":\"t2\",\"payload\":{}}\n";
+        std::fs::write(&path, body).unwrap();
+        let recs = read_jsonl(&path).unwrap();
+        assert_eq!(recs.len(), 2, "malformed + blank lines must be skipped");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
