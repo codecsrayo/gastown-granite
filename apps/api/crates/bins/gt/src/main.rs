@@ -196,6 +196,12 @@ async fn run<R, MR, PR, OR>(
     );
     let plugin_task = spawn_plugin_relay(&root, plugin_registry);
 
+    // hq-mc72.12 C2 — Refinery MERGE_READY live loop, under a restart+backoff supervisor.
+    // First role daemon wired in production (the others — witness patrol tick, mayor orch
+    // loop, deacon drain — follow). Only the orchestrator bin runs this; `gt-web` is
+    // read-side and would double-submit if it also subscribed.
+    let refinery_task = spawn_refinery_daemon(&root);
+
     eprintln!(
         "[gt] composition root up — event log: {}",
         root.log_path().display()
@@ -220,10 +226,65 @@ async fn run<R, MR, PR, OR>(
     // The plugin relay also exits on broadcast `Closed`; await so any in-flight `on_event`
     // returns before tearing telemetry down.
     let _ = plugin_task.await;
+    // Refinery is the live producer: nothing downstream consumes from it (it only feeds the
+    // merge actor via `submit`, which is in-process). Abort to stop the channel watcher and
+    // its subscribe thread; in-flight work for any message already submitted is durable in
+    // the merge actor / audit log.
+    if let Some(task) = refinery_task {
+        task.abort();
+        let _ = task.await;
+    }
     if let Some(pipeline) = pipeline {
         pipeline.shutdown_graceful().await;
     }
     eprintln!("[gt] shutdown complete");
+}
+
+/// Spawn the supervised Refinery MERGE_READY daemon (hq-mc72.12 C2). The channel root comes
+/// from `GT_CHANNEL_ROOT` (default `/gt/.channels`) and the channel name from
+/// `GT_MERGE_READY_CHANNEL` (default `merge-ready`). Returns `None` when the channel can't be
+/// opened — the orchestrator still boots; operators get a stderr breadcrumb. The supervisor
+/// reuses [`gt_polecat::supervise_daemon`] with the default [`gt_polecat::RestartConfig`] so
+/// transient channel/watcher failures auto-recover with the same backoff curve polecats use.
+fn spawn_refinery_daemon<R>(root: &RootHandle<R>) -> Option<tokio::task::JoinHandle<()>>
+where
+    R: BeadRepository + Clone + 'static,
+{
+    let root_dir = std::env::var("GT_CHANNEL_ROOT")
+        .unwrap_or_else(|_| "/gt/.channels".to_string());
+    let channel_name =
+        std::env::var("GT_MERGE_READY_CHANNEL").unwrap_or_else(|_| "merge-ready".to_string());
+    let channel = match gt_channel::Channel::open(&root_dir, &channel_name) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "[gt] refinery disabled — channel open failed at {root_dir}/{channel_name}: {e}"
+            );
+            return None;
+        }
+    };
+    eprintln!("[gt] refinery: MERGE_READY channel {}", channel.dir().display());
+
+    let merge = root.merge.clone();
+    Some(tokio::spawn(async move {
+        let mut tracker = gt_polecat::RestartTracker::new(gt_polecat::RestartConfig::default());
+        let make = move || {
+            let channel = channel.clone();
+            let merge = merge.clone();
+            async move {
+                if let Err(e) = gt_merge::refinery::run(channel, merge).await {
+                    eprintln!("[gt] refinery channel error: {e} — supervisor will restart");
+                }
+            }
+        };
+        gt_polecat::supervise_daemon("refinery", make, &mut tracker, u32::MAX, || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        })
+        .await;
+    }))
 }
 
 /// Wait for SIGTERM or SIGINT. Returns the unit when the first arrives. If signal install

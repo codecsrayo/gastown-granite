@@ -21,5 +21,5 @@ pub use lifecycle::{
     spawn_process, spawn_tmux, PolecatLifecycle, SpawnSpec, SpawnTemplate, SpawnedPolecat,
 };
 pub use restart::{RestartConfig, RestartTracker};
-pub use supervisor::{supervise_polecat, watch, RespawnPolicy, WatchOutcome};
+pub use supervisor::{supervise_daemon, supervise_polecat, watch, RespawnPolicy, WatchOutcome};
 pub use tmux::{FakeTmux, Tmux, TmuxCli};

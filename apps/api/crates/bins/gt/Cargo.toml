@@ -45,6 +45,8 @@ gt-witness = { path = "../../domain/roles/gt-witness" }
 gt-feed = { path = "../../domain/platform/gt-feed" }
 # hq-63az Paso 9.E — polecat lifecycle + GT_HOOK_BEAD hooks; the sling edge pins the bead.
 gt-polecat = { path = "../../domain/lifecycle/gt-polecat" }
+# hq-mc72.12 C2 — file-backed mailbox for the supervised MERGE_READY refinery daemon.
+gt-channel = { path = "../../kernel/gt-channel" }
 # hq-mysw Paso 9.F — Notifier PORT. The root injects an `Arc<dyn Notifier>` (real bead-backed
 # mail adapter in prod, fake in the gate) and routes operator signals through it.
 gt-notify = { path = "../../domain/platform/gt-notify" }

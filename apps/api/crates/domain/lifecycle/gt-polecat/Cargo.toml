@@ -12,3 +12,6 @@ serde.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# `test-util` enables `#[tokio::test(start_paused = true)]` for the supervise_daemon tests
+# so backoff sleeps auto-advance instead of blocking the test thread.
+tokio = { workspace = true, features = ["test-util"] }
