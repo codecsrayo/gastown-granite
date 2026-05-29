@@ -8,20 +8,28 @@
 > `internal/session/*.go`, `apps/api/crates/bins/{gt,gt-web,gt-mcp}/`,
 > `apps/api/crates/domain/*/`.
 
-Snapshot date: 2026-05-28. Refresh when either side moves materially.
+Snapshot date: 2026-05-28. Base commit `3f59b37f`. **Refreshed** after the first
+audit (`28103fcf`) to absorb three material moves on the Rust side:
+`211c5fff` (boot hydration + sessions write-path + **`SessionRole`/crew shipped**,
+hq-8iur.1/.7/.2), `525f1d5d` (MCP `agent.add` now emits an event + new
+`quota.register` + `scheduling.create_bead`, hq-mc72.10), `64cba819`
+(`rig.create`, hq-mc72.11), `135367bb` (`/health` + `/readyz`, hq-8iur.5).
+Refresh again when either side moves materially.
 
 ---
 
 ## Rust surface today (the universe of things to map *into*)
 
-**`gt-web`** (Axum backend, `bins/gt-web/src/lib.rs`) — read-side + 1 write:
+**`gt-web`** (Axum backend, `bins/gt-web/src/lib.rs`) — read-side + 1 write + probes:
 
 | Method | Route | Purpose |
 |---|---|---|
-| GET | `/api/sessions` | snapshot active sessions (`SessionQueries`) |
+| GET | `/api/sessions` | snapshot active sessions (`SessionQueries`); rows now carry `role` + `crew` and accept a `?role=` filter (hq-8iur.7) |
 | GET | `/api/beads?status=…` | snapshot beads (`BeadRepository`) |
 | GET | `/api/stream` | SSE: `EventRecord` broadcast from root |
-| GET | `/metrics` | Prometheus exposition (`gt-telemetry`) |
+| GET | `/metrics` | Prometheus exposition (`gt-telemetry`); outside the IAM middleware |
+| GET | `/health` | liveness probe (always 200 once the process is up); outside IAM (hq-8iur.5) |
+| GET | `/readyz` | readiness probe — 200 only after boot hydration done **and** Dolt/PG reachable; outside IAM (hq-8iur.5) |
 | POST | `/api/nudge` | publish `AgentEvent::Heartbeat` to bus |
 
 **`gt-mcp`** (`bins/gt-mcp/src/service.rs`) — tools by domain (each is `.execute` + `.validate`):
@@ -29,11 +37,39 @@ Snapshot date: 2026-05-28. Refresh when either side moves materially.
 | Domain | Tools |
 |---|---|
 | agent | `add`, `remove`, `transition` |
-| scheduling | `enqueue`, `mark_dispatched` |
+| scheduling | `enqueue`, `mark_dispatched`, `create_bead` *(new — hq-mc72.10)* |
+| rig | `create` *(new — hq-mc72.11)* |
 | merge | `start`, `submit`, `complete`, `fail` |
 | patrol | `register`, `heartbeat`, `tick`, `close` |
-| quota | `sample`, `probe`, `rotate` |
+| quota | `sample`, `probe`, `rotate`, `register` *(new — hq-mc72.10)* |
 | orch | `launch_convoy`, `complete_member`, `fail_member` |
+
+Behaviour notes on the new tools (all bypass their domain `Command` path — they
+write directly and emit **no domain event**, only a frontier audit record):
+
+- `scheduling.create_bead` — creates a `pending` bead in the repo so the
+  dispatcher can claim it. Covers the *create* facet of Go `gt bead` / `bd create`.
+- `quota.register` — registers (or replaces) a quota account with a live window
+  so `sample`/`probe`/`rotate` can act on it. Covers the *add* facet of Go
+  `gt account`.
+- `rig.create` — shells out to `gt rig add <name> <git_url>` via `RigCreator`
+  (same Go-binary dependency shape as `RealEffects::sling`); fails cleanly when
+  no `GT_BIN` is wired. Covers Go `gt rig add`.
+- `agent.add.execute` — now publishes `AgentEvent::Spawned` on the edge relay so
+  the add reaches the log / SSE / sessions projector (hq-mc72.10). **But it
+  hardcodes `role: Polecat, crew: None`** — MCP can only spawn polecats; mayor /
+  dog sessions still come only from the supervisor/sling edge.
+
+**`gt-mcp` read-side Resources** (`resource_list` / `read_resource_json`) — JSON snapshots, one per domain:
+
+| URI | Snapshot |
+|---|---|
+| `gt://agent/sessions` | active sessions incl. `role` + `crew` (read-side of `gt agents`) |
+| `gt://scheduling/queue` | `{queued, in_flight}` |
+| `gt://patrol/leases` | `{live_leases, expired_emitted}` |
+| `gt://merge/slots` | merge slots `[{bead, branch, state}]` |
+| `gt://orch/convoys` | convoys + per-member progress |
+| `gt://quota/accounts` | `{accounts, predictions_emitted}` (partial read-side of `gt quota status`) |
 
 **`RealEffects`** (`bins/gt/src/effects_real.rs`) — production-only edges out of the core:
 
@@ -69,7 +105,7 @@ this before traffic moves).
 
 | Go cmd | Purpose | Rust | Status |
 |---|---|---|---|
-| `gt bead` | Bead management (move between repos, etc.) | none | **M** |
+| `gt bead` | Bead management (create, move between repos, etc.) | partial: MCP `scheduling.create_bead` covers the *create* facet (pending bead the dispatcher can claim); move/repo ops have no Rust path | **P** |
 | `gt close` | Close issues | none in API (`bd close` is the actual interface; gt-mcp does not wrap it) | **M** |
 | `gt assign` | Assign issue | none | **M** |
 | `gt ready` | Show ready beads | partial: `GET /api/beads?status=ready` exists | **P** |
@@ -87,7 +123,7 @@ this before traffic moves).
 |---|---|---|---|
 | `gt prime` ★ | Output role context for current directory (canonical post-compaction reorient) | none. The Rust API has no concept of "what role am I in this cwd"; this lives entirely in the Go CLI + `GT_ROLE` env | **M★** |
 | `gt whoami` | Current identity for mail | none | **M** |
-| `gt agents` ★ | List all Gas Town agent sessions | `GET /api/sessions` (read-side ports cover it once `hq-8iur.7` lands role/crew); today the snapshot has `{id, rig, state}` but no role/crew distinction | **P★** |
+| `gt agents` ★ | List all Gas Town agent sessions | `GET /api/sessions` + MCP `gt://agent/sessions`; **hq-8iur.7 landed** (`211c5fff`) so rows now carry `role` + `crew` with a `?role=` filter. Read-side is COVERED; the remaining gap is the **write-side** (only `gt sling` Go / the supervisor edge populate non-polecat rows — see §4 daemons) | **C** (read) / **P★** (write) |
 | `gt session` | Manage polecat sessions (subcmds) | none | **M** |
 | `gt polecat` | Manage polecats (persistent identity, ephemeral sessions) | none | **M** |
 | `gt agent` | Per-agent admin | partial: MCP `agent.add/remove/transition` are the core mutations | **P** |
@@ -101,7 +137,7 @@ Spawn signal = how the daemon's tmux session is identified (see §Roles below).
 
 | Go cmd / daemon | Tmux session name | Rust | Status |
 |---|---|---|---|
-| `gt daemon start` / `stop` | (the gastown background daemon — convoy watcher, bd sync, etc.) | none. Rust has no `gt daemon` analogue; the Go daemon owns convoy-event observation, polecat reconciliation, bd→Dolt sync. | **M★** |
+| `gt daemon start` / `stop` | (the gastown background daemon — convoy watcher, bd sync, etc.) | none as a `gt daemon` analogue, but **boot hydration landed** (`211c5fff`, hq-8iur.1): the Rust process now replays the event log into the actors at boot before serving, and `135367bb` adds a systemd unit + graceful drain (hq-8iur.5). The Go daemon still owns convoy-event observation, polecat reconciliation, bd→Dolt sync. | **P★** |
 | `gt mayor` (start) ★ | `hq-mayor` | `gt-orchestration::mayor` is implemented as a productor (event borde) inside the actor; no `mayor start` CLI / route — the Mayor process IS the Go binary today | **P★** |
 | `gt deacon` (start) ★ | `hq-deacon` | `gt-orchestration::deacon` exists as productor; same gap — the Deacon process today is the Go binary | **P★** |
 | `gt boot status` | `hq-boot` | none (deacon watchdog is Go-only) | **M** |
@@ -116,7 +152,7 @@ Spawn signal = how the daemon's tmux session is identified (see §Roles below).
 | `gt heartbeat` | Update agent heartbeat state | partial: `POST /api/nudge` emits `AgentEvent::Heartbeat`; full lifecycle (register / close) covered by MCP `patrol.heartbeat` | **C** |
 | `gt vitals` | Health vitals (panel) | none | **M** |
 | `gt doctor` ★ | Run health checks on the workspace | none. `gt doctor` does dolt-vs-jsonl reconciliation, polecat orphan scan, env audit — none of that is in Rust. | **M★** |
-| `gt health` / `gt health-check` | Liveness | partial: `/metrics` covers most of it for Prometheus | **P** |
+| `gt health` / `gt health-check` | Liveness | `/health` (liveness) + `/readyz` (readiness, gated on hydration + Dolt/PG reachable) landed in `135367bb` (hq-8iur.5); `/metrics` adds Prometheus | **C** |
 | `gt cleanup` | Clean up orphaned Claude processes | none (process-side, Go is the right place) | **M** |
 | `gt warrant file` | File a death warrant for a stuck agent | none. Patrol domain has `LeaseExpired` events; the human-initiated warrant path is Go-only. | **M★** |
 | `gt estop` | Emergency stop | none | **M★** |
@@ -139,10 +175,10 @@ Spawn signal = how the daemon's tmux session is identified (see §Roles below).
 
 | Go cmd | Purpose | Rust | Status |
 |---|---|---|---|
-| `gt quota status` | Show account quota status | none (read-side route missing; `gt-quota` domain has the state in actor) | **M★** |
+| `gt quota status` | Show account quota status | partial: MCP resource `gt://quota/accounts` returns `{accounts, predictions_emitted}` (count + prediction tally), but no per-account window/usage breakdown route yet | **P★** |
 | `gt quota rotate` ★ | Rotate account (manual) | MCP `quota.rotate.execute`; `RealEffects::rotate` is the production edge | **C★** |
 | `gt quota probe` | Probe account headers | MCP `quota.probe.execute`; gap: real `anthropic-ratelimit-*` parser still PLANEADO per `04-persistence.md`/`features/token-tracking-prediction.md` | **P★** |
-| `gt account` | Manage Claude Code accounts | none. Account CRUD (add, list, set-default, retire) is Go-only. | **M★** |
+| `gt account` | Manage Claude Code accounts | partial: MCP `quota.register` covers the *add/replace* facet (register an account + live window); list / set-default / retire are still Go-only | **P★** |
 | `gt costs` | Show costs | none (see §3) | **M★** |
 | `gt cost-tier` | Show / set cost tier | none | **M** |
 | `gt namepool` | Polecat name pool | none | **M** |
@@ -169,7 +205,7 @@ Spawn signal = how the daemon's tmux session is identified (see §Roles below).
 | `gt install` | Create a new HQ workspace | none (CLI bootstrap is a Go responsibility) | **M** (intentional) |
 | `gt init` | Initialize cwd as a rig | none | **M** (intentional) |
 | `gt town` | Town-level subcmds | none | **M** |
-| `gt rig` | Manage rigs | none | **M★** |
+| `gt rig` | Manage rigs | partial: MCP `rig.create` wraps `gt rig add <name> <git_url>` (shells to the Go binary via `RigCreator`, same dependency shape as `RealEffects::sling` — fails cleanly without `GT_BIN`). list / remove / park have no Rust path | **P★** |
 | `gt worktree` | Create worktree in another rig | none | **M** |
 | `gt config` | Manage configuration | none | **M** (intentional — config is filesystem) |
 | `gt hooks` / `gt hook` | Install / manage hooks | none (claude-side hooks live in JSON) | **M** |
@@ -249,11 +285,18 @@ side-effect machinery reacts in production.
 
 Items marked **★** above. Coarse-grained dependency order:
 
+0. **DONE since the first audit** — keep off the open list: `hq-8iur.7`
+   (SessionRole + crew + `?role=` filter), `hq-8iur.1` (boot hydration), and
+   `hq-8iur.5` (`/health` + `/readyz` + graceful shutdown + systemd) have all
+   landed (`211c5fff` / `135367bb`). The `gt agents` **read-side** and the
+   liveness surface are now covered.
 1. **`gt prime` parity** (★, §3). Without this, agents cannot reorient after
    compaction → Rust can't be the only point of truth for "who am I in this
    cwd".
-2. **`gt agents` + role/crew on Session** (★, §3, depends on `hq-8iur.7`).
-   Read-side of agent inventory.
+2. **SessionRole projector fidelity** (★, §Roles D1/D3/D4/D5, depends on
+   `hq-8iur.2`). The schema shipped, but the shipped `Dog(DogKind)` shape
+   mislabels boot/crew/named-dog sessions vs Go. The *write-side* of `gt agents`
+   (populating non-polecat rows) is not safe until these are handled.
 3. **`gt sling` self-hosted** (★, §1). Today `RealEffects::sling` shells out to
    the Go binary. Cutover requires either (a) the Rust composition root
    spawning a Rust-managed tmux session, or (b) the Go `gt sling` becoming a
@@ -269,8 +312,10 @@ Items marked **★** above. Coarse-grained dependency order:
 7. **`gt audit` + `gt costs`** (★, §3 + §6). Required by ops/finance review;
    the data exists (Postgres `JSONB` audit + `token_usage` projection), only
    the HTTP routes are missing.
-8. **`gt quota status` + `gt account` CRUD** (★, §6). Quota actor state is
-   read-only via reflection today; needed for operator UI.
+8. **`gt quota status` + `gt account` CRUD** (★, §6). Partially advanced:
+   `gt://quota/accounts` gives a count + prediction tally and MCP `quota.register`
+   covers account *add/replace*. Still missing: per-account window/usage
+   breakdown and list / set-default / retire.
 9. **`gt nudge` arbitrary payload** (★, §7). Current `/api/nudge` is
    heartbeat-shaped only.
 10. **`gt await-event` / `gt emit-event`** (★, §7). Cross-process channel
@@ -296,10 +341,15 @@ Items NOT critical-path (intentionally Go-only):
 
 ## Roles / Dog kinds (feeds hq-8iur.7)
 
-> Bead `hq-8iur.7` asks for `Dog(DogKind: Witness|Refinery|Deacon|Sheriff|...)`.
-> **The Go source treats `Dog` differently from that assumption — it is its
-> own `Role`, not a parent category over the watchdogs.** Confirm with agent A
-> before closing the Rust `SessionRole` enum.
+> **Status: hq-8iur.7 has SHIPPED** (`211c5fff`). Agent A adopted the
+> `Dog(DogKind)` parent/child shape — the exact shape the first audit warned was
+> a divergence from Go. That is now a *known, merged* divergence to manage, not
+> an open design question. This section documents (a) the Go taxonomy, (b) what
+> actually shipped in Rust, and (c) the concrete classification bugs the
+> write-side projector (`hq-8iur.2`) must handle so a Go-spawned session is not
+> mislabelled at cutover. The `DogKind::Sheriff` doc-comment in
+> `gt-agent/src/state.rs` explicitly defers the Sheriff/Dog taxonomy decision to
+> **this bead** — resolved below.
 
 ### Canonical Role constants
 
@@ -323,16 +373,20 @@ Refinery, Polecat, Crew) — Overseer and Dog are session-only.
 
 ### Spawn identification — how each role is recognized at runtime
 
-Identity is reconstructed from the **tmux session name** (`ParseSessionName`
-in `internal/session/identity.go`). There is no per-role env or per-rig path —
-the session name is the discriminator. Formats (from `internal/session/names.go`):
+There are **two complementary signals**, not one. The projector must understand
+both because Go-spawned sessions carry the env, while orphan/reconnect paths
+fall back to the name.
+
+**(1) tmux session name** — the *persistent* discriminator, parsed by
+`ParseSessionNameWithRegistry` (`internal/session/identity.go`) into an
+`AgentIdentity{Role, Rig, Name, Prefix}`. Formats (from `internal/session/names.go`):
 
 | Role | tmux session name pattern | Scope | Helper |
 |---|---|---|---|
 | `mayor` | `hq-mayor` | town (1/machine) | `MayorSessionName()` |
 | `deacon` | `hq-deacon` | town (1/machine) | `DeaconSessionName()` |
 | `overseer` | `hq-overseer` | town (the human; no agent session in practice) | `OverseerSessionName()` |
-| `boot` *(actually parsed as `RoleDeacon` Name="boot")* | `hq-boot` | town (deacon watchdog) | `BootSessionName()` |
+| `boot` *(parsed as `RoleDeacon` Name="boot"; `GTRole()` returns `"boot"`)* | `hq-boot` | town (deacon watchdog) | `BootSessionName()` |
 | `dog` | `hq-dog-<name>` | town (named) | `DogSessionName(name)` |
 | `witness` | `<rigPrefix>-witness` | rig (1/rig) | `WitnessSessionName(prefix)` |
 | `refinery` | `<rigPrefix>-refinery` | rig (1/rig) | `RefinerySessionName(prefix)` |
@@ -340,51 +394,65 @@ the session name is the discriminator. Formats (from `internal/session/names.go`
 | `polecat` | `<rigPrefix>-<name>` | rig (N/rig, ephemeral) | `PolecatSessionName(prefix, name)` |
 
 `<rigPrefix>` = beads prefix from `PrefixRegistry` (e.g. `gt` for gastown, `bd`
-for beads, `hq` when configured as a rig prefix). When `hq-` is the prefix
+for beads, `hq` when configured as a rig prefix). When `hq-` is the prefix the
 suffix is matched first against known town-role names (`mayor`, `deacon`,
 `overseer`, `boot`); unknown suffixes fall through to rig-level parsing so
 `hq-<polecat>` resolves correctly when `hq` is a registered rig prefix
 (see `ParseSessionNameWithRegistry`).
 
-### Implication for the Rust `SessionRole` enum
+**(2) Environment** — the *runtime* "what am I", injected into the session env at
+spawn and read all over the Go CLI (`root.go:216`, `prime.go`, `sling.go`,
+`costs.go`, `whoami.go`, `telemetry/subprocess.go`):
 
-The bead description in `hq-8iur.7` sketches
-`SessionRole::{Mayor, Dog(DogKind: Witness|Refinery|Deacon|Sheriff|…), Polecat}`.
-**That parent/child shape does not match the Go source.** Concretely:
+| Env var | Value | Source |
+|---|---|---|
+| `GT_ROLE` | flat role string = `AgentIdentity.GTRole()` (= `Address()`, **except boot → `"boot"`**) | set at spawn; `gt prime` seeds it into the session env if missing and warns on cwd mismatch (`warnRoleMismatch`) |
+| `GT_RIG` | rig name | spawn / prime |
+| `GT_RIG_PATH` | rig filesystem path | `setuphooks.go`, `polecat/manager.go` |
+| `GT_HOOK_BEAD` | bead injected at polecat spawn (deferred-spawn hook) | `polecat/session_manager.go` |
 
-- `Witness` and `Refinery` are **rig-level** roles, sibling of `Polecat` and
-  `Crew` — they are not children of `Dog`.
-- `Deacon` is **town-level**, sibling of `Mayor`. Not a `Dog`.
-- `Dog` is its own role (`hq-dog-<name>`) — a town-level named worker, distinct
-  from any of the above. There is no `Sheriff` role today (the term appears
-  only in `info.go` describing a deacon plugin, not as a constant).
+`gt prime` is the reconciler: it reads `GT_ROLE`, compares against the
+cwd-inferred identity, and prints a prominent warning if they disagree — so the
+two signals are kept consistent, with the env winning at runtime and the name
+being the durable fallback.
 
-Recommended canonical Rust enum (mirrors the Go source):
+### What actually shipped in Rust (`211c5fff`, `gt-agent/src/state.rs`)
 
 ```rust
+pub enum DogKind { Witness /*default*/, Refinery, Deacon, Overseer, Sheriff, Dog }
+
 pub enum SessionRole {
-    Mayor,                    // town
-    Deacon,                   // town
-    Overseer,                 // town (human — usually absent)
-    Boot,                     // town (deacon watchdog; Go parses as Deacon+Name="boot")
-    Dog { name: String },     // town, named (hq-dog-<name>)
-    Witness { rig: String },  // rig
-    Refinery { rig: String }, // rig
-    Crew { rig: String, name: String },     // rig
-    Polecat { rig: String, name: String },  // rig (default ephemeral worker)
+    Mayor,
+    Dog(DogKind),   // ← parent over the supervisors
+    Polecat,        // ← Default (legacy events + gt sling rows)
 }
+
+pub struct Session { id, rig, state, role: SessionRole, crew: Option<String> }
 ```
 
-`crew` and `polecat` carry `name`; `crew` is **not** a `Session` per the
-description in `hq-8iur.7` — it is an attribute on the polecat session. That
-shape works: `Polecat` is the session, `crew: Option<String>` is the attribute
-of which claude agent is running inside it right now. The `Crew` variant above
-exists only to identify a *human crew worker* tmux session
-(`<prefix>-crew-<name>`), which Go does treat as a distinct session.
+- `SessionRole::as_str()` flattens to the Go role strings —
+  `mayor | polecat | witness | refinery | deacon | overseer | sheriff | dog` —
+  so the wire/DTO value matches Go even though the in-memory shape differs.
+- `SessionRole::parse()` is the inverse, accepting those same eight strings.
+- `crew: Option<String>` matches the recommendation: crew is the claude agent
+  *inside* a polecat, not a session kind. ✅ This part agrees with Go.
 
-If agent A wants `Dog` as a parent for the watchdogs, that's an explicit
-divergence from Go — flag it before merging the enum so the projector
-(write-side, `hq-8iur.2`) doesn't misclassify Go-spawned sessions on cutover.
+### Divergences from Go the projector (`hq-8iur.2`) must handle
+
+These are concrete misclassification bugs, not style nits. Each is on the
+**critical path** because the write-side projector turns Go-spawned tmux
+sessions / replayed Go events into `Session` rows at cutover.
+
+| # | Divergence | Why it bites | Recommended handling |
+|---|---|---|---|
+| D1 | `Dog(DogKind)` is a **parent** over witness/refinery/deacon/overseer. In Go these are flat siblings; `is_dog()` in Go is true only for `hq-dog-<name>`. | Rust `SessionRole::is_dog()` returns `true` for witness/refinery/deacon/overseer/sheriff too. Any logic gating on `is_dog()` **over-matches** vs Go. | Audit every `is_dog()` call site; gate on the specific `DogKind` instead, or add `is_supervisor()` vs `is_bare_dog()`. |
+| D2 | `DogKind::Sheriff` has **no Go role constant** and **no tmux name pattern** (`<x>-sheriff` does not exist in `names.go`). It is the GitHub-sheriff plugin/agent (Paso 9.B/9.D), not a session kind. | A `role=sheriff` row can never come from parsing a Go session → only from a future Rust-native spawn. Expecting Go to emit it is a bug. | **Decision (this bead):** keep `Sheriff` as a forward-looking, Rust-only kind. Document that the projector never produces it from Go input. Do **not** add it to `names.go` expectations. |
+| D3 | No `name` on `Dog`, no `Boot` kind. Go carries `Name` (`hq-dog-<name>`) and parses `hq-boot` as `Deacon Name="boot"` with `GTRole()=="boot"`. | `hq-dog-alice` vs `hq-dog-bob` collapse to one identity; `hq-boot` collapses into `deacon`. Round-trip is lossy. | If named dogs / the boot watchdog must be distinguished, add `DogKind::Dog{name}` (or a `name` field on `Session` for dogs) and a `Boot` kind. Otherwise document the loss explicitly. |
+| D4 | `GT_ROLE`/`GTRole()` emits `"boot"` and Go has a `crew` session (`<prefix>-crew-<name>`); `SessionRole::parse()` accepts **neither**. | `parse("boot")` and `parse("crew-…")` → `None` → projector falls back to `Default = Polecat`. The boot watchdog and human crew sessions get **silently mislabelled as polecats**. | Map `"boot" → Dog(Deacon)` (or a `Boot` kind) in `parse()`; decide whether a human-crew tmux session needs its own representation (today it has none — see D5). |
+| D5 | Go `RoleCrew` (`<prefix>-crew-<name>`) is a **distinct human-crew session**; Rust has no variant for it (crew is only an attribute). | A Go crew session has no faithful Rust `SessionRole`. | Confirm with ops whether human-crew tmux sessions are in cutover scope. If yes, add a `Crew` variant; if no, document that they are out of scope and the projector skips them. |
+
+D2 is **resolved by this bead** (keep Sheriff, Rust-only). D1/D3/D4/D5 remain
+open and should be tracked against `hq-8iur.2` before the flip.
 
 ---
 
@@ -393,15 +461,19 @@ divergence from Go — flag it before merging the enum so the projector
 When updating this doc:
 
 1. `grep -rEhn "rootCmd\.AddCommand\(" internal/cmd/*.go | grep -v _test` —
-   verify the top-level count and add new rows.
-2. `grep -rEh 'name\s*=\s*"' apps/api/crates/bins/gt-mcp/src/service.rs | grep '#\[tool'` —
-   refresh the MCP tool list.
-3. `grep -rEhn '\.route\(' apps/api/crates/bins/gt-web/src/*.rs` — refresh the
-   HTTP route table.
-4. `grep -rEn 'fn (sling|rotate|<new>)' apps/api/crates/bins/gt/src/effects_real.rs` —
+   verify the top-level count and add new rows. (111 at this snapshot.)
+2. `grep -rEn 'name = "' apps/api/crates/bins/gt-mcp/src/service.rs` —
+   refresh the MCP tool list (`<domain>.<verb>.{validate,execute}`).
+3. `grep -rEn 'fn resource_list' -A 12 apps/api/crates/bins/gt-mcp/src/service.rs` —
+   refresh the read-side `gt://` Resource catalog.
+4. `grep -rEhn '\.route\(' apps/api/crates/bins/gt-web/src/*.rs` — refresh the
+   HTTP route table (incl. `/health`, `/readyz`).
+5. `grep -rEn 'fn (sling|rotate|<new>)' apps/api/crates/bins/gt/src/effects_real.rs` —
    refresh the RealEffects edges.
-5. `grep -rEn 'Role[A-Z][a-zA-Z]* Role =' internal/session/identity.go` —
-   refresh the role taxonomy.
+6. `grep -rEn 'Role[A-Z][a-zA-Z]* Role =' internal/session/identity.go` —
+   refresh the Go role taxonomy; cross-check the shipped Rust enum at
+   `apps/api/crates/domain/gt-agent/src/state.rs` (`SessionRole` / `DogKind`)
+   and re-validate the D1–D5 divergence table.
 
 Anything that drifts between this doc and the source is a parity regression —
 re-run `hq-8iur.3` or open a sub-bead before the cutover step that depends on
