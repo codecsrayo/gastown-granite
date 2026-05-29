@@ -27,6 +27,7 @@ use gt_patrol::{PatrolEvent, PatrolState};
 use gt_quota::{QuotaEvent, QuotaState};
 use gt_scheduling::{SchedEvent, SchedState};
 use gt_sheriff::{SheriffEvent, SheriffState};
+use gt_deacon::{DeaconEvent, DeaconState};
 
 /// The sum of every domain event. Owned (no lifetimes, trivially `Send`); the `kind()`
 /// match is exhaustive, so adding a domain forces a new arm here — the compiler enforces
@@ -40,6 +41,7 @@ pub enum GtEvent {
     Quota(QuotaEvent),
     Orch(OrchEvent),
     Sheriff(SheriffEvent),
+    Deacon(DeaconEvent),
 }
 
 impl EventKind for GtEvent {
@@ -54,6 +56,7 @@ impl EventKind for GtEvent {
             GtEvent::Quota(e) => e.kind(),
             GtEvent::Orch(e) => e.kind(),
             GtEvent::Sheriff(e) => e.kind(),
+            GtEvent::Deacon(e) => e.kind(),
         }
     }
 }
@@ -74,6 +77,7 @@ gt_from!(Merge, MergeEvent);
 gt_from!(Quota, QuotaEvent);
 gt_from!(Orch, OrchEvent);
 gt_from!(Sheriff, SheriffEvent);
+gt_from!(Deacon, DeaconEvent);
 
 /// Wire prefixes that ride in the event log but are **not** domain state: frontier-audit
 /// observability (e.g. `mcp.invoked` from `gt-mcp`). Domain replay skips them so reconstructed
@@ -108,6 +112,7 @@ impl GtEvent {
             "quota" => GtEvent::Quota(rec.decode()?),
             "orch" => GtEvent::Orch(rec.decode()?),
             "sheriff" => GtEvent::Sheriff(rec.decode()?),
+            "deacon" => GtEvent::Deacon(rec.decode()?),
             other => return Err(AppError::Other(format!("unknown event domain: {other}"))),
         })
     }
@@ -130,6 +135,7 @@ pub struct GtState {
     pub quota: QuotaState,
     pub orch: OrchState,
     pub sheriff: SheriffState,
+    pub deacon: DeaconState,
     pub feed: FeedState,
 }
 
@@ -149,6 +155,9 @@ impl GtState {
             // reducers' signatures (they return ()).
             GtEvent::Sheriff(e) => {
                 let _ = self.sheriff.apply(e);
+            }
+            GtEvent::Deacon(e) => {
+                let _ = self.deacon.apply(e);
             }
         }
     }

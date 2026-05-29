@@ -38,6 +38,8 @@ use gt_patrol::actor::{self as patrol_actor, PatrolHandle};
 use gt_patrol::{LeaseTracker, PatrolEvent, PatrolRepository};
 use gt_sheriff::actor::{self as sheriff_actor, SheriffHandle};
 use gt_sheriff::{InMemorySheriffRepo, SheriffEvent};
+use gt_deacon::actor::{self as deacon_actor, DeaconHandle};
+use gt_deacon::{DeaconEvent, InMemoryDeaconRepo};
 use gt_quota::actor::{self as quota_actor, QuotaHandle};
 use gt_quota::{AccountRegistry, InMemoryKeychain, Keychain, ModelWeights, QuotaEvent};
 use gt_scheduling::actor::{self as sched_actor, SchedHandle};
@@ -103,6 +105,10 @@ pub struct RootHandle<R: BeadRepository + Clone> {
     /// (`SheriffCommand::Register`/`Clear`); observations are fed automatically from
     /// the reactor's ingest path (every non-`sheriff.*` event kind).
     pub sheriff: SheriffHandle,
+    /// hq-92z9 Paso 9.D — Deacon drain coordination. Producers (SIGTERM handler at the
+    /// edge, root reactions that observe in-flight domain events) call
+    /// `gt_deacon::deacon::{begin_drain, track, finish}` against this handle.
+    pub deacon: DeaconHandle,
     /// Relay for edge producers of agent events (the supervisor's `SessionEnd`, the spawn
     /// edge's `Spawned`). The agent actor has no relay of its own by design; its events
     /// reach the log through here.
@@ -366,6 +372,7 @@ where
     let (quota_tx, quota_rx) = mpsc::channel::<Envelope<QuotaEvent>>(256);
     let (agent_tx, agent_rx) = mpsc::channel::<Envelope<AgentEvent>>(256);
     let (sheriff_tx, sheriff_rx) = mpsc::channel::<Envelope<SheriffEvent>>(256);
+    let (deacon_tx, deacon_rx) = mpsc::channel::<Envelope<DeaconEvent>>(256);
 
     // Convert the replay reducer state into each actor's live owner type. The conversions
     // live inside the domain crates (Ports & Adapters: the live-vs-replay distinction is a
@@ -378,6 +385,7 @@ where
         quota: quota_state,
         orch: orch_state,
         sheriff: sheriff_initial,
+        deacon: deacon_initial,
         feed: _,
     } = hydration.state;
     let merge_initial = MergeBoard::from_state(&merge_state);
@@ -399,6 +407,13 @@ where
         InMemorySheriffRepo::default(),
         sheriff_tx,
         sheriff_initial,
+    );
+    // Deacon repo is in-memory for now — the Dolt adapter lands when the operator panel
+    // surfaces pending drain items.
+    let deacon = deacon_actor::spawn_hydrated(
+        InMemoryDeaconRepo::default(),
+        deacon_tx,
+        deacon_initial,
     );
 
     let dead_count = Arc::new(AtomicUsize::new(0));
@@ -427,6 +442,7 @@ where
     let mut quota_rx = quota_rx;
     let mut agent_rx = agent_rx;
     let mut sheriff_rx = sheriff_rx;
+    let mut deacon_rx = deacon_rx;
 
     let join = tokio::spawn(async move {
         loop {
@@ -438,6 +454,7 @@ where
                 Some(env) = quota_rx.recv() => reactor.ingest(env).await,
                 Some(env) = agent_rx.recv() => reactor.ingest(env).await,
                 Some(env) = sheriff_rx.recv() => reactor.ingest(env).await,
+                Some(env) = deacon_rx.recv() => reactor.ingest(env).await,
                 else => break,
             }
         }
@@ -451,6 +468,7 @@ where
         quota,
         agent,
         sheriff,
+        deacon,
         agent_events: agent_tx,
         repo,
         log_path,

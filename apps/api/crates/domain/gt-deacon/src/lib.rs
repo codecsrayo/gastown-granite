@@ -1,12 +1,13 @@
-//! `gt-deacon` — town shutdown / drain coordination (Paso 9.D).
+//! `gt-deacon` — town shutdown / drain coordination (Paso 9.D, hq-92z9).
 //!
-//! **Scaffolding (hq-92z9 paso 1):** estructura de archivos según patrón `gt-merge`
-//! (actor + commands + events + state + repo + producer). Las variantes reales de
-//! commands/events y el loop del actor/productor se rellenan en commits subsiguientes
-//! del mismo bead. Mantener este crate compilable es la única invariante de este pase.
+//! Tracks an in-flight set of `DrainItem`s the operator (or a SIGTERM-driven producer)
+//! wants to finish before the town exits. `BeginDrain` flips the global drain flag;
+//! `TrackItem`/`FinishItem` maintain the pending set; once `draining && pending.is_empty()`
+//! the actor emits `DrainComplete`. Same actor + commands + events + state + repo pattern
+//! as `gt-merge` / `gt-sheriff`.
 //!
-//! Aislamiento: depende solo del kernel (`gt-events`, `gt-channel`). La integración
-//! cross-dominio se cablea en el composition root vía eventos.
+//! Aislamiento: depende solo del kernel (`gt-events`). Cross-domain wiring (tracking a
+//! `merge.ready` so the deacon waits for it) lives in the composition root.
 
 pub mod actor;
 pub mod commands;
@@ -15,8 +16,8 @@ mod events;
 mod repo;
 mod state;
 
-pub use actor::{spawn, DeaconHandle, DeaconMsg};
-pub use commands::DeaconCommand;
+pub use actor::{spawn, spawn_hydrated, DeaconHandle, DeaconMsg};
+pub use commands::{BeginDrain, DeaconCommand, FinishItem, TrackItem};
 pub use events::DeaconEvent;
-pub use repo::{InMemoryDeaconRepo, DeaconRepository};
-pub use state::{DeaconBoard, DeaconItem};
+pub use repo::{DeaconRepository, InMemoryDeaconRepo};
+pub use state::{DeaconState, DrainItem};
