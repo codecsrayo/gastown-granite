@@ -7,10 +7,10 @@ las épicas, dependencias e instrucciones de despacho por agente.
 > Dolt/Postgres, sirve HTTP+SSE+MCP, tiene IAM + telemetría + RealEffects + replay
 > determinista. **No es reemplazo de producción todavía** — ver gaps abajo.
 >
-> **Progreso Paso 9 (al 2026-05-29):** 9.B (gt-plugin), 9.D (roles), 9.F (operator signals)
-> **DONE**; 9.C (wisp/reaper) código merged; 9.A (CLI) en Phase 1; 9.E (polecat lifecycle +
+> **Progreso Paso 9 (al 2026-05-29):** 9.B (gt-plugin), 9.C (wisp/reaper), 9.D (roles),
+> 9.F (operator signals) **DONE**; 9.A (CLI) en Phase 1; 9.E (polecat lifecycle +
 > GT_HOOK_BEAD) DONE salvo mayor real-spawn. Pendiente para descartar Go: 9.A Phases 2+,
-> 9.E mayor-spawn, cierre formal de 9.C, y el flip de Paso 8 (.4 shadow + .6 go/no-go).
+> 9.E mayor-spawn, y el flip de Paso 8 (.4 shadow + .6 go/no-go).
 
 ## Resumen de los dos pasos
 
@@ -40,8 +40,8 @@ apruebe el go/no-go (8.6).
 4. **SessionRole/crew no modelado.** `Session{id,rig,state}` no distingue Mayor/Dog/Polecat ni
    atribuye crew. → **8.7** (bloquea 8.2)
 5. **74 paquetes Go `internal/` vs crates Rust.** Paso 9 mayormente portado (al 2026-05-29):
-   gt-plugin ✅, roles ✅, operator signals (mail/activity/escalation) ✅, wisp/reaper ✅
-   (bead in progress), polecat/crew/tmux lifecycle + hooks ✅ (mayor real-spawn deferred),
+   gt-plugin ✅, roles ✅, operator signals (mail/activity/escalation) ✅, wisp/reaper ✅,
+   polecat/crew/tmux lifecycle + hooks ✅ (mayor real-spawn deferred),
    CLI ⚠️ (Phase 1). Pendiente: CLI Phases 2+ + mayor real-spawn. → **Paso 9**
 
 ---
@@ -69,14 +69,14 @@ Camino crítico: **.7 → .1/.2 → .4 → .6**. (.3, .5, .8 en paralelo / decid
 |---|---|---|---|---|
 | hq-hapx | 9.A — `gt` CLI port (`internal/cmd/`) | P1 | gt sling/prime/done/doctor/daemon | ⚠️ Phase 1 (4402b764); Phases 2+ pendientes |
 | hq-evks | 9.B — `gt-plugin` system (trait + registry) | P1 | watchdogs/sheriffs | ✅ DONE (35da7a24) |
-| hq-t9vt | 9.C — Wisp + Reaper (ephemeral memory + cleanup) | P2 | `internal/wisp`, `internal/reaper` | ⚠️ código merged (4cd3041d); bead in_progress |
+| hq-t9vt | 9.C — Wisp + Reaper (ephemeral memory + cleanup) | P2 | `internal/wisp`, `internal/reaper` | ✅ DONE (4cd3041d) |
 | hq-92z9 | 9.D — Role behaviors | P1 | Mayor/Witness/Refinery/Deacon/Sheriff + escalation | ✅ DONE (a4c4c128) |
 | hq-63az | 9.E — Polecat/Crew/daemon/tmux lifecycle + **hooks (GT_HOOK_BEAD)** | P2 | spawn/heartbeat/restart | ⚠️ gt-polecat lifecycle+hooks DONE (438ba69d/1798b5ec); mayor real-spawn deferred |
 | hq-mysw | 9.F — operator signals | P2 | activity log + escalation action + mail | ✅ DONE (b82ff3aa) |
 
 Orden Paso 9: **9.B + 9.C** (cero deps) → **9.D** (tras 9.B) → **9.A + 9.E + 9.F** (tras 9.D).
 
-> **Estado Paso 9 (al 2026-05-29):** 9.B/9.D/9.F **DONE**; 9.C código merged (bead aún in_progress); 9.A en Phase 1; 9.E lifecycle+hooks DONE salvo mayor real-spawn. Falta: 9.A Phases 2+, 9.E mayor-spawn, cierre de 9.C.
+> **Estado Paso 9 (al 2026-05-29):** 9.B/9.C/9.D/9.F **DONE**; 9.A en Phase 1; 9.E lifecycle+hooks DONE salvo mayor real-spawn. Falta: 9.A Phases 2+, 9.E mayor-spawn.
 
 ---
 
@@ -182,7 +182,7 @@ Scope: bins/gt-cli (clap v4). Cada command = thin wrapper: HTTP a gt-web / MCP a
 Criterio: skills crew-commit/patrol/reaper/backup funcionan contra el CLI Rust sin cambios. Gate: crew-commit corre end-to-end via CLI Rust; diff vs Go = vacío.
 ```
 
-### Paso 9 — Agente 9.C (hq-t9vt wisp+reaper, paralelo) ⚠️ código merged, bead in_progress
+### Paso 9 — Agente 9.C (hq-t9vt wisp+reaper, paralelo) ✅
 
 ```
 Trabaja hq-t9vt (Wisp + Reaper). Worktree: feat/hq-t9vt-wisp. Sin deps.
@@ -230,6 +230,6 @@ Notifier es PORT — mail no se importa en dominios. Gate: hueco *Stuck sintéti
 | email/mail | Notifier PORT + MailNotifier (bead-backed) | ✅ | 9.F hq-mysw b82ff3aa |
 | CLI | gt-cli Phase 1 (clap+reqwest, wrappers backend) | ⚠️ | 9.A hq-hapx 4402b764 (Phases 2+ pendientes) |
 | plugins | gt-plugin trait+registry+relay+scanner+sync+Sheriff | ✅ | 9.B hq-evks 35da7a24 |
-| wisp/reaper | gt-wisp + bins/gt-reaper (compaction) | ✅ | 9.C hq-t9vt 4cd3041d (bead in progress) |
+| wisp/reaper | gt-wisp + bins/gt-reaper (compaction) | ✅ | 9.C hq-t9vt 4cd3041d |
 | roles (mayor/dogs) | 5 role crates (mayor/witness/refinery/deacon/sheriff) | ✅ | 9.D hq-92z9 a4c4c128 |
 | polecat/crew/daemon/tmux | gt-polecat lifecycle (spawn/heartbeat/restart/tmux/hooks) | ⚠️ | 9.E hq-63az 438ba69d (mayor real-spawn deferred) |
