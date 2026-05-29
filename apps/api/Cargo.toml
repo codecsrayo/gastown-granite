@@ -21,6 +21,12 @@ members = [
     "crates/domain/gt-quota",
     "crates/domain/gt-orchestration",
     "crates/domain/gt-feed",
+    # hq-92z9 Paso 9.D role crates — scaffolding pass; behavior fills in subsequent commits.
+    "crates/domain/gt-mayor",
+    "crates/domain/gt-witness",
+    "crates/domain/gt-refinery",
+    "crates/domain/gt-deacon",
+    "crates/domain/gt-sheriff",
     "crates/bins/gt",
     "crates/bins/gt-web",
     "crates/bins/gt-mcp",
