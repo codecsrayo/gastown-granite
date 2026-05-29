@@ -291,9 +291,103 @@ correcta es bead — ver §4.
 
 ---
 
+## 4. Gap discipline: qué hacer cuando el tool no existe (`hq-mcp-onboard.4`)
+
+Tarde o temprano vas a necesitar una operación y `tools/list` no la va a
+tener. Es esperado — MCP cubre la superficie estable, no toda combinación
+posible. La regla es: **el tool faltante se documenta como hueco, no se
+sortea**.
+
+### 4.1 Síntomas de hueco
+
+Cualquiera de estos es señal:
+
+- Buscas en `gt-mcp-cli tools` y el dominio no existe (`issues.*`,
+  `feed.*`, `mayor.*`).
+- El dominio existe pero no la fase que necesitas (solo `create`, no
+  `update`; solo `register`, no `retire`).
+- El tool acepta un payload, pero falta el campo que necesitas para el
+  caso (`scheduling.create_bead` no acepta `assignee` — solo `id`,
+  `title`, `priority`).
+- El recurso (`gt://*`) trae un snapshot pero no las filas filtradas que
+  necesitas (no hay `?status=working` server-side).
+
+### 4.2 Anti-patrones (no hagas esto)
+
+| Atajo | Por qué no |
+|---|---|
+| `docker exec dolt sql "UPDATE ..."` | Escape hatch de operador, no de agente. Rompe audit + replay (§3.1, §3.4). |
+| Editar `*.jsonl` o `bd export` a mano | Mismo problema + race con `bd auto-export` (memoria `bd auto-export throttle race`). |
+| Llamar `gt-api` HTTP directo | Bypassea RBAC y emite eventos con `actor` mal atribuido. |
+| Inventar un script wrapper que hace el mutación "rápida" | Crea camino paralelo que nadie sabe que existe; siguiente agente lo encuentra y lo copia. |
+| Saltar al rol de operador para "solo esta vez" | No tienes el rol; pedir al humano que corra el comando es válido, hacerlo tú no. |
+
+### 4.3 Camino correcto: abrir bead
+
+1. **Identifica el hueco preciso.** Nombre canónico que tendría el tool:
+   `<dominio>.<accion>.<fase>` (ver §2.3). Si el dominio no existe, propón
+   el nombre. Si solo falta una fase o campo, sé específico.
+
+2. **Diseña el payload mínimo.** Qué inputs necesita, qué invariantes
+   chequea, qué evento emite, qué scope corresponde. No tiene que estar
+   perfecto — tiene que ser suficiente para que quien implemente entienda
+   la forma.
+
+3. **Crea el bead** vía `scheduling.create_bead.execute` (id, title,
+   priority). Usa prefijo del rig (`hq-` para HQ). Ejemplo:
+
+   ```
+   id:       hq-mcp-issues.2
+   title:    issues.create.{validate,execute} MCP tool
+   priority: 1
+   ```
+
+   > Mientras `issues.*` no exista vía MCP, los campos extra (description,
+   > acceptance criteria, design) se quedan vacíos hasta que `issues.update`
+   > esté disponible (`hq-mcp-issues.3`). Es OK — el bead existe en `pending`
+   > y queda en el catálogo.
+
+4. **Bloquea el trabajo dependiente.** Si tu tarea actual depende del hueco,
+   regístralo en el bead-padre (`notes`) o como bead intermedio con
+   `external_ref` al hueco. **No** sigas como si el camino existiera — si
+   intentas continuar con un workaround, ese workaround se queda.
+
+5. **Reporta** (opcional, automatizable). El tool `report_gap` (`hq-mcp-
+   onboard.8`) cierra este loop: el agente lo invoca con el dominio/acción
+   faltante y el server abre el bead automáticamente con la sesión actual
+   como `created_by`. Hasta que aterrice, paso 3 manual.
+
+### 4.4 Cuándo el "hueco" no es hueco
+
+Antes de abrir bead, verifica que no se trata de:
+
+- **Tool deferred no cargado** — está en la lista pero el schema no.
+  Cárgalo con `ToolSearch query="select:<nombre>"` (ver §1.2).
+- **Tool con otro nombre** — la convención `dominio.accion` puede no
+  coincidir con tu intuición. Revisa `gt-mcp-cli tools` completo.
+- **Recurso en vez de tool** — algunas lecturas son recursos, no tools.
+  Revisa `gt-mcp-cli resources`.
+- **Operación derivable** — a veces el efecto que buscas se logra
+  combinando dos tools existentes. Si dudas, pregunta antes de abrir
+  bead.
+
+Si después de revisar sigue siendo un hueco real, paso 3.
+
+### 4.5 Quién resuelve el bead
+
+El bead entra a la cola normal: dispatcher claim, agente trabaja, merge,
+close. No hay vía rápida — los huecos de MCP los implementa quien tenga
+contexto del actor afectado (el dominio del tool faltante), igual que
+cualquier otra feature.
+
+Mientras tanto, si el bloqueo es operacional y urgente, **escala al
+humano**: él puede correr el escape hatch (operator-only) sin romper la
+disciplina del sistema. Tú no.
+
+---
+
 ## Secciones pendientes
 
-- `hq-mcp-onboard.4` — gap discipline workflow
 - `hq-mcp-onboard.5` — in-session vs out-of-session split
 - `hq-mcp-onboard.6` — memory frontmatter version/status
 - `hq-mcp-onboard.7` — tool `help` (índice + URIs + version inline)
