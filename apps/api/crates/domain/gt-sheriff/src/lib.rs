@@ -1,22 +1,26 @@
-//! `gt-sheriff` — watchdog Plugin (Paso 9.D, stubs gt-plugin until hq-evks).
+//! `gt-sheriff` — watchdog domain (Paso 9.D, hq-92z9).
 //!
-//! **Scaffolding (hq-92z9 paso 1):** estructura de archivos según patrón `gt-merge`
-//! (actor + commands + events + state + repo + producer). Las variantes reales de
-//! commands/events y el loop del actor/productor se rellenan en commits subsiguientes
-//! del mismo bead. Mantener este crate compilable es la única invariante de este pase.
+//! Observes event-kind strings flowing through `gt-plugin`'s observer relay (hq-evks),
+//! counts occurrences per registered `Watch`, and emits `Raise` once a watch crosses its
+//! threshold. Cleared by an explicit operator command. Same actor + commands + events +
+//! state + repo pattern as `gt-merge`.
 //!
-//! Aislamiento: depende solo del kernel (`gt-events`, `gt-channel`). La integración
-//! cross-dominio se cablea en el composition root vía eventos.
+//! Plugin integration: [`SheriffPlugin`] impls `gt_plugin::Plugin` and forwards each
+//! observed [`gt_audit::EventRecord`] into the actor — the **real** plugin that replaces
+//! `gt_plugin::SheriffPlugin`'s stub per hq-evks' handoff note (composition wiring is
+//! unchanged; only the registered impl changes).
 
 pub mod actor;
 pub mod commands;
+pub mod plugin;
 pub mod sheriff;
 mod events;
 mod repo;
 mod state;
 
-pub use actor::{spawn, SheriffHandle, SheriffMsg};
-pub use commands::SheriffCommand;
+pub use actor::{spawn, spawn_hydrated, SheriffHandle, SheriffMsg};
+pub use commands::{ClearWatch, ObserveWatch, RegisterWatch, SheriffCommand};
 pub use events::SheriffEvent;
+pub use plugin::SheriffPlugin;
 pub use repo::{InMemorySheriffRepo, SheriffRepository};
-pub use state::{SheriffBoard, SheriffItem};
+pub use state::{SheriffState, Watch};

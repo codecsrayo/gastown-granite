@@ -31,6 +31,8 @@ gt-patrol = { path = "../../domain/gt-patrol" }
 gt-merge = { path = "../../domain/gt-merge" }
 gt-quota = { path = "../../domain/gt-quota" }
 gt-orchestration = { path = "../../domain/gt-orchestration" }
+# hq-92z9 Paso 9.D — Sheriff watchdog Plugin (first role fill on top of scaffolding).
+gt-sheriff = { path = "../../domain/gt-sheriff" }
 # Pure consumer projection of the audit log; the root folds it into `GtState.feed`.
 gt-feed = { path = "../../domain/gt-feed" }
 # Real persistence adapters wired in by the bin when env URLs are set; otherwise the bin

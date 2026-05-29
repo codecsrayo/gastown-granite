@@ -33,7 +33,8 @@ use gt_beads::{BeadRepository, InMemoryBeads};
 use gt_merge::{InMemoryMergeRepo, MergeRepository};
 use gt_orchestration::{InMemoryOrchRepo, OrchRepository};
 use gt_patrol::{InMemoryPatrolRepo, PatrolRepository};
-use gt_plugin::{PluginRegistry, SheriffPlugin};
+use gt_plugin::PluginRegistry;
+use gt_sheriff::SheriffPlugin;
 use gt_root::{
     load_state, spawn_hydrated, spawn_plugin_relay, spawn_sessions_projector, RealEffects,
     RootConfig, RootHandle, SystemClock,
@@ -179,10 +180,14 @@ async fn run<R, MR, PR, OR>(
     // the sessions table so the read-side (`gt-web`) owns the truth, replacing `gt sling`.
     let sessions_task = sessions_writer.map(|w| spawn_sessions_projector(&root, w));
 
-    // Observer plugin chain (hq-evks): Sheriff is registered as a stub so the relay has a
-    // live consumer end-to-end; 9.D (hq-92z9) replaces it with the real watchdog through the
-    // same trait, no wiring change here.
-    let plugin_registry = Arc::new(PluginRegistry::new().register(SheriffPlugin::new()));
+    // Observer plugin chain. hq-evks (Paso 9.B) shipped the relay + a counter-only stub;
+    // hq-92z9 (Paso 9.D) here registers the **real** `gt_sheriff::SheriffPlugin` against the
+    // same trait — no wiring change other than the constructor. It forwards each observed
+    // `EventRecord.kind` into the sheriff actor as a `SheriffCommand::Observe`; the actor
+    // counts against its registered watches and emits `sheriff.raised` on threshold cross.
+    let plugin_registry = Arc::new(
+        PluginRegistry::new().register(SheriffPlugin::new(root.sheriff.clone())),
+    );
     let plugin_task = spawn_plugin_relay(&root, plugin_registry);
 
     eprintln!(

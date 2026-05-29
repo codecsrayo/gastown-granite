@@ -36,6 +36,8 @@ use gt_orchestration::actor::{self as orch_actor, OrchHandle};
 use gt_orchestration::{ConvoyBoard, OrchEvent, OrchRepository};
 use gt_patrol::actor::{self as patrol_actor, PatrolHandle};
 use gt_patrol::{LeaseTracker, PatrolEvent, PatrolRepository};
+use gt_sheriff::actor::{self as sheriff_actor, SheriffHandle};
+use gt_sheriff::{InMemorySheriffRepo, SheriffEvent};
 use gt_quota::actor::{self as quota_actor, QuotaHandle};
 use gt_quota::{AccountRegistry, InMemoryKeychain, Keychain, ModelWeights, QuotaEvent};
 use gt_scheduling::actor::{self as sched_actor, SchedHandle};
@@ -97,6 +99,10 @@ pub struct RootHandle<R: BeadRepository + Clone> {
     pub orch: OrchHandle,
     pub quota: QuotaHandle,
     pub agent: AgentHandle,
+    /// hq-92z9 Paso 9.D — Sheriff watchdog. Operators register watches via this handle
+    /// (`SheriffCommand::Register`/`Clear`); observations are fed automatically from
+    /// the reactor's ingest path (every non-`sheriff.*` event kind).
+    pub sheriff: SheriffHandle,
     /// Relay for edge producers of agent events (the supervisor's `SessionEnd`, the spawn
     /// edge's `Spawned`). The agent actor has no relay of its own by design; its events
     /// reach the log through here.
@@ -359,6 +365,7 @@ where
     let (orch_tx, orch_rx) = mpsc::channel::<Envelope<OrchEvent>>(256);
     let (quota_tx, quota_rx) = mpsc::channel::<Envelope<QuotaEvent>>(256);
     let (agent_tx, agent_rx) = mpsc::channel::<Envelope<AgentEvent>>(256);
+    let (sheriff_tx, sheriff_rx) = mpsc::channel::<Envelope<SheriffEvent>>(256);
 
     // Convert the replay reducer state into each actor's live owner type. The conversions
     // live inside the domain crates (Ports & Adapters: the live-vs-replay distinction is a
@@ -370,6 +377,7 @@ where
         merge: merge_state,
         quota: quota_state,
         orch: orch_state,
+        sheriff: sheriff_initial,
         feed: _,
     } = hydration.state;
     let merge_initial = MergeBoard::from_state(&merge_state);
@@ -385,6 +393,13 @@ where
     let orch = orch_actor::spawn_hydrated(orch_repo, orch_tx, orch_initial);
     let quota = quota_actor::spawn_hydrated(quota_tx, config.model_weights, quota_initial, quota_predictions_seen);
     let agent = agent_actor::spawn_hydrated(256, agent_state);
+    // Sheriff repo is in-memory for now — the Dolt adapter lands when a per-watch panel
+    // surfaces in `gt-web`. The reducer + replay are already authoritative for state.
+    let sheriff = sheriff_actor::spawn_hydrated(
+        InMemorySheriffRepo::default(),
+        sheriff_tx,
+        sheriff_initial,
+    );
 
     let dead_count = Arc::new(AtomicUsize::new(0));
     let (events_tx, _) = broadcast::channel::<EventRecord>(config.event_buffer.max(1));
@@ -411,6 +426,7 @@ where
     let mut orch_rx = orch_rx;
     let mut quota_rx = quota_rx;
     let mut agent_rx = agent_rx;
+    let mut sheriff_rx = sheriff_rx;
 
     let join = tokio::spawn(async move {
         loop {
@@ -421,6 +437,7 @@ where
                 Some(env) = orch_rx.recv() => reactor.ingest(env).await,
                 Some(env) = quota_rx.recv() => reactor.ingest(env).await,
                 Some(env) = agent_rx.recv() => reactor.ingest(env).await,
+                Some(env) = sheriff_rx.recv() => reactor.ingest(env).await,
                 else => break,
             }
         }
@@ -433,6 +450,7 @@ where
         orch,
         quota,
         agent,
+        sheriff,
         agent_events: agent_tx,
         repo,
         log_path,
@@ -492,6 +510,8 @@ where
                 }
                 // Fan-out to live subscribers (SSE). Ignored if there are none; the log
                 // remains the source of truth and the snapshot endpoints still cover replay.
+                // Sheriff also subscribes here through `gt_plugin::spawn_plugin_relay` (hq-evks);
+                // its plugin impl in `gt_sheriff` self-filters `sheriff.*` to avoid feedback.
                 let _ = self.events.send(rec);
             }
             Err(e) => self.dead_error(env.kind(), e),
