@@ -36,4 +36,18 @@ else
     echo "Gas Town workspace at /gt already initialized — skipping install --force to preserve beads data."
 fi
 
+# Start the dashboard as a decoupled background child. It is NOT PID1's
+# main process, so it can be stopped/restarted (e.g. to shed CPU) without
+# killing the container — Dolt, the daemon, tmux and the town keep running.
+# Set GT_DASHBOARD_AUTOSTART=0 to boot the container without the dashboard.
+if [ "${GT_DASHBOARD_AUTOSTART:-1}" = "1" ]; then
+    /app/gastown/gt dashboard \
+        --bind "${GT_DASHBOARD_BIND:-0.0.0.0}" \
+        --port "${GT_DASHBOARD_PORT:-8080}" &
+    echo "dashboard started (pid $!) — decoupled from container lifecycle"
+fi
+
+# PID1's main is the keep-alive command ("$@", default 'sleep infinity' from
+# the image CMD). tini reaps zombies. The container outlives any dashboard
+# stop/restart, so killing the dashboard no longer tears down the town.
 exec "$@"

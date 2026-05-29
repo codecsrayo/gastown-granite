@@ -27,6 +27,12 @@ services:
       GT_DOLT_TIME_ZONE: ${TZ:-America/Bogota}
       GIT_USER: ${GIT_USER:-TestUser}
       GIT_EMAIL: ${GIT_EMAIL:-test@example.com}
+      # Dashboard runs as a decoupled background child of the entrypoint
+      # (see docker-entrypoint.sh). Set GT_DASHBOARD_AUTOSTART=0 to boot the
+      # town without the dashboard, e.g. to shed its CPU cost.
+      GT_DASHBOARD_AUTOSTART: ${GT_DASHBOARD_AUTOSTART:-1}
+      GT_DASHBOARD_BIND: ${GT_DASHBOARD_BIND:-0.0.0.0}
+      GT_DASHBOARD_PORT: ${GT_DASHBOARD_PORT:-8080}
     volumes:
       # FOLDER must be defined in .env file, e.g. FOLDER=/home/user
       # or provided as an environment variable when running docker compose,
@@ -41,7 +47,9 @@ services:
       - ${HOST_SSH_DIR:-${HOME}/.ssh}:/host-ssh:ro
     expose:
       - "8080"
-    command: ["/app/gastown/gt", "dashboard", "--bind", "0.0.0.0", "--port", "8080"]
+    # PID1 keep-alive: the container lifecycle no longer depends on the
+    # dashboard (started as a background child by docker-entrypoint.sh).
+    command: ["sleep", "infinity"]
     networks:
       - default
       - traefik-public
