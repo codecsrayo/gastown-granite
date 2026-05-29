@@ -221,12 +221,42 @@ pub enum Command {
         log: Option<String>,
     },
 
+    /// Manage Claude Code accounts tracked by `gt-quota` (the registered-account surface of
+    /// Go `gt account`). `list` and `set-default` are thin wrappers over the existing MCP
+    /// surface; `retire` is blocked pending domain support (see help).
+    Account {
+        #[command(subcommand)]
+        action: AccountAction,
+    },
+
     // --- Stub: backend not yet in Rust. ---
     /// [BLOCKED] Dispatch work to an agent. Needs RealEffects self-host (hq-oap5.2 / was hq-8iur.6).
     Sling {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+}
+
+/// Subcommands of `gt account`. The set of registered Claude Code accounts is `gt-quota`
+/// state; the MCP resource `gt://quota/accounts` is the read-side and `quota.rotate` the
+/// active-account flip.
+#[derive(Subcommand, Debug)]
+pub enum AccountAction {
+    /// List registered accounts (rmcp `resources/read gt://quota/accounts`).
+    List,
+    /// Set the active (default) account by rotating off `--from` onto `--to`. Same semantics
+    /// as `gt rotate` / MCP `quota.rotate.execute` — verb-grouped under `account` for parity
+    /// with Go `gt account set-default`.
+    SetDefault {
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        to: String,
+    },
+    /// [BLOCKED] Retire (remove) a registered account. Needs `gt-quota::remove_account` and a
+    /// new MCP tool (`quota.retire`); both are outside the PISTA-B crate set
+    /// (`bins/gt-cli`, `bins/gt-mcp`, `deploy/`). Follow-up bead pending.
+    Retire { account: String },
 }
 
 /// Subcommands of `gt daemon`. The Rust "daemon" is the `gt` server binary (bins/gt) — the
@@ -337,6 +367,7 @@ pub async fn run(cli: Cli, cfg: Config) -> Result<i32> {
         Command::Costs { account, by_model, log } => {
             run_costs(account, by_model, log, cli.json)
         }
+        Command::Account { action } => run_account(action).await,
 
         Command::Sling { .. } => Ok(blocked(
             "sling",
@@ -1403,6 +1434,38 @@ fn aggregate_costs(
     let mut rows: Vec<CostRow> = by_key.into_values().collect();
     rows.sort_by(|a, b| b.total().cmp(&a.total()));
     rows
+}
+
+// --- account (gt-quota CRUD subset) ----------------------------------------
+
+/// `gt account <list|set-default|retire>`. `list` is `gt-mcp-cli read gt://quota/accounts`
+/// (raw rmcp JSON — the read-side surface for the registered accounts). `set-default` is the
+/// active-account flip, identical in semantics to `gt rotate`. `retire` is gated on a domain
+/// addition: `QuotaHandle::remove_account` does not exist, and `bins/gt-mcp` cannot wrap a
+/// command that the domain does not expose — see the variant doc-comment.
+async fn run_account(action: AccountAction) -> Result<i32> {
+    match action {
+        AccountAction::List => {
+            run_passthrough("gt-mcp-cli", &["read".into(), "gt://quota/accounts".into()]).await
+        }
+        AccountAction::SetDefault { from, to } => {
+            let call = vec![
+                "call".to_string(),
+                "quota.rotate.execute".to_string(),
+                "--arg".to_string(),
+                format!("from_account={from}"),
+                "--arg".to_string(),
+                format!("to_account={to}"),
+            ];
+            run_passthrough("gt-mcp-cli", &call).await
+        }
+        AccountAction::Retire { account } => Ok(blocked(
+            &format!("account retire {account}"),
+            "`gt-quota::remove_account` + a new `quota.retire` MCP tool (both outside the \
+             PISTA-B crate set `bins/gt-cli` + `bins/gt-mcp` + `deploy/`); track via a \
+             follow-up bead under hq-mc72.12",
+        )),
+    }
 }
 
 // --- shared helpers --------------------------------------------------------
