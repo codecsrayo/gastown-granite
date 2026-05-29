@@ -213,6 +213,11 @@ async fn run<R, MR, PR, OR>(
     // signal) so an in-flight town can be brought down without a console.
     let estop_task = spawn_estop_daemon(&root);
 
+    // hq-mc72.12 C2 Witness — periodic ticker. The reactor auto-watches workers on lease
+    // expiry (hq-mc72.12.13); this loop ticks every non-escalated target so a watch past its
+    // threshold actually raises an escalation without an external tick source.
+    let witness_ticker = spawn_witness_ticker(&root);
+
     eprintln!(
         "[gt] composition root up — event log: {}",
         root.log_path().display()
@@ -262,6 +267,9 @@ async fn run<R, MR, PR, OR>(
         task.abort();
         let _ = task.await;
     }
+    // Witness ticker: a pure timer with no downstream consumer — abort it.
+    witness_ticker.abort();
+    let _ = witness_ticker.await;
     if let Some(pipeline) = pipeline {
         pipeline.shutdown_graceful().await;
     }
@@ -508,6 +516,44 @@ where
         };
         gt_polecat::supervise_daemon("estop", make, &mut tracker, u32::MAX, now_secs).await;
     }))
+}
+
+/// Spawn the periodic witness ticker (hq-mc72.12 C2 Witness). Every `GT_WITNESS_TICK_SECS`
+/// (default 30, floored at 1) it snapshots the witness state and ticks each non-escalated
+/// target; a tick past the target's threshold raises `WitnessEvent::EscalationRaised`, which
+/// the reactor's hq-mysw arm turns into a status bead + notification. A pure timer (no
+/// channel), so it never returns — the bin aborts it on shutdown. Errors are logged and the
+/// loop continues so one failed tick never stops the watchdog.
+fn spawn_witness_ticker<R>(root: &RootHandle<R>) -> tokio::task::JoinHandle<()>
+where
+    R: BeadRepository + Clone + 'static,
+{
+    let witness = root.witness.clone();
+    let interval_secs = std::env::var("GT_WITNESS_TICK_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(30)
+        .max(1);
+    eprintln!("[gt] witness: ticking watched targets every {interval_secs}s");
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(interval_secs));
+        // The first `interval` tick fires immediately; skip it so we never tick an empty set
+        // before any worker is watched.
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            let state = witness.snapshot().await;
+            let now = now_secs();
+            for target in state.targets.values() {
+                if target.escalated {
+                    continue;
+                }
+                if let Err(e) = gt_witness::witness::tick(&witness, &target.worker, now).await {
+                    eprintln!("[gt] witness tick failed worker={}: {e}", target.worker);
+                }
+            }
+        }
+    })
 }
 
 /// Edge-stamped unix seconds for the supervisor clock.
