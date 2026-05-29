@@ -36,7 +36,7 @@ use gt_agent::{
 use gt_beads::{Bead, BeadStatus};
 use gt_store_dolt::DoltSessions;
 use gt_merge::actor::MergeHandle;
-use gt_merge::{CompleteMerge, FailMerge, MergeCommand, StartMerge, SubmitMerge};
+use gt_merge::{CompleteMerge, FailMerge, MergeCommand, SubmitMerge};
 use gt_orchestration::actor::OrchHandle;
 use gt_orchestration::{CompleteMember, FailMember, LaunchConvoy, OrchCommand};
 use gt_patrol::actor::PatrolHandle;
@@ -510,29 +510,10 @@ impl McpService {
         self.run_merge("merge.submit.execute", json, MergeCommand::Submit(args), false).await
     }
 
-    #[tool(
-        name = "merge.start.validate",
-        description = "Check whether starting a merge (Ready -> Merging) would be accepted. No state change."
-    )]
-    async fn merge_start_validate(
-        &self,
-        Parameters(args): Parameters<StartMerge>,
-    ) -> Result<CallToolResult, McpError> {
-        let json = serde_json::to_value(&args).expect("StartMerge is Serialize");
-        self.run_merge("merge.start.validate", json, MergeCommand::Start(args), true).await
-    }
-
-    #[tool(
-        name = "merge.start.execute",
-        description = "Advance a merge slot Ready -> Merging. Illegal transitions are rejected."
-    )]
-    async fn merge_start_execute(
-        &self,
-        Parameters(args): Parameters<StartMerge>,
-    ) -> Result<CallToolResult, McpError> {
-        let json = serde_json::to_value(&args).expect("StartMerge is Serialize");
-        self.run_merge("merge.start.execute", json, MergeCommand::Start(args), false).await
-    }
+    // hq-mcyc.1: `merge.start` is reactor-internal — the composition root auto-advances
+    // Ready -> Merging when it observes MergeEvent::Ready (see bins/gt::root::handle_event).
+    // The previous MCP tools always hit `merging -> merging` and rejected, so they were
+    // dead surface area; the StartMerge command itself stays available for the reactor.
 
     #[tool(
         name = "merge.complete.validate",
