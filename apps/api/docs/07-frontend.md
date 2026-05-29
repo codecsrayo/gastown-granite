@@ -2,20 +2,30 @@
 
 > ## ⛔ ALCANCE — `gt-web` es BACKEND, no la UI del navegador
 >
-> `gt-web` aquí es **solo el lado servidor**: API REST (snapshot) + SSE (stream) en Axum.
-> **La aplicación web del navegador (el dashboard) NO se migra en este esfuerzo Rust.**
+> `gt-web` aquí es **solo el lado servidor**: API REST + SSE + comandos write-side
+> en Axum.
 >
-> - **No portar `internal/web/`** (`dashboard.js`, `dashboard.css`, `convoy.html`,
->   terminales xterm, etc.) a Rust ni a estos crates. Ese código sigue siendo el frontend
->   vivo en Go y se migra por separado.
-> - La migración de la **UI** tiene su propio plan y framework (**SvelteKit**):
->   [apps/town/docs/frontend-migration-sveltekit.md](../../town/docs/frontend-migration-sveltekit.md).
-> - La única responsabilidad de `gt-web` es **exponer el contrato** (`/api/snapshot` + SSE
->   `EventRecord`) que ese frontend consume. Backend y frontend se migran en **pistas
->   separadas**; lo único compartido es el contrato HTTP/SSE.
+> **La aplicación web del navegador (el dashboard) NO vive en este crate.** Se
+> construye aparte en `apps/town/web/` con SvelteKit + Svelte 5 + Tailwind. El
+> contrato HTTP/SSE de `gt-web` es lo único compartido.
 >
-> Si un agente empieza a reescribir HTML/CSS/JS de la app web dentro de `apps/api`, está
-> fuera de alcance — parar y mover ese trabajo al plan SvelteKit.
+> - **No portar `internal/web/`** (Go viejo) a Rust ni a estos crates. Está
+>   **retirado del despliegue** desde el cutover de compose (commit `c877758e`);
+>   sigue en el árbol como referencia histórica, no como spec.
+> - El plan completo del frontend nuevo (epics, beads, gaps de API, decisiones de
+>   diseño) vive en:
+>   - [apps/town/docs/README.md](../../town/docs/README.md) — índice + reglas para agentes
+>   - [apps/town/docs/frontend-migration-sveltekit.md](../../town/docs/frontend-migration-sveltekit.md) — alcance + epic plan
+>   - [apps/town/docs/frontend-api-surface.md](../../town/docs/frontend-api-surface.md) — contrato real + gaps
+>   - [apps/town/docs/frontend-architecture.md](../../town/docs/frontend-architecture.md) — estructura SvelteKit
+>   - [apps/town/docs/frontend-features.md](../../town/docs/frontend-features.md) — catálogo de features
+>
+> - El frontend **NO** asume endpoints inventados. Si una feature necesita algo
+>   no documentado en `frontend-api-surface.md`, eso es un **gap explícito** que
+>   abre bead en `hq-fe-api-r.*` o `hq-fe-api-w.*` antes de implementarse aquí.
+>
+> Si un agente empieza a reescribir HTML/CSS/JS dentro de `apps/api`, está fuera
+> de alcance — parar y mover ese trabajo al plan SvelteKit en `apps/town/`.
 
 ## Dos naturalezas de dato → dos canales
 
@@ -30,7 +40,7 @@ El frontend **nunca** habla con Dolt/Postgres directo. Solo con `gt-web`, que es
 ## Topología
 
 ```
-Browser (React / Astro + Tailwind)
+Browser (SvelteKit + Tailwind)
    │
    ├── GET  /api/sessions        → snapshot: sesiones activas             [Dolt]
    ├── GET  /api/beads?rig=…      → snapshot: beads / cola / escalaciones  [Dolt]
@@ -129,6 +139,23 @@ bancario: la frontera es el único sitio donde se aplica política.
 - El identificador que aparece en el audit es un tag derivado del SHA-256 del token
   (`web:<12hex>`); el secreto nunca cae al log.
 - El rate-limit por usuario/endpoint queda como follow-up explícito (no bloquea Paso 7).
+
+### Expansión planeada (epic hq-fe-svelte)
+
+Bearer plano migra a **JWT firmado con claims `roles[]` + `scopes[]`**. Tracked en
+`hq-fe-rbac.*`:
+
+- `hq-fe-rbac.1` JWT signing en gt-api (HS256/RS256 decidir).
+- `hq-fe-rbac.2` `roles.toml` unificado con `mcp-scope.toml` (misma fuente de scopes).
+- `hq-fe-rbac.3` Middleware **per-scope** en gt-web (reemplaza el single bearer check).
+- `hq-fe-rbac.4` `GET /api/whoami` → `{ actor, roles[], scopes[] }` (bootstrap del
+  dashboard).
+- `hq-fe-rbac.5` Enriquecer `web.invoked` con `command` + `target` para el audit feed
+  ("brayan killed gg-furiosa").
+
+Write-side actual (`POST /api/nudge`) expande a un comando bus completo (tracked en
+`hq-fe-api-w.*`); ver gap table en
+[apps/town/docs/frontend-api-surface.md](../../town/docs/frontend-api-surface.md).
 
 ## Estructura en el árbol
 

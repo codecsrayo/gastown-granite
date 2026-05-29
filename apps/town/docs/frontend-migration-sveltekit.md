@@ -1,196 +1,304 @@
-# Migración del frontend a SvelteKit
+# Plan completo · frontend SvelteKit (epic `hq-fe-svelte`)
 
-Plan por fases para reemplazar el frontend actual del dashboard (`internal/web/`) por
-una SPA en **SvelteKit**. Cada fase entrega algo verificable y tiene un **gate**; no se
-cruza al siguiente sin el anterior en verde.
+Plan exhaustivo del rediseño del dashboard de Gas Town como SPA SvelteKit
+sobre la API Rust existente (`apps/api/`, servida por `gt-web` + `gt-mcp`).
+El frontend Go antiguo (`internal/web/`) **ya quedó retirado** del despliegue
+(compose apunta `gastown.codecsrayo.com` a `gt-api` puerto 8787 desde
+`c877758e`).
+
+**No es migración con paridad.** La API Rust expone una superficie distinta y
+más chica; el frontend se construye contra esa superficie, no replicando la
+vieja UI.
+
+Docs hermanos (lectura obligada antes de tocar nada):
+
+- [frontend-api-surface.md](frontend-api-surface.md) — contrato API real + gaps tabulados.
+- [frontend-architecture.md](frontend-architecture.md) — estructura SvelteKit, stores, SSE, optimistic UI.
+- [frontend-features.md](frontend-features.md) — catálogo de features, cómo mapean al backend.
+- [Gas Town Redesign Wireframes.html](Gas%20Town%20Redesign%20Wireframes.html) — V1 dark, 3 vistas (Activity · Work · Crew).
+- [pagina.png](pagina.png) — render hi-fi (= V1 dark canónico).
+- [apps/api/docs/07-frontend.md](../../api/docs/07-frontend.md) — diseño backend (gt-web).
 
 ---
 
 > ## ⚠️ AVISO PARA AGENTES — leer antes de tocar el frontend
 >
-> **Hay varios agentes trabajando en este repo.** Este documento es la **fuente de verdad**
-> de la migración del frontend. Sigue estas reglas para no perder ni pisar trabajo:
+> Hay varios agentes trabajando en este repo. Este documento es la **fuente
+> de verdad del alcance del frontend**. Reglas para no perder ni pisar
+> trabajo:
 >
-> 1. **Esto es un plan, no permiso para borrar nada.** El frontend viejo
->    (`internal/web/templates/convoy.html`, `static/dashboard.js`, `static/dashboard.css`)
->    **debe seguir vivo y funcionando** hasta la **Fase 5**, y solo se borra con paridad
->    probada. No lo toques "de paso" en otras fases.
-> 2. **Reclama antes de trabajar.** Antes de empezar una fase o región, márcala ocupada
->    (bead en estado busy) y anótala en la **tabla de estado** de abajo con tu identidad.
->    Al terminar, cierra el bead y actualiza la tabla. Así nadie duplica.
-> 3. **Respeta el orden de fases.** No te saltes la Fase 0 (endpoint JSON snapshot): todo
->    lo demás depende de ella. Las fases tienen dependencia, no son paralelas entre sí
->    (las *regiones* de la Fase 4 sí son paralelizables entre agentes).
-> 4. **Rama aparte → merge a main → borra la rama.** Nunca trabajes directo sobre main
->    (el town root revierte). Usa worktree.
-> 5. **Decisiones ya tomadas (no re-litigar sin acuerdo):** framework = **SvelteKit**;
->    Astro descartado para el dash; el backend Go pasa a **API+SSE puro**; el contrato
->    `/api/snapshot` + SSE debe quedar compatible con el `gt-web` Rust de
->    [07-frontend.md](../../api/docs/07-frontend.md).
->
-> ### Tabla de estado (actualizar al reclamar/terminar)
->
-> | Fase | Estado | Agente | Bead | Notas |
-> |---|---|---|---|---|
-> | 0 — `/api/snapshot` JSON | PLANEADO | — | — | backend Go puro; bajo riesgo |
-> | 1 — scaffold SvelteKit + SSE | PLANEADO | — | — | bloqueada por Fase 0 |
-> | 2 — CSRF + escritura | PLANEADO | — | — | |
-> | 3 — terminales xterm | PLANEADO | — | — | |
-> | 4 — descomponer por región | PLANEADO | — | — | regiones paralelizables |
-> | 5 — cutover + borrado | PLANEADO | — | — | **solo con paridad probada** |
->
-> Estado global: **PLANEADO, no iniciado** (al 2026-05-27). Mantén esta tabla viva.
+> 1. **No portar 1:1 desde Go.** `internal/web/` está retirado del
+>    despliegue. La API Rust no replica sus endpoints (`/api/run`,
+>    `/api/mail/*`, `/api/issues/*`, etc.). Cada necesidad del frontend que
+>    no aparezca en [frontend-api-surface.md](frontend-api-surface.md) es un
+>    **gap explícito** que requiere bead — decidir caso a caso si se añade a
+>    `gt-web`, se promueve desde `gt-mcp`, o se difiere.
+> 2. **Reclama antes de trabajar.** Antes de empezar un bead, márcalo busy
+>    (status=dispatched/working) y anótate en la tabla de estado abajo.
+> 3. **Respeta dependencias entre epics.** El grafo está al final de este
+>    doc. No te saltes el bus de comandos (`hq-fe-api-w.1`) — todo write-side
+>    depende de él.
+> 4. **Rama aparte → merge a main → borra la rama.** Nunca directo sobre
+>    main (el town root revierte). Usa worktree.
+> 5. **Decisiones tomadas (no re-litigar sin acuerdo):**
+>    - framework = **SvelteKit + Svelte 5 (runes)**
+>    - adapter = **static SPA** (gt-api sirve el build)
+>    - tema canónico = **dark** (toggle light disponible)
+>    - variante canónica = **V1** (tabs horizontales)
+>    - auth = **bearer JWT** (no CSRF, no cookie)
+>    - rutas SPA = sub-paths (`/activity`, `/work`, `/crew/:role`…) bookmarkables
+>    - estado = stores runes + SSE fan-out + optimistic + reconcile
+>    - una sola conexión SSE global multiplexada en cliente
+>    - command-bus único en gt-root, mismo path para HTTP/MCP/CLI
 
 ---
 
-## Punto de partida (qué hay hoy)
+## Estado global
 
-| Pieza | Estado |
+**Estado: PLANEADO · no iniciado** (2026-05-29).
+
+| Epic | Descripción | Beads | Bloqueada por | Estado |
+|---|---|---|---|---|
+| **hq-fe-svelte** | Master · dashboard reconstruction | (todas abajo) | — | PLANEADO |
+| **hq-fe-api-r** | Read-side gaps (snapshots por dominio) | 7 | — | PLANEADO |
+| **hq-fe-api-w** | Write-side commands (HTTP routes) | 11 | hq-fe-api-w.1 (bus) | PLANEADO |
+| **hq-fe-rbac** | RBAC · JWT · whoami · scopes | 5 | hq-fe-api-w.1 | PLANEADO |
+| **hq-fe-auth** | Account auth (Claude `/login` pty driver) | 5 | hq-fe-api-w (idem) | PLANEADO |
+| **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
+| **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | PLANEADO · spike obligatorio |
+| **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | PLANEADO |
+| **hq-fe-view** | Vistas + componentes (UI) | 13 | hq-fe-build + hq-fe-api-r | PLANEADO |
+| **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | PLANEADO |
+
+Total ~75 beads. Tabla viva — actualiza al reclamar/cerrar.
+
+---
+
+## Fases (orden suelto · dentro de cada fase los epics corren en paralelo)
+
+### Fase 0 — Fundación + inventario (semana 1)
+
+**Objetivo:** unblock todo lo demás.
+
+- `hq-fe-api-w.1` command-bus interno en gt-root (refactor; sin HTTP nuevo).
+- `hq-fe-api-w.2` `Idempotency-Key` middleware en gt-web.
+- `hq-fe-build.1` scaffold `apps/town/web/` (Svelte 5 + Tailwind + pnpm).
+- `hq-fe-build.5` tipos TS desde [frontend-api-surface.md](frontend-api-surface.md).
+
+**Gate:** `gt-root::commands::dispatch(cmd)` válido para todos los MCP tools actuales (refactor invisible); `apps/town/web/pnpm dev` arranca página vacía contra `/api`.
+
+### Fase 1 — Read-side mínima (semana 2)
+
+- `hq-fe-api-r.1..7` snapshots por dominio (quota, convoys, merges, feed, mayor/status, ?rig=).
+- `hq-fe-rbac.1..4` JWT + roles.toml + middleware + `/api/whoami`.
+- `hq-fe-build.2..4` lib/api + lib/sse + lib/stores base.
+
+**Gate:** `curl -H "Authorization: Bearer …" /api/quota/accounts` devuelve snapshot completo; `/api/whoami` responde con roles + scopes; dashboard hidrata sidebar Quota desde snapshot real.
+
+### Fase 2 — Write-side mínima (semana 3)
+
+- `hq-fe-api-w.3..5` beads CRUD HTTP.
+- `hq-fe-api-w.6..8` session kill / restart / interrupt.
+- `hq-fe-view.1..2` layout raíz + login route + bearer guard.
+- `hq-fe-view.10` Quota sidebar (componentes).
+- `hq-fe-view.12` Guard / DangerButton / DangerZone components.
+
+**Gate:** login con JWT → dashboard hidrata; click Kill en una sesión → SIGTERM real al polecat → SSE confirma → UI parchea.
+
+### Fase 3 — Vistas core (semana 4)
+
+- `hq-fe-view.3` Activity feed (canon de la imagen).
+- `hq-fe-view.4` Sessions table.
+- `hq-fe-view.5` Work kanban (drag-drop).
+- `hq-fe-view.13` Profile menu topbar.
+
+**Gate:** 4 vistas (Activity, Sessions, Work, layout completo) operativas contra `gt-api` real con SSE viva. Kanban drag → transición real.
+
+### Fase 4 — Vistas avanzadas + skills (semana 5)
+
+- `hq-fe-skills.1..5` dominio skills/roles + endpoints.
+- `hq-fe-view.6..9` Convoys, Merge Q, Crew, Rigs.
+- `hq-fe-auth.0..5` account login pty driver.
+- `hq-fe-api-w.9..10` convoy pause/resume/fail · quota rotate/retire HTTP.
+
+**Gate:** Crew tab permite togglear skills por rol; e-stop convoy con 2-step confirm funciona; Login button por cuenta arranca flujo pty real.
+
+### Fase 5 — Terminal + cutover (semana 6)
+
+- `hq-fe-term.0` spike decision (WebSocket vs MCP vs nuevo bin).
+- `hq-fe-term.1..4` PTY adapter + WS endpoint + structured stream + auth.
+- `hq-fe-view.11` dock terminal mount (xterm lazy).
+- `hq-fe-cut.1..4` gt-api sirve build · traefik · borrar `internal/web/` · docs ops.
+
+**Gate:** `https://gastown.codecsrayo.com` carga SPA nueva, dock attach a sesión tmux viva, Go web/ borrado del árbol.
+
+---
+
+## Tabla de beads (reclamar aquí)
+
+> Al reclamar un bead: copia tu identidad de agente a la columna **Agente**,
+> cambia **Estado** a `working`, abre una rama desde main, trabaja, mergea,
+> cierra el bead. Si te bloquea otro bead, anótalo en **Notas**.
+
+### Epic `hq-fe-svelte` (master)
+
+| Bead | Título | Pri | Estado | Agente | Notas |
+|---|---|---|---|---|---|
+| hq-fe-svelte | Master epic — frontend reconstruction | P1 | open | — | tracks all children |
+
+### Epic `hq-fe-api-r` — read-side gaps
+
+| Bead | Título | Pri | Estado | Agente | Notas |
+|---|---|---|---|---|---|
+| hq-fe-api-r.1 | `GET /api/quota/accounts` snapshot completo | P1 | open | — | tags por sesión, /upgrade pending |
+| hq-fe-api-r.2 | `GET /api/quota/rotation` waiting_unlock + recent | P1 | open | — | derivado de SSE quota.* + estado |
+| hq-fe-api-r.3 | `GET /api/convoys` snapshot por estado | P2 | open | — | mirror de gt://orch/convoys |
+| hq-fe-api-r.4 | `GET /api/merges` slots snapshot | P2 | open | — | mirror de gt://merge/slots |
+| hq-fe-api-r.5 | `GET /api/feed?since=` activity histórico | P2 | open | — | PG projection |
+| hq-fe-api-r.6 | `?rig=` filter en `/api/sessions` | P2 | open | — | trivial, junto con r.1 |
+| hq-fe-api-r.7 | `GET /api/mayor/status` ATTACHED/DETACHED | P3 | open | — | semántica TBD con mayor |
+
+### Epic `hq-fe-api-w` — write-side commands
+
+| Bead | Título | Pri | Estado | Agente | Notas |
+|---|---|---|---|---|---|
+| hq-fe-api-w.1 | command-bus interno en gt-root | P1 | open | — | **blocker** del resto del epic |
+| hq-fe-api-w.2 | `Idempotency-Key` middleware en gt-web | P1 | open | — | requerido por todos los POST |
+| hq-fe-api-w.3 | `POST /api/beads` + `PATCH /api/beads/:id` | P1 | open | — | depende w.1 + w.2 |
+| hq-fe-api-w.4 | `POST /api/beads/:id/transition` state machine | P1 | open | — | guard ilegales → 409 |
+| hq-fe-api-w.5 | `POST /api/beads/:id/comments` | P2 | open | — | |
+| hq-fe-api-w.6 | `DELETE /api/sessions/:id` kill via gt-polecat | P1 | open | — | SIGTERM con timeout → SIGKILL |
+| hq-fe-api-w.7 | `POST /api/sessions/:id/restart` | P2 | open | — | kill + respawn con misma crew |
+| hq-fe-api-w.8 | `POST /api/sessions/:id/interrupt` (tmux ESC) | P2 | open | — | send-keys; documentar risk |
+| hq-fe-api-w.9 | `POST /api/convoys` + pause/resume/fail-member | P2 | open | — | nuevo dominio eventos pause/resume |
+| hq-fe-api-w.10 | `POST /api/quota/accounts/:n/{rotate,retire}` HTTP | P2 | open | — | existe MCP; promover |
+| hq-fe-api-w.11 | `POST /api/beads/bulk` + rate-limit | P3 | open | — | follow-up para drag masivo |
+
+### Epic `hq-fe-rbac` — perfiles, JWT, scopes
+
+| Bead | Título | Pri | Estado | Agente | Notas |
+|---|---|---|---|---|---|
+| hq-fe-rbac.1 | JWT signing en gt-api (HS256/RS256 decidir) | P1 | open | — | reemplaza bearer plano |
+| hq-fe-rbac.2 | `roles.toml` unificado con `mcp-scope.toml` | P1 | open | — | misma fuente de scopes |
+| hq-fe-rbac.3 | Middleware per-scope en gt-web | P1 | open | — | reemplaza single bearer check |
+| hq-fe-rbac.4 | `GET /api/whoami` (actor + roles + scopes) | P1 | open | — | bootstrap del dashboard |
+| hq-fe-rbac.5 | Enriquecer `web.invoked` con command+target | P2 | open | — | audit feed útil |
+
+### Epic `hq-fe-auth` — account login pty driver
+
+| Bead | Título | Pri | Estado | Agente | Notas |
+|---|---|---|---|---|---|
+| hq-fe-auth.0 | Research Anthropic OAuth client_id + redirect | P2 | open | — | descartar/perseguir opción A |
+| hq-fe-auth.1 | PTY driver: spawn `claude /login` + URL regex | P1 | open | — | portable-pty crate |
+| hq-fe-auth.2 | `POST /api/quota/accounts/:n/login` + token + cancel | P1 | open | — | depende auth.1 |
+| hq-fe-auth.3 | SSE kinds `quota.login_*` | P1 | open | — | started · url_ready · complete · failed |
+| hq-fe-auth.4 | Timeout + cleanup pty zombis + lock per account | P2 | open | — | mitigación |
+
+### Epic `hq-fe-skills` — skills + roles domain (nuevo)
+
+| Bead | Título | Pri | Estado | Agente | Notas |
+|---|---|---|---|---|---|
+| hq-fe-skills.1 | Domain crate `gt-skills` (catalog + role binding) | P2 | open | — | event-sourced; persistencia Dolt |
+| hq-fe-skills.2 | `GET /api/skills` + `GET /api/roles` (+ skills habilitadas) | P2 | open | — | |
+| hq-fe-skills.3 | `POST /api/roles/:role/skills` toggle (validate+execute) | P2 | open | — | |
+| hq-fe-skills.4 | Map skills → MCP scope additions (config dinámica) | P2 | open | — | reload mcp-scope sin restart |
+| hq-fe-skills.5 | Reload signal cuando se cambian skills | P3 | open | — | broadcast roles.changed |
+
+### Epic `hq-fe-term` — terminal bridge
+
+| Bead | Título | Pri | Estado | Agente | Notas |
+|---|---|---|---|---|---|
+| hq-fe-term.0 | **Spike obligatorio**: WS en gt-api · MCP tool · bin separado | P2 | open | — | escribir RFC, decidir antes del .1 |
+| hq-fe-term.1 | PTY adapter en gt-api (post-decision) | P2 | open | — | bloqueada por .0 |
+| hq-fe-term.2 | WebSocket `/api/sessions/:id/term` (o equivalente) | P2 | open | — | bloqueada por .0 |
+| hq-fe-term.3 | Structured stream (kind: code/comment/highlight/warn/raw) | P3 | open | — | derivar de Claude output o passthrough |
+
+### Epic `hq-fe-build` — scaffold + tooling
+
+| Bead | Título | Pri | Estado | Agente | Notas |
+|---|---|---|---|---|---|
+| hq-fe-build.1 | Scaffold `apps/town/web/` (svelte5 + adapter-static + tailwind + pnpm) | P1 | open | — | |
+| hq-fe-build.2 | `lib/api` client wrapper (fetch + bearer + idem-key) | P1 | open | — | |
+| hq-fe-build.3 | `lib/sse` stream + router (fan-out por kind) | P1 | open | — | reconnect con Last-Event-ID |
+| hq-fe-build.4 | `lib/stores` base con runes (auth, sessions, beads, activity, quota) | P1 | open | — | `.svelte.ts` singletons |
+| hq-fe-build.5 | `lib/types` DTOs manuales desde frontend-api-surface | P1 | open | — | regenerar de JsonSchema si crece |
+| hq-fe-build.6 | Vite proxy + dev workflow doc | P2 | open | — | proxy `/api` → :8787 |
+| hq-fe-build.7 | Vitest (stores/logic) + Playwright (e2e) bootstrap | P2 | open | — | |
+| hq-fe-build.8 | CI lint + build gate (svelte-check estricto) | P2 | open | — | |
+
+### Epic `hq-fe-view` — vistas + componentes
+
+| Bead | Título | Pri | Estado | Agente | Notas |
+|---|---|---|---|---|---|
+| hq-fe-view.1 | Layout raíz: Shell + Sidebar + Topbar + Dock + theme toggle | P1 | open | — | persistente; canvas swap por route |
+| hq-fe-view.2 | `/login` route + bearer guard en `+layout.ts` | P1 | open | — | |
+| hq-fe-view.3 | Activity view (feed + cat filter + rig filter + recent peek) | P1 | open | — | canon hero (imagen) |
+| hq-fe-view.4 | Sessions view (table + filters + kill DangerButton) | P1 | open | — | |
+| hq-fe-view.5 | Work view (kanban 5 cols + drag-drop + DangerZone close) | P1 | open | — | svelte-dnd-action |
+| hq-fe-view.6 | Convoys view (list + e-stop DangerZone) | P2 | open | — | |
+| hq-fe-view.7 | Merge Q view | P2 | open | — | |
+| hq-fe-view.8 | Crew view (RoleList + RolePanel + SkillToggle + ScopeMatrix) | P2 | open | — | depende hq-fe-skills |
+| hq-fe-view.9 | Rigs view | P3 | open | — | |
+| hq-fe-view.10 | Quota sidebar (AccountCard + Meter + RotationChips + LoginBtn) | P1 | open | — | sidebar fija |
+| hq-fe-view.11 | Dock terminal shell (mount + tabs + xterm lazy) | P2 | open | — | bloqueada por hq-fe-term decision |
+| hq-fe-view.12 | `<Guard>`, `<DangerButton>`, `<DangerZone>` components | P1 | open | — | requerido por todos los write |
+| hq-fe-view.13 | Profile menu topbar (whoami + read-only toggle + logout) | P1 | open | — | |
+
+### Epic `hq-fe-cut` — cutover
+
+| Bead | Título | Pri | Estado | Agente | Notas |
+|---|---|---|---|---|---|
+| hq-fe-cut.1 | gt-api sirve assets estáticos del build (`/` y `/_app/*`) | P1 | open | — | nuevo handler fuera de /api |
+| hq-fe-cut.2 | Traefik / compose validación: `gastown.codecsrayo.com` → SPA | P1 | open | — | rollback plan |
+| hq-fe-cut.3 | Borrar `internal/web/` del árbol (limpieza Go) | P2 | open | — | tras semana de bake |
+| hq-fe-cut.4 | Docs ops (token, RBAC bootstrap, troubleshooting) | P2 | open | — | en `apps/api/docs/deployment/` |
+
+---
+
+## Grafo de dependencias
+
+```
+hq-fe-api-w.1 (command-bus)
+  ├── hq-fe-api-w.2 (idem-key)
+  │     ├── hq-fe-api-w.3..11 (HTTP write routes)
+  │     ├── hq-fe-rbac.3 (per-scope middleware)
+  │     └── hq-fe-auth.2 (login HTTP)
+  └── hq-fe-skills.3 (toggle endpoint)
+
+hq-fe-rbac.1 (JWT) ── hq-fe-rbac.2 (roles.toml) ── hq-fe-rbac.3 ── hq-fe-rbac.4 (whoami)
+                                                                       └── hq-fe-view.* (guards)
+
+hq-fe-build.1 (scaffold)
+  ├── hq-fe-build.2..4 (api/sse/stores)
+  └── hq-fe-view.1 (layout)
+        └── hq-fe-view.2..13 (resto en paralelo)
+
+hq-fe-term.0 (spike) ── hq-fe-term.1..3 ── hq-fe-view.11 (dock)
+
+hq-fe-view 80%+ done ── hq-fe-cut.1..4
+```
+
+---
+
+## Riesgos consolidados
+
+| Riesgo | Mitigación |
 |---|---|
-| `internal/web/templates/convoy.html` | Template Go (`html/template`), **236 directivas `{{…}}`** — snapshot inicial server-side |
-| `internal/web/static/dashboard.js` | **4953 líneas vanilla JS, sin módulos, sin bundler** — capa viva |
-| SSE | 3 streams: `/api/events`, `/api/git/events`, `/api/quota/stream` |
-| Acciones | decenas de `fetch('/api/…')` (run, crew, mail, issues, options, session/kill…) |
-| Terminales | xterm.js (CDN) attachadas a tmux (`terminal-attach.js`, `console.html` pop-out) |
-| CSRF | token inyectado en el template, validado en POST |
-| Build | **ninguno** — Go sirve archivos crudos |
-| Diseño objetivo | `apps/town/docs/Gas Town Redesign Wireframes.html` + `pagina.png` |
-
-Patrón actual = **snapshot HTML (template) + capa viva JS sobre SSE**. La migración lo
-convierte en **snapshot JSON + SPA**, que es justo el contrato de `gt-web` en el plan Rust
-([apps/api/docs/07-frontend.md](../../api/docs/07-frontend.md)) — el frontend nuevo no
-necesitará retrabajo cuando el backend pase de Go a Rust.
-
-## Por qué SvelteKit (y por qué no Astro)
-
-- El dash es una **app interactiva en vivo** (SSE persistente, terminales, estado denso),
-  no contenido. Astro (static-first, islands, ship-zero-JS) no aporta aquí; se usaría como
-  un Vite glorificado. Astro solo valdría para un sitio de **docs/contenido** aparte.
-- Svelte: stores reactivos mapean directo al patrón `store.js` + parcheo-por-evento;
-  runtime mínimo; "actualiza esta fila al llegar el evento" es su caso natural.
-
-## Principio rector
-
-**El framework es ergonomía; el contrato es lo que importa.** Si un endpoint JSON snapshot
-+ los SSE existentes pueden mover la UI, el resto es construcción incremental. Por eso la
-Fase 0 es backend puro y de-risk antes de tocar SvelteKit.
-
----
-
-## Fase 0 — Endpoint JSON snapshot (backend, sin frontend)
-
-**Objetivo:** desacoplar el snapshot del template. Convertir lo que renderizan las 236
-`{{…}}` en datos.
-
-**Entregable:**
-- `GET /api/snapshot` (o `/api/convoy`) que devuelve en JSON la misma estructura que hoy
-  alimenta `convoy.html`: mayor, rigs, crew, hooks, escalations, health, ages, progress.
-- Reutilizar los structs Go que ya construyen el view-model del template (no duplicar).
-
-**Gate:**
-- `curl /api/snapshot` devuelve JSON que cubre todo lo que pinta el template.
-- El dashboard actual sigue intacto (no se toca `convoy.html` ni `dashboard.js`).
-
----
-
-## Fase 1 — Scaffold SvelteKit + contrato de datos
-
-**Objetivo:** probar que JSON snapshot + SSE existentes mueven una UI Svelte.
-
-**Entregable:**
-- `frontend/` con SvelteKit + Tailwind. Adapter **static** (SPA) → Go sirve el build; la
-  API y los SSE quedan en el mismo origen (sin CORS). En dev, proxy a Go.
-- Tipos TS que reflejan `/api/snapshot` y la forma del `EventRecord` de los 3 SSE.
-- Store SSE: suscribe `/api/events`, `/api/git/events`, `/api/quota/stream` → stores Svelte.
-- xterm.js y addons vía **npm** (versiones pineadas), no CDN.
-
-**Gate:**
-- El dev server renderiza una página desde `/api/snapshot` **y** parchea en vivo un widget
-  (p. ej. lista de sesiones) desde `/api/events`. Esto prueba SSE+JSON → UI.
-
----
-
-## Fase 2 — CSRF + camino de escritura
-
-**Objetivo:** las acciones (`POST /api/…`) funcionan desde la SPA.
-
-**Entregable:**
-- Decidir CSRF para SPA: **cookie double-submit** o `GET /api/csrf` que entrega el token.
-  (Hoy el token va incrustado en el template — eso desaparece con la SPA.)
-- Cablear una acción de escritura (p. ej. `run` / `nudge`) con el token.
-
-**Gate:**
-- Una acción de escritura se ejecuta desde SvelteKit con CSRF validado server-side.
-
----
-
-## Fase 3 — Terminales xterm
-
-**Objetivo:** portar las terminales tmux (lo más específico del dash).
-
-**Entregable:**
-- Componente Svelte que envuelve xterm.js (montaje DOM agnóstico — `terminal-attach.js`
-  porta casi tal cual).
-- Attach a sesión tmux; ruta de pop-out equivalente a `console.html`.
-
-**Gate:**
-- Attach a una sesión tmux viva desde la UI nueva; el pop-out funciona idéntico.
-
----
-
-## Fase 4 — Descomponer el dashboard, región por región
-
-**Objetivo:** reconstruir las 4953 líneas como componentes, contra el **wireframe**, no 1:1
-de la UI vieja.
-
-**Inventario previo (el contrato real):** listar todos los `/api/*` y todos los tipos de
-evento SSE que consume `dashboard.js` — es la fuente de verdad de qué debe replicar la SPA.
-
-**Regiones (mapear a componentes):**
-- grid de convoy / rigs · crew · mail · issues · quota cards · escalations · paleta de
-  comandos (`run`) · health/heartbeat.
-
-**Entregable:**
-- Componentes por región, construidos según el wireframe.
-- **Correr en paralelo** al template Go (SvelteKit bajo otra ruta/puerto) hasta paridad.
-
-**Gate (por región):** checklist de paridad contra el dashboard viejo antes de marcar la
-región como hecha.
-
----
-
-## Fase 5 — Cutover + borrado
-
-**Objetivo:** la SPA reemplaza al template; Go queda como API+SSE puro.
-
-**Entregable:**
-- `/` sirve el build de SvelteKit (Go sirve los assets estáticos del build).
-- Borrar `convoy.html`, `dashboard.js`, `dashboard.css` y el render `html/template`.
-- `internal/web` queda como handlers `/api/*` + SSE + static-del-build.
-
-**Gate:**
-- Template y JS viejos eliminados; toda la funcionalidad vive en la UI nueva; CSRF intacto;
-  terminales y los 3 SSE operativos.
-
----
-
-## Transversal
-
-- **Alineación con Rust.** El contrato `/api/snapshot` + SSE es el mismo que `gt-web`
-  ([07-frontend.md](../../api/docs/07-frontend.md)). Hacer esta migración ahora deja el
-  frontend listo para el backend Rust sin retrabajo.
-- **Riesgo principal:** el monolito de 4953 líneas tiene comportamiento oculto. El inventario
-  de `/api/*` + tipos de evento (Fase 4) es obligatorio antes de reconstruir — es el contrato.
-- **No portar 1:1.** El wireframe es el objetivo; la UI vieja es referencia de comportamiento,
-  no de diseño.
+| Dos backends a la vez (Go viejo + Rust nuevo) | Falso — Go ya retirado del despliegue (`c877758e`); solo está en árbol como referencia |
+| Agente confunde la API vieja con la nueva | [frontend-api-surface.md](frontend-api-surface.md) es spec, no `internal/web/` |
+| OAuth account login bloqueado por Anthropic | Plan B (pty driver) viable sin coordinación externa |
+| Terminal bridge ambicioso | Diferido tras spike; resto del MVP no depende de él |
+| Skills domain nuevo | Pequeño event-sourced; encaja en patrón existente |
+| RBAC granular escope | `mcp-scope.toml` ya existe → reuso |
+| Múltiples agentes pisándose en este epic | Tabla de estado arriba es lock cooperativo |
 
 ## Resumen visual
 
 ```
-Fase 0  ── /api/snapshot JSON ───────────────  backend, dash viejo intacto
-Fase 1  ── scaffold SvelteKit + SSE store ───  JSON+SSE mueven una UI Svelte
-Fase 2  ── CSRF + escritura ─────────────────  una acción POST funciona
-Fase 3  ── terminales xterm ─────────────────  attach tmux + pop-out
-Fase 4  ── descomponer por región ───────────  paridad vs wireframe, en paralelo
-Fase 5  ── cutover + borrado ────────────────  Go = API+SSE puro
+Fase 0 ── fundación ─────────  command-bus · idem-key · scaffold · types
+Fase 1 ── read-side mínima ──  snapshots · JWT/whoami · api/sse/stores
+Fase 2 ── write-side mínima ─  beads CRUD · session kill · login + Guard
+Fase 3 ── vistas core ──────  Activity · Sessions · Work · Profile menu
+Fase 4 ── avanzadas + auth ──  Skills · Convoys · Crew · pty login
+Fase 5 ── terminal + cut ───  spike → dock · serve build · borrar Go
 ```

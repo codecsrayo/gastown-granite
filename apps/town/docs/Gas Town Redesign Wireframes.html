@@ -2,24 +2,54 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<title>Gas Town — Wireframes</title>
+<title>Gas Town — Wireframe V1 (Activity · Work · Crew)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&family=Kalam:wght@300;400;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --paper: #f3efe6;
-    --paper-2: #ebe6d9;
-    --ink: #1a1a1a;
-    --ink-soft: #5a5a55;
-    --ink-faint: #a8a39a;
-    --accent: #18a883;       /* teal/green nod to original */
-    --accent-soft: #b5e6d6;
-    --warn: #c47a2e;
-    --warn-soft: #f0d9b8;
-    --bad: #c2474a;
-    --bad-soft: #f1c6c7;
+  /* ─────────────────────────────────────────────────────────────
+     Themes. Default = dark (canon). Light theme available via the
+     #theme-toggle button. All component CSS reads from vars only.
+     ───────────────────────────────────────────────────────────── */
+  :root, [data-theme="dark"] {
+    --paper:       #0f1612;
+    --paper-2:     #1a221c;
+    --ink:         #d8d4c4;
+    --ink-soft:    #8aa399;
+    --ink-faint:   #4a5a52;
+    --border:      #3a4a40;
+    --border-soft: #2a3630;
+    --accent:      #18a883;
+    --accent-soft: #1d5447;
+    --warn:        #c47a2e;
+    --warn-soft:   #3a2818;
+    --bad:         #c2474a;
+    --bad-soft:    #3a1a1c;
+    --kind-q:      #2a1a36;
+    --kind-b:      #16331f;
+    --grid-dot:    rgba(255,255,255,0.025);
+    --shadow:      rgba(0,0,0,0.35);
   }
+  [data-theme="light"] {
+    --paper:       #f3efe6;
+    --paper-2:     #ebe6d9;
+    --ink:         #1a1a1a;
+    --ink-soft:    #5a5a55;
+    --ink-faint:   #a8a39a;
+    --border:      #1a1a1a;
+    --border-soft: #a8a39a;
+    --accent:      #18a883;
+    --accent-soft: #b5e6d6;
+    --warn:        #c47a2e;
+    --warn-soft:   #f0d9b8;
+    --bad:         #c2474a;
+    --bad-soft:    #f1c6c7;
+    --kind-q:      #ede0f3;
+    --kind-b:      #d6ecdf;
+    --grid-dot:    rgba(0,0,0,0.04);
+    --shadow:      rgba(0,0,0,0.06);
+  }
+
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
@@ -27,74 +57,51 @@
     color: var(--ink);
     font-family: "Kalam", "Patrick Hand", sans-serif;
     min-height: 100vh;
-    /* faint paper grid */
-    background-image:
-      radial-gradient(rgba(0,0,0,0.04) 1px, transparent 1px);
+    background-image: radial-gradient(var(--grid-dot) 1px, transparent 1px);
     background-size: 22px 22px;
+    padding-bottom: 80px; /* reserve dock space */
   }
 
-  /* ——— Tab bar (which variation to view) ——— */
-  .switcher {
+  /* ─── Sticky header: title + theme toggle ─── */
+  .header {
     position: sticky; top: 0; z-index: 50;
     background: var(--paper);
-    border-bottom: 2px dashed var(--ink);
+    border-bottom: 2px dashed var(--border);
     padding: 14px 28px 12px;
-    display: flex; align-items: flex-end; gap: 18px;
-    box-shadow: 0 6px 0 -4px rgba(0,0,0,0.06);
+    display: flex; align-items: baseline; gap: 18px;
+    box-shadow: 0 6px 0 -4px var(--shadow);
   }
-  .switcher h1 {
+  .header h1 {
     margin: 0; font-family: "Caveat", cursive;
     font-size: 30px; font-weight: 700; line-height: 1;
-    flex: 0 0 auto;
   }
-  .switcher h1 .sub {
+  .header h1 .sub {
     font-size: 16px; color: var(--ink-soft);
     margin-left: 10px; font-weight: 400;
   }
-  .tabs { display: flex; gap: 8px; flex-wrap: wrap; }
-  .tab {
-    font-family: "Caveat", cursive; font-size: 22px;
-    padding: 6px 16px 4px;
-    border: 2px solid var(--ink);
+  .header .spacer { flex: 1; }
+  .theme-toggle {
+    font-family: "Caveat", cursive; font-size: 18px;
+    padding: 4px 14px 3px;
+    border: 2px solid var(--border);
+    border-radius: 12px;
     background: var(--paper);
-    border-radius: 14px;
-    cursor: pointer;
-    transform: rotate(-0.6deg);
-    transition: transform .15s ease, background .15s ease;
     color: var(--ink);
+    cursor: pointer;
   }
-  .tab:nth-child(2n) { transform: rotate(.4deg); }
-  .tab:hover { background: var(--paper-2); }
-  .tab.active {
-    background: var(--accent);
-    color: #fff;
-    border-color: var(--ink);
-    transform: rotate(-1deg) translateY(-1px);
-  }
-  .tab small { display: block; font-size: 11px; font-family: "Kalam", sans-serif; line-height: 1; margin-top: 2px; opacity: .8; }
-  .switcher .legend {
-    margin-left: auto;
-    font-family: "Caveat", cursive; font-size: 18px; color: var(--ink-soft);
-  }
+  .theme-toggle:hover { background: var(--paper-2); }
 
-  /* ——— Frame ——— */
-  .frame { display: none; padding: 24px; }
-  .frame.active { display: block; }
-
+  /* ─── Frame meta ─── */
+  .frame { padding: 24px; }
   .frame-meta {
     display: flex; align-items: baseline; gap: 14px;
     margin: 0 0 18px 4px;
     font-family: "Caveat", cursive;
   }
-  .frame-meta .v-num {
-    font-size: 30px; line-height: 1;
-    background: var(--ink); color: var(--paper);
-    padding: 4px 12px 2px; border-radius: 18px;
-  }
-  .frame-meta .v-title { font-size: 28px; line-height: 1; }
-  .frame-meta .v-note { font-size: 16px; color: var(--ink-soft); font-family: "Kalam", sans-serif; }
+  .frame-meta .v-title { font-size: 26px; line-height: 1; }
+  .frame-meta .v-note { font-size: 15px; color: var(--ink-soft); font-family: "Kalam", sans-serif; }
 
-  /* ——— Layout shells: 3 zones, flex with wrap ——— */
+  /* ─── 2-zone layout (sidebar + workspace) ─── */
   .shell {
     display: flex;
     flex-wrap: wrap;
@@ -102,32 +109,26 @@
     min-height: 920px;
     align-items: stretch;
   }
-  .shell > .card:first-child { /* left accounts */
+  .shell > .card:first-child {
     flex: 1 1 280px;
     min-width: 260px;
     max-width: 340px;
   }
-  .shell > .workspace { /* center */
+  .shell > .workspace {
     flex: 3 1 460px;
     min-width: 380px;
     display: flex; flex-direction: column;
   }
-  .shell > .right-col { /* right */
-    flex: 1 1 240px;
-    min-width: 220px;
-    max-width: 320px;
-  }
   .workspace, .canvas { min-width: 0; }
 
-  /* paper card */
+  /* ─── Paper card ─── */
   .card {
     background: var(--paper);
-    border: 2px solid var(--ink);
+    border: 2px solid var(--border);
     border-radius: 12px;
     padding: 14px 14px 12px;
     position: relative;
   }
-  .card.tight { padding: 10px 12px; }
   .card-title {
     font-family: "Caveat", cursive; font-size: 24px; line-height: 1;
     display: flex; align-items: center; gap: 8px;
@@ -142,7 +143,7 @@
     margin-left: auto;
     font-family: "JetBrains Mono", monospace; font-size: 11px;
     padding: 2px 8px;
-    border: 1.5px solid var(--ink); border-radius: 999px;
+    border: 1.5px solid var(--border); border-radius: 999px;
     background: var(--paper-2);
   }
 
@@ -156,13 +157,13 @@
     background: var(--ink); color: var(--paper);
     padding: 1px 7px; border-radius: 999px;
   }
-  .h-section.active::before { content: ""; width: 8px; height: 8px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 0 2px var(--paper), 0 0 0 3.5px var(--ink); }
-  .h-section.inactive::before { content: ""; width: 8px; height: 8px; background: var(--warn); border-radius: 50%; box-shadow: 0 0 0 2px var(--paper), 0 0 0 3.5px var(--ink); }
-  .h-section.blocked::before { content: ""; width: 8px; height: 8px; background: var(--bad); border-radius: 50%; box-shadow: 0 0 0 2px var(--paper), 0 0 0 3.5px var(--ink); }
+  .h-section.active::before   { content: ""; width: 8px; height: 8px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 0 2px var(--paper), 0 0 0 3.5px var(--border); }
+  .h-section.inactive::before { content: ""; width: 8px; height: 8px; background: var(--warn);   border-radius: 50%; box-shadow: 0 0 0 2px var(--paper), 0 0 0 3.5px var(--border); }
+  .h-section.blocked::before  { content: ""; width: 8px; height: 8px; background: var(--bad);    border-radius: 50%; box-shadow: 0 0 0 2px var(--paper), 0 0 0 3.5px var(--border); }
 
-  /* account row in sidebar — column layout */
+  /* ─── Account rows ─── */
   .acct {
-    border: 1.5px solid var(--ink);
+    border: 1.5px solid var(--border);
     border-radius: 10px;
     padding: 10px 12px;
     margin-bottom: 10px;
@@ -183,11 +184,10 @@
     line-height: 1.1;
     word-break: break-all;
   }
-  /* status = just a pulsing dot, no label */
   .acct .badge {
     width: 12px; height: 12px;
     border-radius: 50%;
-    border: 1.5px solid var(--ink);
+    border: 1.5px solid var(--border);
     padding: 0; flex: 0 0 auto;
     font-size: 0; line-height: 0; color: transparent;
     position: relative;
@@ -199,26 +199,17 @@
     border-radius: 50%;
     animation: pulse 1.6s ease-in-out infinite;
   }
-  .acct .badge.ok  { background: var(--accent); }
-  .acct .badge.ok::after  { box-shadow: 0 0 0 0 var(--accent); }
+  .acct .badge.ok   { background: var(--accent); }
   .acct .badge.warn { background: var(--warn); }
-  .acct .badge.warn::after { box-shadow: 0 0 0 0 var(--warn); }
-  .acct .badge.bad { background: var(--bad); }
-  .acct .badge.bad::after  { box-shadow: 0 0 0 0 var(--bad); }
+  .acct .badge.bad  { background: var(--bad); }
   @keyframes pulse {
     0%   { box-shadow: 0 0 0 0   currentColor; opacity: .55; }
     70%  { box-shadow: 0 0 0 8px currentColor; opacity: 0; }
     100% { box-shadow: 0 0 0 0   currentColor; opacity: 0; }
   }
-  .acct .badge.ok::after  { color: var(--accent); }
+  .acct .badge.ok::after   { color: var(--accent); }
   .acct .badge.warn::after { color: var(--warn); }
   .acct .badge.bad::after  { color: var(--bad); }
-  .acct .limit {
-    font-family: "JetBrains Mono", monospace; font-size: 10px;
-    padding: 2px 8px; border: 1px solid var(--ink); border-radius: 999px;
-    background: var(--warn-soft);
-    align-self: flex-start;
-  }
   .acct .live-row {
     display: flex; flex-direction: column; gap: 3px;
     font-family: "JetBrains Mono", monospace; font-size: 10px;
@@ -226,7 +217,7 @@
   }
   .acct .live-row .lk { color: var(--ink); font-weight: 600; letter-spacing: .03em; text-transform: uppercase; font-size: 9px; }
   .acct .meter {
-    margin-top: 6px; height: 8px; border: 1px solid var(--ink); border-radius: 4px;
+    margin-top: 6px; height: 8px; border: 1px solid var(--border); border-radius: 4px;
     background: repeating-linear-gradient(45deg, var(--paper), var(--paper) 3px, var(--paper-2) 3px, var(--paper-2) 6px);
     position: relative; overflow: hidden;
   }
@@ -235,30 +226,20 @@
     background: var(--accent);
   }
   .acct .meter .fill.warn { background: var(--warn); }
-  .acct .meter .fill.bad { background: var(--bad); }
+  .acct .meter .fill.bad  { background: var(--bad); }
   .acct .stats { font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--ink-soft); margin-top: 4px; display: flex; justify-content: space-between; }
   .acct .tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
   .acct .tag {
     font-family: "JetBrains Mono", monospace; font-size: 9px;
-    padding: 1px 6px; border: 1px solid var(--ink); border-radius: 4px;
+    padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px;
     background: var(--paper-2);
   }
   .acct .resets { font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--ink-soft); margin-top: 4px; }
   .acct.dim { opacity: .72; }
 
-  .chip {
-    display: inline-flex; align-items: center; gap: 4px;
-    font-family: "JetBrains Mono", monospace; font-size: 10px;
-    padding: 3px 8px;
-    border: 1.5px solid var(--ink); border-radius: 999px;
-    background: var(--paper-2);
-  }
-  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
-
-  /* ——— Workspace (center) ——— */
+  /* ─── Workspace ─── */
   .workspace { display: flex; flex-direction: column; min-height: 0; }
 
-  /* Workspace tab strip — Bulma "is-boxed" style: horizontal line + active tab boxed */
   .wstrip {
     display: flex;
     flex-wrap: wrap;
@@ -267,7 +248,7 @@
     padding: 0;
     margin: 0;
     border: none;
-    border-bottom: 2px solid var(--ink);
+    border-bottom: 2px solid var(--border);
     border-radius: 0;
     background: transparent;
     overflow: visible;
@@ -289,38 +270,34 @@
     z-index: 2;
     transition: background .15s ease, color .15s ease, border-color .15s ease;
   }
-  .wtab:hover {
-    color: var(--ink);
-    opacity: 0.7;
-    background: transparent;
-  }
+  .wtab:hover { color: var(--ink); opacity: 0.7; background: transparent; }
   .wtab.on:hover { opacity: 1; }
   .wtab.on {
     background: var(--paper);
     color: var(--ink);
-    border: 2px solid var(--ink);
+    border: 2px solid var(--border);
     border-bottom: none;
-    padding-bottom: 13px; /* +2 to compensate the removed bottom border */
+    padding-bottom: 13px;
     z-index: 4;
   }
   .wtab .n {
     font-family: "JetBrains Mono", monospace; font-size: 10px;
     padding: 1px 6px; border-radius: 999px;
     background: var(--paper-2); color: var(--ink);
-    border: 1px solid var(--ink);
+    border: 1px solid var(--border);
   }
   .wtab.on .n { background: var(--accent); border-color: var(--accent); color: #fff; }
   .wtab .n.warn { background: var(--warn-soft); }
-  .wtab .n.bad { background: var(--bad-soft); }
+  .wtab .n.bad  { background: var(--bad-soft); }
   .wtab .n.live::after {
     content: ""; display: inline-block; margin-left: 4px; width: 6px; height: 6px;
     background: var(--accent); border-radius: 50%;
   }
 
-  /* canvas — fused with the wstrip above (no gap, no top border) */
+  /* ─── Canvas ─── */
   .canvas {
     flex: 1;
-    border: 2px solid var(--ink);
+    border: 2px solid var(--border);
     border-top: none;
     border-radius: 0 0 12px 12px;
     background: var(--paper);
@@ -330,17 +307,6 @@
     display: flex; flex-direction: column;
     position: relative;
     z-index: 1;
-  }
-  /* Floating wstrip variants (V3 split, V4 cloud) — keep canvas independent */
-  .wstrip.floating {
-    border-bottom: none;
-    width: fit-content;
-    margin-bottom: 8px;
-  }
-  .wstrip.floating .wtab { margin-bottom: 0; }
-  .wstrip.floating + .canvas {
-    border-top: 2px solid var(--ink);
-    border-radius: 12px;
   }
   .canvas h2 {
     margin: 0 0 4px; font-family: "Caveat", cursive; font-size: 32px; font-weight: 700;
@@ -356,40 +322,40 @@
   }
   .filterchip {
     font-family: "Kalam", sans-serif; font-size: 12px;
-    padding: 3px 10px; border: 1.5px solid var(--ink); border-radius: 999px;
-    background: var(--paper); cursor: pointer;
+    padding: 3px 10px; border: 1.5px solid var(--border); border-radius: 999px;
+    background: var(--paper); cursor: pointer; color: var(--ink);
   }
   .filterchip.on { background: var(--ink); color: var(--paper); }
 
-  /* event list inside workspace */
+  /* ─── Event list ─── */
   .events { display: flex; flex-direction: column; gap: 8px; }
   .event {
     display: grid; grid-template-columns: 80px 1fr auto; align-items: center; gap: 10px;
-    padding: 8px 10px; border: 1.5px solid var(--ink); border-radius: 10px;
+    padding: 8px 10px; border: 1.5px solid var(--border); border-radius: 10px;
     background: var(--paper);
   }
   .event .ts { font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--ink-soft); }
   .event .body { display: flex; align-items: center; gap: 6px; font-family: "JetBrains Mono", monospace; font-size: 12px; }
   .event .right { display: flex; gap: 4px; }
   .event .dot { width: 8px; height: 8px; border-radius: 50%; }
-  .event .dot.ok { background: var(--accent); }
+  .event .dot.ok   { background: var(--accent); }
   .event .dot.warn { background: var(--warn); }
-  .event .dot.bad { background: var(--bad); }
+  .event .dot.bad  { background: var(--bad); }
   .event .kind {
     font-size: 9px; padding: 1px 6px;
-    border: 1px solid var(--ink); border-radius: 4px;
-    background: var(--paper-2);
+    border: 1px solid var(--border); border-radius: 4px;
+    background: var(--paper-2); color: var(--ink);
   }
-  .event .kind.q { background: #ede0f3; }
-  .event .kind.b { background: #d6ecdf; }
+  .event .kind.q { background: var(--kind-q); }
+  .event .kind.b { background: var(--kind-b); }
 
-  /* hatched placeholder */
+  /* ─── Hatched placeholder ─── */
   .hatch {
-    border: 1.5px dashed var(--ink); border-radius: 10px;
+    border: 1.5px dashed var(--border); border-radius: 10px;
     background:
       repeating-linear-gradient(45deg,
         transparent, transparent 7px,
-        rgba(0,0,0,0.06) 7px, rgba(0,0,0,0.06) 8px);
+        var(--border-soft) 7px, var(--border-soft) 8px);
     color: var(--ink-soft);
     display: flex; align-items: center; justify-content: center;
     font-family: "Caveat", cursive; font-size: 22px;
@@ -397,58 +363,28 @@
     text-align: center;
   }
 
-  /* Right column ——— rigs + small panels */
-  .right-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-
-  /* rigs table */
-  .rigs-table { width: 100%; border-collapse: separate; border-spacing: 0 4px; }
-  .rigs-table th {
-    text-align: left; font-family: "Kalam", sans-serif; font-size: 10px;
-    color: var(--ink-soft); text-transform: uppercase; padding: 0 6px 4px;
-    letter-spacing: .04em;
-  }
-  .rigs-table td {
-    font-family: "JetBrains Mono", monospace; font-size: 11px;
-    padding: 6px 6px; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink);
-    background: var(--paper);
-  }
-  .rigs-table td:first-child { border-left: 1px solid var(--ink); border-radius: 8px 0 0 8px; }
-  .rigs-table td:last-child { border-right: 1px solid var(--ink); border-radius: 0 8px 8px 0; }
-  .rigs-table td a { color: var(--accent); text-decoration: underline wavy; text-underline-offset: 2px; }
-
-  /* tiny stat grid */
-  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .stat {
-    border: 1.5px solid var(--ink); border-radius: 10px;
-    padding: 8px 10px;
-    background: var(--paper);
-  }
-  .stat .num { font-family: "Caveat", cursive; font-size: 28px; line-height: 1; }
-  .stat .lbl { font-family: "Kalam", sans-serif; font-size: 11px; color: var(--ink-soft); }
-  .stat.warn .num { color: var(--warn); }
-  .stat.bad .num { color: var(--bad); }
-
   .ribbon {
     display: inline-flex; align-items: center; gap: 6px;
     font-family: "Caveat", cursive; font-size: 18px;
     padding: 3px 10px;
-    border: 2px solid var(--ink);
+    border: 2px solid var(--border);
     background: var(--accent-soft);
+    color: var(--ink);
     border-radius: 8px;
   }
   .ribbon.warn { background: var(--warn-soft); }
   .ribbon.bad  { background: var(--bad-soft); }
 
-  /* topbar inside workspace area */
+  /* ─── Topbar ─── */
   .topbar {
     display: flex; align-items: center; gap: 10px;
-    padding: 8px 12px; border: 2px solid var(--ink);
+    padding: 8px 12px; border: 2px solid var(--border);
     border-radius: 12px; background: var(--paper);
     margin-bottom: 14px;
   }
   .topbar .brand {
     font-family: "Caveat", cursive; font-size: 22px;
-    border-right: 1.5px dashed var(--ink); padding-right: 12px; margin-right: 4px;
+    border-right: 1.5px dashed var(--border); padding-right: 12px; margin-right: 4px;
   }
   .topbar .brand b { font-weight: 700; }
   .topbar .live {
@@ -461,91 +397,309 @@
   }
   .topbar .btn {
     font-family: "Caveat", cursive; font-size: 18px;
-    padding: 2px 12px 1px; border: 1.5px solid var(--ink); border-radius: 8px;
-    background: var(--paper); cursor: pointer;
+    padding: 2px 12px 1px; border: 1.5px solid var(--border); border-radius: 8px;
+    background: var(--paper); color: var(--ink); cursor: pointer;
   }
   .topbar .btn.primary { background: var(--ink); color: var(--paper); }
   .topbar .spacer { flex: 1; }
 
-  /* V2 — vertical tab rail (overrides fused-tab look) */
-  .vrail {
-    display: flex; flex-direction: column; gap: 4px;
-    width: 150px;
-    padding-right: 12px;
-    border-right: 2px dashed var(--ink);
-    margin-right: 14px;
-  }
-  .vrail .wtab {
-    transform: none; justify-content: flex-start;
-    border-width: 2px;
-    border-radius: 10px;
-    margin-bottom: 0;
-    padding: 6px 12px 4px;
-    background: var(--paper);
-    color: var(--ink);
-  }
-  .vrail .wtab::after { display: none; }
-  .vrail .wtab.on { background: var(--ink); color: var(--paper); padding-top: 6px; }
-  .vrail .wtab .n { margin-left: auto; }
-
-  /* V3 split & V4 cloud — floating tab strips (no canvas attachment) */
-  .wstrip.floating {
-    border-bottom: none;
-    gap: 6px;
-    padding-bottom: 6px;
-    margin-bottom: 6px;
-  }
-  .wstrip.floating .wtab {
-    border-width: 2px;
-    border-radius: 12px;
-    margin-bottom: 0;
-    padding: 6px 12px 4px;
-    background: var(--paper);
-    color: var(--ink);
-  }
-  .wstrip.floating .wtab::after { display: none; }
-  .wstrip.floating .wtab.on { background: var(--ink); color: var(--paper); padding-top: 6px; }
-
-  /* V3 — split workspace */
-  .split { display: grid; grid-template-rows: 1fr 1fr; gap: 14px; flex: 1; }
-
-  /* V4 — grid of mini-panels (still tabbed) */
-  .pin-grid {
-    display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto auto;
-    gap: 12px; flex: 1;
-  }
-  .pin-grid .canvas { min-height: 340px; padding: 12px; }
-  .pin-grid .canvas h2 { font-size: 24px; }
-
-  /* arrows / annotations */
-  .anno {
-    position: absolute;
-    font-family: "Caveat", cursive; font-size: 15px;
-    color: var(--accent);
-    pointer-events: none;
-  }
-  .anno svg { display: block; }
-
-  /* misc helpers */
-  .row { display: flex; align-items: center; gap: 8px; }
-  .mt-4 { margin-top: 4px; } .mt-8 { margin-top: 8px; } .mt-12 { margin-top: 12px; }
+  /* ─── Misc ─── */
   .muted { color: var(--ink-soft); }
-  .mono { font-family: "JetBrains Mono", monospace; }
+  .mono  { font-family: "JetBrains Mono", monospace; }
   .small { font-size: 11px; }
 
-  /* sketchy wobble for cards */
-  .card, .canvas, .acct, .wtab, .tab, .topbar, .stat, .event {
-    box-shadow: 1px 1px 0 rgba(0,0,0,0.06);
+  .card, .canvas, .acct, .wtab, .topbar, .event {
+    box-shadow: 1px 1px 0 var(--shadow);
   }
 
-  /* responsive guard handled by flex wrap above */
-  /* ——— Dockable terminal (fixed to viewport bottom, resizable, overlays) ——— */
-  body { padding-bottom: 80px; } /* always reserve space for the dock bar */
+  /* ─── Kanban (Work view) ─── */
+  .kanban {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(180px, 1fr));
+    gap: 12px;
+    flex: 1;
+    overflow-x: auto;
+  }
+  .kcol {
+    display: flex; flex-direction: column;
+    min-width: 0;
+    border: 1.5px dashed var(--border);
+    border-radius: 10px;
+    background: var(--paper-2);
+    padding: 10px;
+    gap: 8px;
+  }
+  .kcol-head {
+    display: flex; align-items: center; gap: 8px;
+    font-family: "Caveat", cursive; font-size: 19px;
+    color: var(--ink);
+    padding-bottom: 6px;
+    border-bottom: 1px dashed var(--ink-faint);
+  }
+  .kcol-head .count {
+    margin-left: auto;
+    font-family: "JetBrains Mono", monospace; font-size: 10px;
+    padding: 1px 7px; border-radius: 999px;
+    background: var(--ink); color: var(--paper);
+  }
+  .kcol-head .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--ink-soft);
+  }
+  .kcol.pending     .kcol-head .dot { background: var(--ink-soft); }
+  .kcol.dispatched  .kcol-head .dot { background: #6ec6e6; }
+  .kcol.working     .kcol-head .dot { background: var(--accent); }
+  .kcol.done        .kcol-head .dot { background: var(--accent); opacity: .55; }
+  .kcol.failed      .kcol-head .dot { background: var(--bad); }
+
+  .bcard {
+    border: 1.5px solid var(--border);
+    border-left: 3px solid var(--ink-soft);
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: var(--paper);
+    display: flex; flex-direction: column; gap: 4px;
+    font-size: 12px;
+    cursor: grab;
+  }
+  .kcol.pending    .bcard { border-left-color: var(--ink-soft); }
+  .kcol.dispatched .bcard { border-left-color: #6ec6e6; }
+  .kcol.working    .bcard { border-left-color: var(--accent); }
+  .kcol.done       .bcard { border-left-color: var(--accent); opacity: .7; }
+  .kcol.failed     .bcard { border-left-color: var(--bad); }
+  .bcard .bid {
+    font-family: "JetBrains Mono", monospace; font-size: 10px;
+    color: var(--ink-soft);
+  }
+  .bcard .btitle {
+    font-family: "Kalam", sans-serif; font-size: 13px;
+    line-height: 1.25;
+    color: var(--ink);
+  }
+  .bcard .brow {
+    display: flex; align-items: center; gap: 6px;
+    margin-top: 2px;
+  }
+  .bcard .prio {
+    font-family: "JetBrains Mono", monospace; font-size: 9px;
+    padding: 1px 5px; border-radius: 4px;
+    border: 1px solid var(--border); background: var(--paper-2);
+    color: var(--ink);
+  }
+  .bcard .prio.p0 { background: var(--bad);  color: #fff; border-color: var(--bad); }
+  .bcard .prio.p1 { background: var(--warn); color: #fff; border-color: var(--warn); }
+  .bcard .prio.p2 { background: var(--paper-2); }
+  .bcard .assn {
+    margin-left: auto;
+    font-family: "JetBrains Mono", monospace; font-size: 9px;
+    color: var(--ink-soft);
+  }
+  .bcard .age {
+    font-family: "JetBrains Mono", monospace; font-size: 9px;
+    color: var(--ink-faint);
+  }
+
+  /* ─── Crew · roles + skills ─── */
+  .crew {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 16px;
+    flex: 1;
+    min-height: 0;
+  }
+  .role-list {
+    display: flex; flex-direction: column;
+    gap: 6px;
+    border-right: 1.5px dashed var(--border);
+    padding-right: 12px;
+    overflow-y: auto;
+  }
+  .role-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px;
+    border: 1.5px solid var(--border); border-radius: 10px;
+    background: var(--paper);
+    cursor: pointer;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
+    color: var(--ink);
+  }
+  .role-item.on {
+    background: var(--ink); color: var(--paper);
+    border-color: var(--ink);
+  }
+  .role-item .rcount {
+    margin-left: auto;
+    font-family: "JetBrains Mono", monospace; font-size: 10px;
+    padding: 1px 6px; border-radius: 999px;
+    background: var(--paper-2); color: var(--ink);
+    border: 1px solid var(--border);
+  }
+  .role-item.on .rcount {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+  .role-item .rdot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent);
+  }
+  .role-item.idle .rdot { background: var(--ink-faint); }
+  .role-item.warn .rdot { background: var(--warn); }
+
+  .role-panel {
+    display: flex; flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+    overflow-y: auto;
+  }
+  .role-head {
+    display: flex; align-items: baseline; gap: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1.5px dashed var(--ink-faint);
+  }
+  .role-head .rname {
+    font-family: "Caveat", cursive; font-size: 28px;
+    color: var(--ink);
+  }
+  .role-head .rdesc {
+    font-family: "Kalam", sans-serif; font-size: 13px;
+    color: var(--ink-soft);
+  }
+  .role-head .spacer { flex: 1; }
+  .role-head .ract {
+    font-family: "Caveat", cursive; font-size: 16px;
+    padding: 3px 10px;
+    border: 1.5px solid var(--border); border-radius: 8px;
+    background: var(--paper); color: var(--ink); cursor: pointer;
+  }
+  .role-head .ract.primary { background: var(--ink); color: var(--paper); }
+
+  .role-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .role-block {
+    border: 1.5px solid var(--border); border-radius: 10px;
+    background: var(--paper);
+    padding: 10px 12px;
+  }
+  .role-block h3 {
+    font-family: "Caveat", cursive; font-size: 19px;
+    margin: 0 0 8px;
+    color: var(--ink);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .role-block h3 .count {
+    margin-left: auto;
+    font-family: "JetBrains Mono", monospace; font-size: 10px;
+    padding: 1px 6px; border-radius: 999px;
+    background: var(--ink); color: var(--paper);
+  }
+
+  /* skill row */
+  .skill {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 8px;
+    border-bottom: 1px dashed var(--ink-faint);
+  }
+  .skill:last-child { border-bottom: none; }
+  .toggle {
+    width: 32px; height: 18px;
+    border: 1.5px solid var(--border); border-radius: 999px;
+    background: var(--paper-2);
+    position: relative; cursor: pointer; flex: 0 0 auto;
+  }
+  .toggle::after {
+    content: ""; position: absolute;
+    top: 1px; left: 1px;
+    width: 12px; height: 12px;
+    border-radius: 50%; background: var(--ink-soft);
+    transition: left .15s ease, background .15s ease;
+  }
+  .toggle.on { background: var(--accent-soft); border-color: var(--accent); }
+  .toggle.on::after { left: 16px; background: var(--accent); }
+  .skill .sname {
+    font-family: "JetBrains Mono", monospace; font-size: 12px;
+    color: var(--ink);
+  }
+  .skill .sdesc {
+    font-family: "Kalam", sans-serif; font-size: 11px;
+    color: var(--ink-soft);
+    grid-column: 2 / 3;
+    margin-top: -2px;
+  }
+  .skill .scope {
+    font-family: "JetBrains Mono", monospace; font-size: 9px;
+    padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px;
+    background: var(--paper-2); color: var(--ink);
+  }
+  .skill .scope.danger { background: var(--bad-soft); border-color: var(--bad); }
+  .skill .scope.write  { background: var(--warn-soft); border-color: var(--warn); }
+  .skill .stype {
+    font-family: "JetBrains Mono", monospace; font-size: 9px;
+    color: var(--ink-faint);
+  }
+
+  /* scope/permission table */
+  .perms { display: flex; flex-direction: column; gap: 4px; }
+  .perm {
+    display: grid; grid-template-columns: 18px 1fr auto;
+    align-items: center; gap: 8px;
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    padding: 4px 0;
+    border-bottom: 1px dashed var(--ink-faint);
+  }
+  .perm:last-child { border-bottom: none; }
+  .perm .pmark {
+    width: 14px; height: 14px; border-radius: 3px;
+    border: 1.5px solid var(--border);
+    background: var(--paper-2);
+    position: relative;
+  }
+  .perm.allow .pmark { background: var(--accent); border-color: var(--accent); }
+  .perm.allow .pmark::after {
+    content: "✓"; position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 10px;
+  }
+  .perm.deny .pmark { background: var(--bad-soft); border-color: var(--bad); }
+  .perm.deny .pmark::after {
+    content: "✕"; position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--bad); font-size: 10px;
+  }
+  .perm .pscope { color: var(--ink); }
+  .perm .pnote { color: var(--ink-soft); font-size: 9px; }
+
+  /* live sessions for the role */
+  .rsess {
+    display: flex; flex-direction: column;
+    gap: 6px;
+  }
+  .rsess .rsess-row {
+    display: grid; grid-template-columns: auto 1fr auto auto;
+    align-items: center; gap: 8px;
+    padding: 6px 8px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--paper-2);
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+  }
+  .rsess .rs-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent);
+  }
+  .rsess .rs-dot.idle { background: var(--ink-faint); }
+  .rsess .rs-dot.warn { background: var(--warn); }
+
+  /* ─── Dockable terminal (kept dark in both themes) ─── */
   .dock {
     position: fixed; left: 0; right: 0; bottom: 0;
     z-index: 100;
     background: #0f0f0f;
-    border-top: 2px solid var(--ink);
+    border-top: 2px solid #2a2a26;
     box-shadow: 0 -10px 30px rgba(0,0,0,0.18);
     display: flex; flex-direction: column;
     transition: height .18s ease;
@@ -562,7 +716,7 @@
   }
   .dock-grip::before {
     content: ""; width: 64px; height: 4px;
-    background: var(--ink);
+    background: #2a2a26;
     border-radius: 2px;
     box-shadow: 0 0 0 3px var(--paper);
   }
@@ -580,7 +734,7 @@
   .dock-bar .dock-toggle {
     font-family: "Caveat", cursive; font-size: 20px;
     background: var(--accent); color: #fff;
-    border: 1.5px solid var(--ink);
+    border: 1.5px solid #2a2a26;
     padding: 2px 12px 0;
     border-radius: 8px;
     cursor: pointer;
@@ -592,19 +746,25 @@
     font-family: "JetBrains Mono", monospace; font-size: 14px;
     font-weight: 700; letter-spacing: -1px;
   }
-  .dock.open .dock-bar .dock-toggle { background: var(--ink); color: var(--paper); }
+  .dock.open .dock-bar .dock-toggle { background: #2a2a26; color: #d6d2c4; }
   .dock-bar .label {
     font-size: 11px; color: #8a8680;
     margin-right: 10px;
   }
   .dock-bar .term-tab {
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    padding: 6px 12px;
+    color: #8a8680;
     border-right: 1px solid #2a2a26;
-    border-radius: 0;
+    background: #0f0f0f;
+    display: flex; align-items: center; gap: 6px;
+    cursor: pointer;
   }
   .dock-bar .term-tab.on {
     background: #1a1a1a; color: #d6d2c4;
     border-top: 2px solid var(--accent); padding-top: 4px;
   }
+  .dock-bar .term-tab .x { color: #5a5a55; font-size: 10px; }
   .dock-bar .new-tab {
     color: #8a8680; padding: 6px 10px; cursor: pointer;
     font-size: 14px;
@@ -615,16 +775,6 @@
     display: flex; align-items: center; gap: 10px;
     margin-left: 10px;
   }
-  .dock-bar .meta .pill-d {
-    background: #1f1f1f; border: 1px solid #3a3a36;
-    border-radius: 4px; padding: 1px 6px;
-    color: #b5e6d6;
-  }
-  .dock-bar .meta .live-dot {
-    width: 6px; height: 6px; background: var(--accent); border-radius: 50%;
-    box-shadow: 0 0 0 3px rgba(24,168,131,.25);
-  }
-  /* blinking dot inside an active terminal tab */
   .blink-star {
     display: inline-block;
     width: 7px; height: 7px;
@@ -638,11 +788,7 @@
     0%, 49% { opacity: 1; }
     50%, 100% { opacity: 0; }
   }
-  /* sketchy annotation pointing to plane (rig name) */
-  .anno-wrap {
-    position: relative;
-    display: inline-flex; align-items: center;
-  }
+  .anno-wrap { position: relative; display: inline-flex; align-items: center; }
   .anno-tag {
     margin-left: 6px;
     font-family: "Caveat", cursive;
@@ -661,11 +807,37 @@
   }
   .dock.open .dock-body { display: flex; }
 
-  .dock-body .term-body { flex: 1; overflow: auto; }
-  .dock-body .term-prompt { flex: 0 0 auto; }
-  .dock-body .term-foot { flex: 0 0 auto; }
+  .term-body {
+    flex: 1; overflow: auto;
+    padding: 10px 12px;
+    font-size: 11px; line-height: 1.55;
+    background: #1a1a1a;
+  }
+  .term-body .ln-hl  { color: #d6d2c4; font-weight: 600; }
+  .term-body .ln-cmt { color: #7a8a73; }
+  .term-body .ln-key { color: #8acab0; }
+  .term-body .ln-acc { color: #b5e6d6; text-decoration: underline; text-decoration-style: dotted; }
+  .term-body .ln-warn { color: #d8a05a; }
+  .term-body .blank { height: 8px; }
 
-  /* dock-status strip — waiting on unlock + last rotation, always visible above dock-bar */
+  .term-prompt {
+    flex: 0 0 auto;
+    border-top: 1px solid #3a3a36;
+    padding: 6px 12px;
+    background: #141414;
+    font-size: 11px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .term-prompt .glyph { color: var(--bad); }
+  .term-prompt .ph { color: #5a5a55; }
+  .term-prompt .caret {
+    width: 7px; height: 14px;
+    background: #d6d2c4;
+    animation: blink 1s steps(1) infinite;
+    margin-left: -2px;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
   .dock-status {
     display: flex; flex-wrap: wrap; align-items: center;
     gap: 14px;
@@ -702,120 +874,27 @@
     color: #d6d2c4;
     white-space: nowrap;
   }
-
-
-  /* ——— Terminal panel ——— */
-  .term {
-    background: #1a1a1a;
-    color: #d6d2c4;
-    border: 2px solid var(--ink);
-    border-radius: 12px;
-    font-family: "JetBrains Mono", monospace;
-    display: flex; flex-direction: column;
-    min-height: 0;
-    overflow: hidden;
-    flex: 1;
-  }
-  .term-head {
-    display: flex; align-items: center; gap: 8px;
-    padding: 6px 10px;
-    background: #0f0f0f;
-    border-bottom: 1px solid #3a3a36;
-    font-size: 11px;
-  }
-  .term-head .title { color: var(--accent-soft); }
-  .term-head .status { color: #c47a2e; margin-left: 4px; font-size: 10px; }
-  .term-head .right { margin-left: auto; display: flex; gap: 4px; font-size: 10px; color: #6a6a64; }
-  .term-tabs {
-    display: flex; gap: 0;
-    background: #0f0f0f;
-    border-bottom: 1px solid #3a3a36;
-    overflow: hidden;
-  }
-  .term-tab {
-    font-family: "JetBrains Mono", monospace; font-size: 11px;
-    padding: 6px 12px;
-    color: #8a8680;
-    border-right: 1px solid #2a2a26;
-    background: #0f0f0f;
-    display: flex; align-items: center; gap: 6px;
-    cursor: pointer;
-  }
-  .term-tab.on { background: #1a1a1a; color: #d6d2c4; border-top: 2px solid var(--accent); padding-top: 4px; }
-  .term-tab .x { color: #5a5a55; font-size: 10px; }
-  .term-body {
-    flex: 1; padding: 10px 12px;
-    font-size: 11px; line-height: 1.55;
-    overflow: hidden;
-    background: #1a1a1a;
-  }
-  .term-body .ln-hl { color: #d6d2c4; font-weight: 600; }
-  .term-body .ln-cmt { color: #7a8a73; }
-  .term-body .ln-key { color: #8acab0; }
-  .term-body .ln-acc { color: var(--accent-soft); text-decoration: underline; text-decoration-style: dotted; }
-  .term-body .ln-warn { color: #d8a05a; }
-  .term-body .blank { height: 8px; }
-  .term-prompt {
-    border-top: 1px solid #3a3a36;
-    padding: 6px 12px;
-    background: #141414;
-    font-size: 11px;
-    display: flex; align-items: center; gap: 6px;
-  }
-  .term-prompt .glyph { color: var(--bad); }
-  .term-prompt .ph { color: #5a5a55; }
-  .term-prompt .caret {
-    width: 7px; height: 14px;
-    background: #d6d2c4;
-    animation: blink 1s steps(1) infinite;
-    margin-left: -2px;
-  }
-  @keyframes blink { 50% { opacity: 0; } }
-  .term-foot {
-    display: flex; align-items: center; gap: 10px;
-    padding: 4px 10px;
-    background: #0f0f0f;
-    border-top: 1px solid #3a3a36;
-    font-size: 10px;
-    color: #8a8680;
-  }
-  .term-foot .pill-d {
-    background: #1f1f1f; border: 1px solid #3a3a36;
-    border-radius: 4px; padding: 1px 6px;
-    color: #b5e6d6;
-  }
-  .term-foot .right { margin-left: auto; display: flex; gap: 10px; }
 </style>
 </head>
-<body>
+<body data-theme="dark">
 
-<!-- ======================================================== -->
-<!-- SWITCHER                                                  -->
-<!-- ======================================================== -->
-<div class="switcher">
-  <h1>Gas Town · rediseño <span class="sub">4 variaciones</span></h1>
-  <div class="tabs" id="variant-tabs">
-    <button class="tab active" data-v="1">V1 · Tabs arriba<small>el clásico, tabs horizontales</small></button>
-    <button class="tab" data-v="2">V2 · Rail vertical<small>tabs en columna estrecha</small></button>
-    <button class="tab" data-v="3">V3 · Split workspace<small>sessions arriba, activity abajo</small></button>
-    <button class="tab" data-v="4">V4 · Quad pin<small>4 paneles a la vez</small></button>
-  </div>
-  <div class="legend">cuentas (izq) · workspace (centro)</div>
+<!-- ─── Header ─── -->
+<div class="header">
+  <h1>Gas Town · wireframe <span class="sub">V1 · tabs horizontales · 3 vistas (Activity · Work · Crew)</span></h1>
+  <span class="spacer"></span>
+  <button class="theme-toggle" id="theme-toggle" title="switch dark / light">☾ dark</button>
 </div>
 
-<!-- ======================================================== -->
-<!-- V1                                                        -->
-<!-- ======================================================== -->
-<section class="frame active" data-frame="1">
+<!-- ─── V1 Frame ─── -->
+<section class="frame">
   <div class="frame-meta">
-    <span class="v-num">V1</span>
     <span class="v-title">Tabs horizontales · workspace de pantalla completa</span>
-    <span class="v-note">Sessions / Activity / Work / Convoys / Crew … todo arriba con contador integrado. Status strip eliminada.</span>
+    <span class="v-note">Sessions / Activity / Work / Convoys / Crew … contador integrado por tab. Sidebar Account Quota fija a la izquierda. Dock terminal abajo.</span>
   </div>
 
   <div class="shell">
 
-    <!-- LEFT: Account Quota completo -->
+    <!-- LEFT: Account Quota -->
     <aside class="card">
       <div class="card-title">
         <span class="icon">▣</span> Account Quota
@@ -878,7 +957,6 @@
 
       <div class="h-section blocked">BLOCKED <span class="count">0</span></div>
       <div class="muted small mono" style="padding-left:14px">No accounts need relogin.</div>
-
     </aside>
 
     <!-- CENTER: workspace -->
@@ -894,35 +972,33 @@
       </div>
 
       <div class="wstrip">
-        <button class="wtab on">Sessions <span class="n">0</span></button>
-        <button class="wtab">Activity <span class="n live">49</span></button>
-        <button class="wtab">Work <span class="n">0</span></button>
+        <button class="wtab">Sessions <span class="n">0</span></button>
+        <button class="wtab on">Activity <span class="n live">49</span></button>
+        <button class="wtab">Work <span class="n">14</span></button>
         <button class="wtab">Convoys <span class="n">0</span></button>
-        <button class="wtab">Crew <span class="n">0</span></button>
-        <button class="wtab">Polecats <span class="n">0</span></button>
-        <button class="wtab">Hooks <span class="n">0</span></button>
-        <button class="wtab">Git <span class="n live">0</span></button>
-        <button class="wtab">Mail <span class="n">0</span></button>
         <button class="wtab">Merge Q <span class="n">0</span></button>
-        <button class="wtab">Escalations <span class="n">0</span></button>
-        <button class="wtab">Dogs <span class="n">3</span></button>
+        <button class="wtab">Crew <span class="n">6</span></button>
         <button class="wtab">Rigs <span class="n">2</span></button>
       </div>
 
       <div class="canvas">
-        <h2>Sessions <span class="ribbon">live · 0 active</span></h2>
-        <p class="sub">activity feed colapsado abajo · cambia de tab para ver work, convoys, polecats…</p>
+        <h2>Activity <span class="ribbon">live · 49 events</span></h2>
+        <p class="sub">feed en vivo del bus de eventos · filtra por categoría · cambia de tab para ver sessions, work, convoys…</p>
 
         <div class="toolbar">
-          <span class="muted small">RIG:</span>
+          <span class="muted small">CAT:</span>
+          <span class="filterchip on">All</span>
+          <span class="filterchip">agent</span>
+          <span class="filterchip">work</span>
+          <span class="filterchip">quota</span>
+          <span class="filterchip">system</span>
+          <span class="muted small" style="margin-left:8px">RIG:</span>
           <span class="filterchip on">All rigs</span>
           <span class="filterchip">gastown_granite</span>
           <span class="filterchip">plane</span>
-          <span class="muted small" style="margin-left:8px">AGENT:</span>
-          <span class="filterchip on">All agents</span>
         </div>
 
-        <div class="hatch" style="min-height: 220px">No active sessions<br><span class="small">cuando arranque un agente, aparecerá aquí con su rig y timeline</span></div>
+        <div class="hatch" style="min-height: 220px">stream live · sin eventos recientes en filtro<br><span class="small">cuando llegue un evento por SSE, aparecerá aquí con su tipo y origen</span></div>
 
         <div class="h-section">recent activity · peek</div>
         <div class="events">
@@ -953,411 +1029,196 @@
   </div>
 </section>
 
-<!-- ======================================================== -->
-<!-- V2 — Vertical tab rail                                    -->
-<!-- ======================================================== -->
-<section class="frame" data-frame="2">
+<!-- ─── Frame B: Work view (kanban) ─── -->
+<section class="frame">
   <div class="frame-meta">
-    <span class="v-num">V2</span>
-    <span class="v-title">Rail vertical de tabs · workspace amplio</span>
-    <span class="v-note">Tabs en columna estrecha · workspace gana ancho · status agrupado arriba como badges grandes.</span>
+    <span class="v-title">Work · vista kanban</span>
+    <span class="v-note">Tab "Work" del workspace: beads agrupados en columnas por status (pending → dispatched → working → done / failed). Drag entre columnas = transición. Misma sidebar y dock que el frame anterior.</span>
   </div>
 
   <div class="shell">
-    <!-- LEFT: misma sidebar de cuentas (resumida en V2 visualmente, completa de info) -->
-    <aside class="card">
-      <div class="card-title">▣ Account Quota <span class="pill">1s ago</span></div>
 
+    <!-- LEFT: Account Quota (igual que arriba, recordatorio visual) -->
+    <aside class="card">
+      <div class="card-title">
+        <span class="icon">▣</span> Account Quota
+        <span class="pill">snapshot 1s</span>
+      </div>
       <div class="h-section active">ACTIVE <span class="count">2</span></div>
       <div class="acct">
-        <div class="row1">
-          <span class="name">brayan</span>
-          <span class="badge ok">available</span>
-        </div>
-        <div class="live-row">
-          <span class="lk">live · limited</span>
-          <span>2 / 2 slots in use</span>
-        </div>
+        <div class="row1"><span class="name">brayan</span><span class="badge ok"></span></div>
+        <div class="live-row"><span class="lk">live · limited</span><span>2 / 2 slots in use</span></div>
         <div class="meter"><div class="fill" style="width:42%"></div></div>
-        <div class="stats"><span>session</span><span>437k / 8M</span></div>
+        <div class="stats"><span>session</span><span>437.9k / 8.0M</span></div>
         <div class="tags"><span class="tag">gg-refinery</span><span class="tag">hq-mayor</span></div>
       </div>
       <div class="acct">
-        <div class="row1">
-          <span class="name">fsrb</span>
-          <span class="badge ok">available</span>
-        </div>
-        <div class="live-row">
-          <span class="lk">live · limited</span>
-          <span>3 / 3 slots in use</span>
-        </div>
+        <div class="row1"><span class="name">fsrb</span><span class="badge ok"></span></div>
+        <div class="live-row"><span class="lk">live · limited</span><span>3 / 3 slots in use</span></div>
         <div class="meter"><div class="fill warn" style="width:78%"></div></div>
-        <div class="stats"><span>session</span><span>20.2M / 8M</span></div>
+        <div class="stats"><span>session</span><span>20.2M / 8.0M</span></div>
         <div class="tags"><span class="tag">gg-witness</span><span class="tag">hq-boot</span><span class="tag">hq-deacon</span></div>
       </div>
-
       <div class="h-section inactive">INACTIVE <span class="count">2</span></div>
       <div class="acct dim">
-        <div class="row1">
-          <span class="name">codecsrayo</span>
-          <span class="badge warn">limited</span>
-        </div>
-        <div class="live-row">
-          <span class="lk">live</span>
-          <span>0 / 1 · awaiting reset</span>
-        </div>
+        <div class="row1"><span class="name">codecsrayo</span><span class="badge warn"></span></div>
+        <div class="live-row"><span class="lk">live</span><span>0 / 1 · awaiting reset</span></div>
         <div class="resets">resets 7:30pm</div>
-        <div class="tags"><span class="tag">brayan · SWAP</span></div>
       </div>
       <div class="acct dim">
-        <div class="row1">
-          <span class="name">a407</span>
-          <span class="badge warn">limited</span>
-        </div>
-        <div class="live-row">
-          <span class="lk">live</span>
-          <span>0 / 1 · awaiting reset</span>
-        </div>
-        <div class="resets">resets 7:30pm</div>
-        <div class="resets">· /upgrade pending</div>
+        <div class="row1"><span class="name">a407</span><span class="badge warn"></span></div>
+        <div class="live-row"><span class="lk">live</span><span>0 / 1 · awaiting reset</span></div>
+        <div class="resets">resets 7:30pm · /upgrade pending</div>
       </div>
-
       <div class="h-section blocked">BLOCKED <span class="count">0</span></div>
-      <div class="muted small mono" style="padding-left:14px">no relogin needed.</div>
-
+      <div class="muted small mono" style="padding-left:14px">No accounts need relogin.</div>
     </aside>
 
-    <!-- CENTER: rail + canvas -->
+    <!-- CENTER: workspace, Work tab active -->
     <main class="workspace">
       <div class="topbar">
         <span class="brand"><b>The Mayor</b> · <span class="muted small mono">DETACHED</span></span>
         <span class="live">Live</span>
+        <span class="muted small mono">· May 26 11:28 PM</span>
         <span class="spacer"></span>
         <span class="ribbon">All clear</span>
         <button class="btn">⌘ Commands</button>
         <button class="btn primary">▶ Launch Agents</button>
       </div>
 
-      <div style="display:flex; flex:1; min-height:720px">
-        <div class="vrail">
-          <button class="wtab on">Sessions <span class="n">0</span></button>
-          <button class="wtab">Activity <span class="n live">49</span></button>
-          <button class="wtab">Work <span class="n">0</span></button>
-          <button class="wtab">Convoys <span class="n">0</span></button>
-          <button class="wtab">Crew <span class="n">0</span></button>
-          <button class="wtab">Polecats <span class="n">0</span></button>
-          <button class="wtab">Hooks <span class="n">0</span></button>
-          <button class="wtab">Git <span class="n">0</span></button>
-          <button class="wtab">Mail <span class="n">0</span></button>
-          <button class="wtab">Merge Q <span class="n">0</span></button>
-          <button class="wtab">Escalations <span class="n">0</span></button>
-          <button class="wtab">Dogs <span class="n">3</span></button>
-          <button class="wtab">Rigs <span class="n">2</span></button>
-        </div>
-
-        <div class="canvas" style="flex:1">
-          <h2>Sessions <span class="ribbon">live · 0 active</span></h2>
-          <p class="sub">workspace amplio · rail vertical fácil para escanear con la vista</p>
-
-          <div class="toolbar">
-            <span class="muted small">RIG:</span>
-            <span class="filterchip on">All rigs</span>
-            <span class="filterchip">gastown_granite</span>
-            <span class="filterchip">plane</span>
-            <span class="muted small" style="margin-left:8px">AGENT:</span>
-            <span class="filterchip on">All</span>
-          </div>
-
-          <div class="hatch" style="min-height:240px">no active sessions yet<br><span class="small">aquí van las sesiones vivas con su rig + agente + duración</span></div>
-
-          <div class="h-section">timeline · last hour</div>
-          <div class="hatch" style="min-height:120px">spark-timeline placeholder<br><span class="small">eventos del feed colapsados como mini barras</span></div>
-        </div>
-      </div>
-    </main>
-
-  </div>
-</section>
-
-<!-- ======================================================== -->
-<!-- V3 — Split workspace                                      -->
-<!-- ======================================================== -->
-<section class="frame" data-frame="3">
-  <div class="frame-meta">
-    <span class="v-num">V3</span>
-    <span class="v-title">Workspace dividido · Sessions arriba, Activity abajo</span>
-    <span class="v-note">Dos canvases apilados, cada uno con su propio set de tabs · ideal para vigilar varias cosas a la vez sin saltar pestañas.</span>
-  </div>
-
-  <div class="shell">
-    <!-- LEFT same -->
-    <aside class="card">
-      <div class="card-title">▣ Account Quota <span class="pill">1s ago</span></div>
-      <div class="h-section active">ACTIVE <span class="count">2</span></div>
-      <div class="acct">
-        <div class="row1">
-          <span class="name">brayan</span>
-          <span class="badge ok">available</span>
-        </div>
-        <div class="live-row">
-          <span class="lk">live · limited</span>
-          <span>2 / 2 slots in use</span>
-        </div>
-        <div class="meter"><div class="fill" style="width:42%"></div></div>
-        <div class="stats"><span>session</span><span>437k / 8M</span></div>
-        <div class="tags"><span class="tag">gg-refinery</span><span class="tag">hq-mayor</span></div>
-      </div>
-      <div class="acct">
-        <div class="row1">
-          <span class="name">fsrb</span>
-          <span class="badge ok">available</span>
-        </div>
-        <div class="live-row">
-          <span class="lk">live · limited</span>
-          <span>3 / 3 slots in use</span>
-        </div>
-        <div class="meter"><div class="fill warn" style="width:78%"></div></div>
-        <div class="stats"><span>session</span><span>20.2M / 8M</span></div>
-        <div class="tags"><span class="tag">gg-witness</span><span class="tag">hq-boot</span><span class="tag">hq-deacon</span></div>
-      </div>
-      <div class="h-section inactive">INACTIVE <span class="count">2</span></div>
-      <div class="acct dim">
-        <div class="row1">
-          <span class="name">codecsrayo</span>
-          <span class="badge warn">limited</span>
-        </div>
-        <div class="live-row">
-          <span class="lk">live</span>
-          <span>0 / 1 · awaiting reset</span>
-        </div>
-        <div class="resets">resets 7:30pm</div>
-        <div class="tags"><span class="tag">brayan · SWAP</span></div>
-      </div>
-      <div class="acct dim">
-        <div class="row1">
-          <span class="name">a407</span>
-          <span class="badge warn">limited</span>
-        </div>
-        <div class="live-row">
-          <span class="lk">live</span>
-          <span>0 / 1 · awaiting reset</span>
-        </div>
-        <div class="resets">resets 7:30pm</div>
-        <div class="resets">· /upgrade pending</div>
-      </div>
-      <div class="h-section blocked">BLOCKED <span class="count">0</span></div>
-      <div class="muted small mono" style="padding-left:14px">no relogin needed.</div>
-    </aside>
-
-    <!-- CENTER split -->
-    <main class="workspace">
-      <div class="topbar">
-        <span class="brand"><b>The Mayor</b> · <span class="muted small mono">DETACHED</span></span>
-        <span class="live">Live</span>
-        <span class="spacer"></span>
-        <span class="ribbon">All clear</span>
-        <button class="btn">⌘ Commands</button>
-        <button class="btn primary">▶ Launch Agents</button>
-      </div>
-
-      <div class="split">
-        <!-- top canvas -->
-        <div class="canvas" style="min-height:0">
-          <div class="wstrip floating">
-            <button class="wtab on">Sessions <span class="n">0</span></button>
-            <button class="wtab">Work <span class="n">0</span></button>
-            <button class="wtab">Convoys <span class="n">0</span></button>
-            <button class="wtab">Crew <span class="n">0</span></button>
-            <button class="wtab">Polecats <span class="n">0</span></button>
-            <button class="wtab">Merge Q <span class="n">0</span></button>
-            <button class="wtab">Rigs <span class="n">2</span></button>
-          </div>
-          <h2 style="font-size:22px; margin-top:2px">Sessions</h2>
-          <div class="toolbar" style="padding-bottom:6px; margin-bottom:6px">
-            <span class="filterchip on">All rigs</span>
-            <span class="filterchip">gastown_granite</span>
-            <span class="filterchip">plane</span>
-          </div>
-          <div class="hatch" style="flex:1">no active sessions</div>
-        </div>
-
-        <!-- bottom canvas -->
-        <div class="canvas" style="min-height:0">
-          <div class="wstrip floating">
-            <button class="wtab on">Activity <span class="n live">49</span></button>
-            <button class="wtab">Git <span class="n">0</span></button>
-            <button class="wtab">Mail <span class="n">0</span></button>
-            <button class="wtab">Hooks <span class="n">0</span></button>
-            <button class="wtab">Escalations <span class="n">0</span></button>
-            <button class="wtab">Dogs <span class="n">3</span></button>
-          </div>
-          <div class="toolbar" style="padding-bottom:6px; margin-bottom:6px">
-            <span class="muted small">cat:</span>
-            <span class="filterchip on">All</span>
-            <span class="filterchip">agent</span>
-            <span class="filterchip">work</span>
-            <span class="filterchip">comms</span>
-            <span class="filterchip">system</span>
-          </div>
-          <div class="events" style="flex:1">
-            <div class="event"><span class="ts">12:28</span><span class="body"><span class="dot ok"></span>session_start <span class="kind">boot</span></span><span class="right"><span class="kind">agent</span></span></div>
-            <div class="event"><span class="ts">12:26</span><span class="body"><span class="dot ok"></span>session_start <span class="kind">boot</span></span><span class="right"><span class="kind">agent</span></span></div>
-            <div class="event"><span class="ts">12:25</span><span class="body"><span class="dot ok"></span>session_start</span><span class="right"><span class="kind">agent</span></span></div>
-            <div class="event"><span class="ts">12:23</span><span class="body"><span class="dot warn"></span>quota_limited <span class="kind q">quota</span></span><span class="right"><span class="kind">system</span></span></div>
-            <div class="event"><span class="ts">12:23</span><span class="body"><span class="dot warn"></span>quota_limited <span class="kind q">quota</span></span><span class="right"><span class="kind">system</span></span></div>
-            <div class="event"><span class="ts">12:21</span><span class="body"><span class="dot ok"></span>session_start</span><span class="right"><span class="kind">agent</span></span></div>
-          </div>
-        </div>
-      </div>
-    </main>
-
-  </div>
-</section>
-
-<!-- ======================================================== -->
-<!-- V4 — Quad pin                                             -->
-<!-- ======================================================== -->
-<section class="frame" data-frame="4">
-  <div class="frame-meta">
-    <span class="v-num">V4</span>
-    <span class="v-title">Quad pin · 4 paneles fijos a la vez, tabs reemplazables</span>
-    <span class="v-note">El workspace muestra 4 mini-canvases en grid. Cada uno tiene su propio tab pin · arrastras cualquier tab para reemplazar el que quieras.</span>
-  </div>
-
-  <div class="shell">
-    <!-- LEFT same -->
-    <aside class="card">
-      <div class="card-title">▣ Account Quota <span class="pill">1s ago</span></div>
-      <div class="h-section active">ACTIVE <span class="count">2</span></div>
-      <div class="acct">
-        <div class="row1">
-          <span class="name">brayan</span>
-          <span class="badge ok">available</span>
-        </div>
-        <div class="live-row">
-          <span class="lk">live · limited</span>
-          <span>2 / 2 slots in use</span>
-        </div>
-        <div class="meter"><div class="fill" style="width:42%"></div></div>
-        <div class="stats"><span>session</span><span>437k / 8M</span></div>
-        <div class="tags"><span class="tag">gg-refinery</span><span class="tag">hq-mayor</span></div>
-      </div>
-      <div class="acct">
-        <div class="row1">
-          <span class="name">fsrb</span>
-          <span class="badge ok">available</span>
-        </div>
-        <div class="live-row">
-          <span class="lk">live · limited</span>
-          <span>3 / 3 slots in use</span>
-        </div>
-        <div class="meter"><div class="fill warn" style="width:78%"></div></div>
-        <div class="stats"><span>session</span><span>20.2M / 8M</span></div>
-        <div class="tags"><span class="tag">gg-witness</span><span class="tag">hq-boot</span><span class="tag">hq-deacon</span></div>
-      </div>
-      <div class="h-section inactive">INACTIVE <span class="count">2</span></div>
-      <div class="acct dim">
-        <div class="row1">
-          <span class="name">codecsrayo</span>
-          <span class="badge warn">limited</span>
-        </div>
-        <div class="live-row">
-          <span class="lk">live</span>
-          <span>0 / 1 · awaiting reset</span>
-        </div>
-        <div class="resets">resets 7:30pm</div>
-        <div class="tags"><span class="tag">brayan · SWAP</span></div>
-      </div>
-      <div class="acct dim">
-        <div class="row1">
-          <span class="name">a407</span>
-          <span class="badge warn">limited</span>
-        </div>
-        <div class="live-row">
-          <span class="lk">live</span>
-          <span>0 / 1 · awaiting reset</span>
-        </div>
-        <div class="resets">resets 7:30pm</div>
-        <div class="resets">· /upgrade pending</div>
-      </div>
-      <div class="h-section blocked">BLOCKED <span class="count">0</span></div>
-      <div class="muted small mono" style="padding-left:14px">no relogin needed.</div>
-    </aside>
-
-    <!-- CENTER: quad -->
-    <main class="workspace">
-      <div class="topbar">
-        <span class="brand"><b>The Mayor</b> · <span class="muted small mono">DETACHED</span></span>
-        <span class="live">Live</span>
-        <span class="spacer"></span>
-        <span class="ribbon">All clear</span>
-        <span class="muted small">tabs disponibles ↓</span>
-        <button class="btn">⌘</button>
-        <button class="btn primary">▶ Launch</button>
-      </div>
-
-      <!-- floating tab cloud -->
-      <div class="wstrip floating" style="margin-bottom:14px">
-        <span class="muted small" style="align-self:center; margin-right:4px">arrastra a un slot →</span>
+      <div class="wstrip">
         <button class="wtab">Sessions <span class="n">0</span></button>
         <button class="wtab">Activity <span class="n live">49</span></button>
-        <button class="wtab">Work <span class="n">0</span></button>
+        <button class="wtab on">Work <span class="n">14</span></button>
         <button class="wtab">Convoys <span class="n">0</span></button>
-        <button class="wtab">Crew <span class="n">0</span></button>
-        <button class="wtab">Polecats <span class="n">0</span></button>
-        <button class="wtab">Hooks <span class="n">0</span></button>
-        <button class="wtab">Git <span class="n">0</span></button>
-        <button class="wtab">Mail <span class="n">0</span></button>
         <button class="wtab">Merge Q <span class="n">0</span></button>
-        <button class="wtab">Escalations <span class="n">0</span></button>
-        <button class="wtab">Dogs <span class="n">3</span></button>
+        <button class="wtab">Crew <span class="n">6</span></button>
         <button class="wtab">Rigs <span class="n">2</span></button>
       </div>
 
-      <div class="pin-grid">
-        <!-- Slot 1: Sessions -->
-        <div class="canvas">
-          <h2>Sessions <span class="pill">slot 1</span></h2>
-          <div class="toolbar" style="padding-bottom:6px; margin-bottom:6px">
-            <span class="filterchip on">All rigs</span>
-            <span class="filterchip">granite</span>
-            <span class="filterchip">plane</span>
-          </div>
-          <div class="hatch" style="flex:1">no active sessions</div>
+      <div class="canvas">
+        <h2>Work <span class="ribbon">14 beads · 3 rigs</span></h2>
+        <p class="sub">beads agrupados por status · arrastra entre columnas para transicionar · clic para abrir detalle</p>
+
+        <div class="toolbar">
+          <span class="muted small">RIG:</span>
+          <span class="filterchip on">All rigs</span>
+          <span class="filterchip">gastown_granite</span>
+          <span class="filterchip">plane</span>
+          <span class="muted small" style="margin-left:8px">PRIO:</span>
+          <span class="filterchip on">All</span>
+          <span class="filterchip">P0</span>
+          <span class="filterchip">P1</span>
+          <span class="muted small" style="margin-left:8px">ASSIGNEE:</span>
+          <span class="filterchip on">All</span>
+          <span class="filterchip">unassigned</span>
         </div>
 
-        <!-- Slot 2: Activity -->
-        <div class="canvas">
-          <h2>Activity <span class="pill">slot 2</span></h2>
-          <div class="events" style="flex:1">
-            <div class="event"><span class="ts">12:28</span><span class="body"><span class="dot ok"></span>session_start</span><span class="right"><span class="kind">agent</span></span></div>
-            <div class="event"><span class="ts">12:25</span><span class="body"><span class="dot ok"></span>session_start</span><span class="right"><span class="kind">agent</span></span></div>
-            <div class="event"><span class="ts">12:23</span><span class="body"><span class="dot warn"></span>quota_limited</span><span class="right"><span class="kind">system</span></span></div>
-            <div class="event"><span class="ts">12:23</span><span class="body"><span class="dot warn"></span>quota_limited</span><span class="right"><span class="kind">system</span></span></div>
+        <div class="kanban">
+          <!-- pending -->
+          <div class="kcol pending">
+            <div class="kcol-head">
+              <span class="dot"></span> pending <span class="count">4</span>
+            </div>
+            <div class="bcard">
+              <span class="bid">hq-fe-svelte.0</span>
+              <span class="btitle">Inventario API + tipos TS</span>
+              <div class="brow"><span class="prio p1">P1</span><span class="age">2h</span><span class="assn">unassigned</span></div>
+            </div>
+            <div class="bcard">
+              <span class="bid">hq-quota-snap</span>
+              <span class="btitle">GET /api/quota/accounts snapshot</span>
+              <div class="brow"><span class="prio p1">P1</span><span class="age">3h</span><span class="assn">unassigned</span></div>
+            </div>
+            <div class="bcard">
+              <span class="bid">hq-convoys-snap</span>
+              <span class="btitle">GET /api/convoys snapshot</span>
+              <div class="brow"><span class="prio p2">P2</span><span class="age">5h</span><span class="assn">unassigned</span></div>
+            </div>
+            <div class="bcard">
+              <span class="bid">hq-jaeh</span>
+              <span class="btitle">poda las ramas</span>
+              <div class="brow"><span class="prio p2">P3</span><span class="age">1d</span><span class="assn">unassigned</span></div>
+            </div>
           </div>
-        </div>
 
-        <!-- Slot 3: Work -->
-        <div class="canvas">
-          <h2>Work <span class="pill">slot 3</span></h2>
-          <div class="toolbar" style="padding-bottom:6px; margin-bottom:6px">
-            <span class="filterchip on">Ready</span>
-            <span class="filterchip">In progress</span>
-            <span class="filterchip">All</span>
-            <span style="margin-left:auto" class="filterchip">+ New</span>
+          <!-- dispatched -->
+          <div class="kcol dispatched">
+            <div class="kcol-head">
+              <span class="dot"></span> dispatched <span class="count">2</span>
+            </div>
+            <div class="bcard">
+              <span class="bid">hq-tjf0</span>
+              <span class="btitle">furiosa 401 tras restart</span>
+              <div class="brow"><span class="prio p1">P1</span><span class="age">15m</span><span class="assn">gg-furiosa</span></div>
+            </div>
+            <div class="bcard">
+              <span class="bid">hq-ai74</span>
+              <span class="btitle">Quota rotation bloqueada · 0 cuentas disponibles</span>
+              <div class="brow"><span class="prio p1">P1</span><span class="age">8m</span><span class="assn">hq-mayor</span></div>
+            </div>
           </div>
-          <div class="hatch" style="flex:1">no work items<br><span class="small">ready across rigs · 0</span></div>
-        </div>
 
-        <!-- Slot 4: Polecats / Crew -->
-        <div class="canvas">
-          <h2>Polecats <span class="pill">slot 4</span></h2>
-          <div class="toolbar" style="padding-bottom:6px; margin-bottom:6px">
-            <span class="filterchip on">All</span>
-            <span class="filterchip">granite · 4</span>
-            <span class="filterchip">plane · 17</span>
+          <!-- working -->
+          <div class="kcol working">
+            <div class="kcol-head">
+              <span class="dot"></span> working <span class="count">3</span>
+            </div>
+            <div class="bcard">
+              <span class="bid">hq-v3cq</span>
+              <span class="btitle">SYSTEMIC AUTH FAILURE — re-auth + restart polecats</span>
+              <div class="brow"><span class="prio p0">P0</span><span class="age">22m</span><span class="assn">hq-mayor</span></div>
+            </div>
+            <div class="bcard">
+              <span class="bid">hq-uh9n</span>
+              <span class="btitle">Overseer notify loop · mails duplicados</span>
+              <div class="brow"><span class="prio p1">P1</span><span class="age">1h</span><span class="assn">gg-refinery</span></div>
+            </div>
+            <div class="bcard">
+              <span class="bid">hq-4dte</span>
+              <span class="btitle">Dual backend mismatch · bd info Mode hardcoded</span>
+              <div class="brow"><span class="prio p1">P1</span><span class="age">2h</span><span class="assn">gg-witness</span></div>
+            </div>
           </div>
-          <div class="hatch" style="flex:1">no polecats configured for view<br><span class="small">21 total across 2 rigs</span></div>
+
+          <!-- done -->
+          <div class="kcol done">
+            <div class="kcol-head">
+              <span class="dot"></span> done <span class="count">4</span>
+            </div>
+            <div class="bcard">
+              <span class="bid">hq-mc72.12.28</span>
+              <span class="btitle">Mayor orch scan loop · auto-delegate</span>
+              <div class="brow"><span class="prio p2">P2</span><span class="age">30m</span><span class="assn">hq-mayor</span></div>
+            </div>
+            <div class="bcard">
+              <span class="bid">hq-7pdl.2</span>
+              <span class="btitle">gt-web bearer-token IAM</span>
+              <div class="brow"><span class="prio p1">P1</span><span class="age">1h</span><span class="assn">gg-refinery</span></div>
+            </div>
+            <div class="bcard">
+              <span class="bid">hq-8iur.5</span>
+              <span class="btitle">readyz + graceful shutdown</span>
+              <div class="brow"><span class="prio p2">P2</span><span class="age">3h</span><span class="assn">gg-refinery</span></div>
+            </div>
+            <div class="bcard">
+              <span class="bid">hq-mc72.12.14</span>
+              <span class="btitle">sling → orch.launch_convoy</span>
+              <div class="brow"><span class="prio p2">P2</span><span class="age">6h</span><span class="assn">gg-witness</span></div>
+            </div>
+          </div>
+
+          <!-- failed -->
+          <div class="kcol failed">
+            <div class="kcol-head">
+              <span class="dot"></span> failed <span class="count">1</span>
+            </div>
+            <div class="bcard">
+              <span class="bid">hq-va62</span>
+              <span class="btitle">Mayor + Deacon caídos · cola de nudge llena</span>
+              <div class="brow"><span class="prio p0">P0</span><span class="age">12m</span><span class="assn">hq-mayor</span></div>
+            </div>
+          </div>
         </div>
       </div>
     </main>
@@ -1365,29 +1226,232 @@
   </div>
 </section>
 
-<script>
-  // Variant switcher
-  const tabs = document.querySelectorAll('#variant-tabs .tab');
-  const frames = document.querySelectorAll('.frame');
-  tabs.forEach(t => t.addEventListener('click', () => {
-    const v = t.dataset.v;
-    tabs.forEach(x => x.classList.toggle('active', x === t));
-    frames.forEach(f => f.classList.toggle('active', f.dataset.frame === v));
-    window.scrollTo({top: 0, behavior: 'smooth'});
-  }));
+<!-- ─── Frame C: Crew · roles + skills ─── -->
+<section class="frame">
+  <div class="frame-meta">
+    <span class="v-title">Crew · roles + skills</span>
+    <span class="v-note">Tab "Crew" del workspace: catálogo de roles del town (sheriff, deacon, refinery, witness, mayor, polecat). Por rol: skills habilitadas (toggle), scope MCP (allow/deny tools), y sesiones vivas corriendo ese rol.</span>
+  </div>
 
-  // Inner workspace tab toggle (purely cosmetic for the wireframe)
-  document.addEventListener('click', (e) => {
-    const t = e.target.closest('.wtab');
-    if (!t) return;
-    const group = t.closest('.wstrip, .vrail');
-    if (!group) return;
-    group.querySelectorAll('.wtab').forEach(x => x.classList.remove('on'));
-    t.classList.add('on');
-  });
-</script>
+  <div class="shell">
 
-<!-- Dockable terminal — floats over all variants -->
+    <!-- LEFT: Account Quota -->
+    <aside class="card">
+      <div class="card-title">
+        <span class="icon">▣</span> Account Quota
+        <span class="pill">snapshot 1s</span>
+      </div>
+      <div class="h-section active">ACTIVE <span class="count">2</span></div>
+      <div class="acct">
+        <div class="row1"><span class="name">brayan</span><span class="badge ok"></span></div>
+        <div class="live-row"><span class="lk">live · limited</span><span>2 / 2 slots in use</span></div>
+        <div class="meter"><div class="fill" style="width:42%"></div></div>
+        <div class="stats"><span>session</span><span>437.9k / 8.0M</span></div>
+        <div class="tags"><span class="tag">gg-refinery</span><span class="tag">hq-mayor</span></div>
+      </div>
+      <div class="acct">
+        <div class="row1"><span class="name">fsrb</span><span class="badge ok"></span></div>
+        <div class="live-row"><span class="lk">live · limited</span><span>3 / 3 slots in use</span></div>
+        <div class="meter"><div class="fill warn" style="width:78%"></div></div>
+        <div class="stats"><span>session</span><span>20.2M / 8.0M</span></div>
+        <div class="tags"><span class="tag">gg-witness</span><span class="tag">hq-boot</span><span class="tag">hq-deacon</span></div>
+      </div>
+      <div class="h-section inactive">INACTIVE <span class="count">2</span></div>
+      <div class="acct dim">
+        <div class="row1"><span class="name">codecsrayo</span><span class="badge warn"></span></div>
+        <div class="live-row"><span class="lk">live</span><span>0 / 1 · awaiting reset</span></div>
+        <div class="resets">resets 7:30pm</div>
+      </div>
+      <div class="acct dim">
+        <div class="row1"><span class="name">a407</span><span class="badge warn"></span></div>
+        <div class="live-row"><span class="lk">live</span><span>0 / 1 · awaiting reset</span></div>
+        <div class="resets">resets 7:30pm · /upgrade pending</div>
+      </div>
+      <div class="h-section blocked">BLOCKED <span class="count">0</span></div>
+      <div class="muted small mono" style="padding-left:14px">No accounts need relogin.</div>
+    </aside>
+
+    <!-- CENTER: workspace, Crew tab active -->
+    <main class="workspace">
+      <div class="topbar">
+        <span class="brand"><b>The Mayor</b> · <span class="muted small mono">DETACHED</span></span>
+        <span class="live">Live</span>
+        <span class="muted small mono">· May 26 11:28 PM</span>
+        <span class="spacer"></span>
+        <span class="ribbon">All clear</span>
+        <button class="btn">⌘ Commands</button>
+        <button class="btn primary">▶ Launch Agents</button>
+      </div>
+
+      <div class="wstrip">
+        <button class="wtab">Sessions <span class="n">0</span></button>
+        <button class="wtab">Activity <span class="n live">49</span></button>
+        <button class="wtab">Work <span class="n">14</span></button>
+        <button class="wtab">Convoys <span class="n">0</span></button>
+        <button class="wtab">Merge Q <span class="n">0</span></button>
+        <button class="wtab on">Crew <span class="n">6</span></button>
+        <button class="wtab">Rigs <span class="n">2</span></button>
+      </div>
+
+      <div class="canvas">
+        <h2>Crew <span class="ribbon">6 roles · 5 sesiones vivas</span></h2>
+        <p class="sub">selecciona un rol a la izquierda · habilita skills · ajusta scope MCP · revisa sesiones corriendo ese rol</p>
+
+        <div class="crew">
+          <!-- role list -->
+          <div class="role-list">
+            <div class="role-item"><span class="rdot"></span> mayor <span class="rcount">1</span></div>
+            <div class="role-item on"><span class="rdot"></span> deacon <span class="rcount">1</span></div>
+            <div class="role-item"><span class="rdot"></span> refinery <span class="rcount">1</span></div>
+            <div class="role-item"><span class="rdot"></span> witness <span class="rcount">1</span></div>
+            <div class="role-item"><span class="rdot"></span> sheriff <span class="rcount">0</span></div>
+            <div class="role-item warn"><span class="rdot"></span> polecat <span class="rcount">2</span></div>
+          </div>
+
+          <!-- role panel -->
+          <div class="role-panel">
+            <div class="role-head">
+              <span class="rname">deacon</span>
+              <span class="rdesc">e-stop drain · escalation triage · convoy gate-keeper</span>
+              <span class="spacer"></span>
+              <button class="ract">↻ reload config</button>
+              <button class="ract primary">＋ assign session</button>
+            </div>
+
+            <div class="role-grid">
+              <!-- skills column -->
+              <div class="role-block">
+                <h3>Skills <span class="count">5 / 8 on</span></h3>
+                <div class="skill">
+                  <div class="toggle on"></div>
+                  <span class="sname">patrol</span>
+                  <span class="scope">read</span>
+                  <span class="stype">core</span>
+                  <span class="sdesc">tick + heartbeat del rol; bloquea drift</span>
+                </div>
+                <div class="skill">
+                  <div class="toggle on"></div>
+                  <span class="sname">crew-commit</span>
+                  <span class="scope write">write</span>
+                  <span class="stype">workflow</span>
+                  <span class="sdesc">commit + PR canónico con identidad de agente</span>
+                </div>
+                <div class="skill">
+                  <div class="toggle on"></div>
+                  <span class="sname">verify</span>
+                  <span class="scope">read</span>
+                  <span class="stype">core</span>
+                  <span class="sdesc">corre app y observa comportamiento real</span>
+                </div>
+                <div class="skill">
+                  <div class="toggle on"></div>
+                  <span class="sname">reaper</span>
+                  <span class="scope write">write</span>
+                  <span class="stype">ops</span>
+                  <span class="sdesc">reap + purge wisps; auto-close stale beads</span>
+                </div>
+                <div class="skill">
+                  <div class="toggle on"></div>
+                  <span class="sname">backup</span>
+                  <span class="scope">read</span>
+                  <span class="stype">ops</span>
+                  <span class="sdesc">sync Dolt → backup + iCloud</span>
+                </div>
+                <div class="skill">
+                  <div class="toggle"></div>
+                  <span class="sname">code-review</span>
+                  <span class="scope">read</span>
+                  <span class="stype">review</span>
+                  <span class="sdesc">revisa diff; comenta correctness bugs</span>
+                </div>
+                <div class="skill">
+                  <div class="toggle"></div>
+                  <span class="sname">security-review</span>
+                  <span class="scope">read</span>
+                  <span class="stype">review</span>
+                  <span class="sdesc">security review del branch</span>
+                </div>
+                <div class="skill">
+                  <div class="toggle"></div>
+                  <span class="sname">caveman</span>
+                  <span class="scope">read</span>
+                  <span class="stype">style</span>
+                  <span class="sdesc">modo comm comprimido</span>
+                </div>
+              </div>
+
+              <!-- MCP scope column -->
+              <div class="role-block">
+                <h3>MCP Scope <span class="count">12 allow · 3 deny</span></h3>
+                <div class="perms">
+                  <div class="perm allow">
+                    <span class="pmark"></span>
+                    <span class="pscope">patrol.* · register · heartbeat · tick · close</span>
+                    <span class="pnote">core role</span>
+                  </div>
+                  <div class="perm allow">
+                    <span class="pmark"></span>
+                    <span class="pscope">merge.* · submit · complete · fail</span>
+                    <span class="pnote">e-stop gate</span>
+                  </div>
+                  <div class="perm allow">
+                    <span class="pmark"></span>
+                    <span class="pscope">scheduling.enqueue · scheduling.mark_dispatched</span>
+                    <span class="pnote">drain</span>
+                  </div>
+                  <div class="perm allow">
+                    <span class="pmark"></span>
+                    <span class="pscope">orch.fail_member · orch.complete_member</span>
+                    <span class="pnote">convoy gate</span>
+                  </div>
+                  <div class="perm allow">
+                    <span class="pmark"></span>
+                    <span class="pscope">gt://agent/sessions · gt://patrol/leases · gt://merge/slots</span>
+                    <span class="pnote">read</span>
+                  </div>
+                  <div class="perm deny">
+                    <span class="pmark"></span>
+                    <span class="pscope">agent.add · agent.remove · agent.transition</span>
+                    <span class="pnote">mayor-only</span>
+                  </div>
+                  <div class="perm deny">
+                    <span class="pmark"></span>
+                    <span class="pscope">rig.* · quota.rotate · quota.retire</span>
+                    <span class="pnote">mayor-only</span>
+                  </div>
+                  <div class="perm deny">
+                    <span class="pmark"></span>
+                    <span class="pscope">orch.launch_convoy</span>
+                    <span class="pnote">mayor-only</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- live sessions for this role -->
+              <div class="role-block" style="grid-column: 1 / -1">
+                <h3>Sesiones vivas con este rol <span class="count">1</span></h3>
+                <div class="rsess">
+                  <div class="rsess-row">
+                    <span class="rs-dot"></span>
+                    <span>hq-deacon · /gt · brayan@8M</span>
+                    <span class="muted small">heartbeat 14s</span>
+                    <button class="ract">attach</button>
+                  </div>
+                </div>
+                <div class="muted small mono" style="padding: 6px 4px 0">
+                  Reasignar sesión: arrastra desde sidebar (Sessions tab) o usa ＋ assign session.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+  </div>
+</section>
+
+<!-- ─── Dockable terminal ─── -->
 <div class="dock" id="dock" style="--dock-h: 360px">
   <div class="dock-grip" title="arrastra para redimensionar"></div>
   <div class="dock-bar">
@@ -1449,6 +1513,33 @@
 </div>
 
 <script>
+  // Theme toggle (persist in localStorage)
+  (() => {
+    const btn = document.getElementById('theme-toggle');
+    const apply = (theme) => {
+      document.body.setAttribute('data-theme', theme);
+      btn.textContent = theme === 'dark' ? '☾ dark' : '☼ light';
+    };
+    const saved = localStorage.getItem('gt-wf-theme') || 'dark';
+    apply(saved);
+    btn.addEventListener('click', () => {
+      const next = document.body.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      localStorage.setItem('gt-wf-theme', next);
+      apply(next);
+    });
+  })();
+
+  // Workspace tab toggle (cosmetic)
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('.wtab');
+    if (!t) return;
+    const group = t.closest('.wstrip');
+    if (!group) return;
+    group.querySelectorAll('.wtab').forEach(x => x.classList.remove('on'));
+    t.classList.add('on');
+  });
+
+  // Dock open/close + resize
   (() => {
     const dock = document.getElementById('dock');
     const btn = document.getElementById('dock-toggle');
@@ -1460,11 +1551,8 @@
       arrow.textContent = state ? '▾' : '▴';
     }
     btn.addEventListener('click', () => open(!dock.classList.contains('open')));
-
-    // open on first load so the user immediately sees it
     open(true);
 
-    // resize
     let dragging = false, startY = 0, startH = 0;
     grip.addEventListener('mousedown', (e) => {
       dragging = true;
@@ -1482,7 +1570,6 @@
       if (dragging) { dragging = false; document.body.style.userSelect = ''; }
     });
 
-    // close active terminal tab handlers (cosmetic)
     dock.querySelectorAll('.term-tab').forEach(t => {
       t.addEventListener('click', (e) => {
         if (e.target.classList.contains('x')) return;
