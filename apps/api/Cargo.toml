@@ -29,6 +29,8 @@ members = [
     "crates/domain/gt-refinery",
     "crates/domain/gt-deacon",
     "crates/domain/gt-sheriff",
+    # hq-63az Paso 9.E — polecat/crew/daemon lifecycle + GT_HOOK_BEAD hooks.
+    "crates/domain/gt-polecat",
     "crates/bins/gt",
     "crates/bins/gt-web",
     "crates/bins/gt-mcp",

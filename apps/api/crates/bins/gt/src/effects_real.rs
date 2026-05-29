@@ -82,6 +82,13 @@ impl Effects for RealEffects {
                 .arg(&member)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
+            // hq-63az / gg-0nb: pin the dispatched bead into the spawned process env as
+            // GT_HOOK_BEAD so the deferred-spawn path hands the polecat its hook without a
+            // bd read the embedded-scratch auto-import can flip. `member` is the convoy member
+            // (the work item) being slung — the bead the polecat picks up.
+            if let Some((key, value)) = gt_polecat::hook_env(Some(&member), None) {
+                cmd.env(key, value);
+            }
             match cmd.spawn() {
                 Ok(mut child) => {
                     if let Some(out) = child.stdout.take() {

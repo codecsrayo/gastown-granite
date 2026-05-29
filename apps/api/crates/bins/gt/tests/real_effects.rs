@@ -61,6 +61,52 @@ async fn sling_spawns_subprocess_with_convoy_and_member() {
 }
 
 #[tokio::test]
+async fn sling_pins_dispatched_bead_as_gt_hook_bead() {
+    // hq-63az / gg-0nb gate: the slung subprocess must inherit GT_HOOK_BEAD = the member, so
+    // the deferred-spawn path can hand the polecat its hook without a flippable bd read.
+    let dir = tempdir();
+    let marker = dir.join("hook.marker");
+    let script = dir.join("gt-stub.sh");
+    write_script(
+        &script,
+        &format!(
+            "#!/usr/bin/env sh\nprintf '%s\\n' \"$GT_HOOK_BEAD\" > {}\n",
+            quote(marker.to_str().unwrap())
+        ),
+    );
+
+    let repo = Arc::new(InMemoryBeads::default());
+    let log = dir.join("events.jsonl");
+
+    let (effects, quota_slot) = RealEffects::new(script.clone());
+    let root = spawn(
+        repo,
+        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
+        Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
+        effects,
+        SystemClock,
+        &log,
+        RootConfig::default(),
+    );
+    let _ = quota_slot.set(root.quota.clone());
+
+    root.orch
+        .create_convoy("c-hook", vec!["hq-63az".to_string()])
+        .await;
+    root.orch.launch("c-hook").await;
+
+    let contents = wait_for_file(&marker, Duration::from_secs(5)).await;
+    assert_eq!(
+        contents.trim(),
+        "hq-63az",
+        "slung subprocess did not inherit GT_HOOK_BEAD = member",
+    );
+
+    root.shutdown();
+}
+
+#[tokio::test]
 async fn rotate_invokes_quota_command_chain_with_healthy_target() {
     let dir = tempdir();
     let script = dir.join("gt-stub.sh");
