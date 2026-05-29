@@ -31,6 +31,8 @@ gt-patrol = { path = "../../domain/gt-patrol" }
 gt-merge = { path = "../../domain/gt-merge" }
 gt-quota = { path = "../../domain/gt-quota" }
 gt-orchestration = { path = "../../domain/gt-orchestration" }
+# hq-92z9 Paso 9.D — Mayor orchestration-loop role (delegations actor).
+gt-mayor = { path = "../../domain/gt-mayor" }
 # hq-92z9 Paso 9.D — Sheriff watchdog Plugin (first role fill on top of scaffolding).
 gt-sheriff = { path = "../../domain/gt-sheriff" }
 # hq-92z9 Paso 9.D — Deacon drain coordination (third role fill).

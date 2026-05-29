@@ -30,6 +30,8 @@ use gt_plugin::PluginRegistry;
 
 use gt_agent::actor::{self as agent_actor, AgentHandle};
 use gt_agent::{AgentEvent, Session, SessionState, SessionWriter};
+use gt_mayor::actor::{self as mayor_actor, MayorHandle};
+use gt_mayor::{InMemoryMayorRepo, MayorEvent};
 use gt_merge::actor::{self as merge_actor, MergeHandle};
 use gt_merge::{MergeBoard, MergeEvent, MergeRepository};
 use gt_orchestration::actor::{self as orch_actor, OrchHandle};
@@ -116,6 +118,11 @@ pub struct RootHandle<R: BeadRepository + Clone> {
     /// with the existing `gt_merge::refinery` channel watcher (which stays authoritative
     /// for driving the merge slot).
     pub refinery: RefineryHandle,
+    /// hq-92z9 Paso 9.D — Mayor orchestration-loop role. Operators push delegations via
+    /// this handle (`MayorCommand::Delegate`/`Acknowledge`/`Resolve`/`Withdraw`). The
+    /// periodic auto-delegate loop is a follow-up; this handle is the substrate it will
+    /// drive.
+    pub mayor: MayorHandle,
     /// Relay for edge producers of agent events (the supervisor's `SessionEnd`, the spawn
     /// edge's `Spawned`). The agent actor has no relay of its own by design; its events
     /// reach the log through here.
@@ -381,6 +388,7 @@ where
     let (sheriff_tx, sheriff_rx) = mpsc::channel::<Envelope<SheriffEvent>>(256);
     let (deacon_tx, deacon_rx) = mpsc::channel::<Envelope<DeaconEvent>>(256);
     let (refinery_tx, refinery_rx) = mpsc::channel::<Envelope<RefineryEvent>>(256);
+    let (mayor_tx, mayor_rx) = mpsc::channel::<Envelope<MayorEvent>>(256);
 
     // Convert the replay reducer state into each actor's live owner type. The conversions
     // live inside the domain crates (Ports & Adapters: the live-vs-replay distinction is a
@@ -395,6 +403,7 @@ where
         sheriff: sheriff_initial,
         deacon: deacon_initial,
         refinery: refinery_initial,
+        mayor: mayor_initial,
         feed: _,
     } = hydration.state;
     let merge_initial = MergeBoard::from_state(&merge_state);
@@ -431,6 +440,13 @@ where
         refinery_tx,
         refinery_initial,
     );
+    // Mayor repo is in-memory pending the orchestration-loop follow-up that wires the
+    // Dolt-backed delegation store. Reducer + replay are authoritative for state today.
+    let mayor = mayor_actor::spawn_hydrated(
+        InMemoryMayorRepo::default(),
+        mayor_tx,
+        mayor_initial,
+    );
 
     let dead_count = Arc::new(AtomicUsize::new(0));
     let (events_tx, _) = broadcast::channel::<EventRecord>(config.event_buffer.max(1));
@@ -460,6 +476,7 @@ where
     let mut sheriff_rx = sheriff_rx;
     let mut deacon_rx = deacon_rx;
     let mut refinery_rx = refinery_rx;
+    let mut mayor_rx = mayor_rx;
 
     let join = tokio::spawn(async move {
         loop {
@@ -473,6 +490,7 @@ where
                 Some(env) = sheriff_rx.recv() => reactor.ingest(env).await,
                 Some(env) = deacon_rx.recv() => reactor.ingest(env).await,
                 Some(env) = refinery_rx.recv() => reactor.ingest(env).await,
+                Some(env) = mayor_rx.recv() => reactor.ingest(env).await,
                 else => break,
             }
         }
@@ -488,6 +506,7 @@ where
         sheriff,
         deacon,
         refinery,
+        mayor,
         agent_events: agent_tx,
         repo,
         log_path,
