@@ -1,0 +1,20 @@
+[package]
+name = "gt-reaper"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+# Standalone wisp reaper job (hq-t9vt / paso 9.C). `gt-reaper run` connects to Dolt, runs one
+# scan → reap → purge cycle via gt-wisp, and prints a JSON summary. The `reaper` skill and the
+# Rust `gt reaper run` command (9.A) shell out to this binary.
+[[bin]]
+name = "gt-reaper"
+path = "src/main.rs"
+
+[dependencies]
+gt-wisp = { path = "../../domain/gt-wisp" }
+gt-store-dolt = { path = "../../kernel/gt-store-dolt" }
+gt-events = { path = "../../kernel/gt-events" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+time.workspace = true
+serde_json.workspace = true

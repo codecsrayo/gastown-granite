@@ -11,7 +11,9 @@ gt-agent = { path = "../../domain/gt-agent" }
 gt-merge = { path = "../../domain/gt-merge" }
 gt-patrol = { path = "../../domain/gt-patrol" }
 gt-orchestration = { path = "../../domain/gt-orchestration" }
+gt-wisp = { path = "../../domain/gt-wisp" }
 mysql_async = { workspace = true }
+time.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true }

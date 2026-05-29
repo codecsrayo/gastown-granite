@@ -21,6 +21,8 @@ members = [
     "crates/domain/gt-quota",
     "crates/domain/gt-orchestration",
     "crates/domain/gt-feed",
+    # hq-t9vt Paso 9.C — ephemeral wisp domain + reaper compaction.
+    "crates/domain/gt-wisp",
     # hq-92z9 Paso 9.D role crates — scaffolding pass; behavior fills in subsequent commits.
     "crates/domain/gt-mayor",
     "crates/domain/gt-witness",
@@ -31,6 +33,7 @@ members = [
     "crates/bins/gt-web",
     "crates/bins/gt-mcp",
     "crates/bins/gt-cli",
+    "crates/bins/gt-reaper",
 ]
 
 [workspace.package]
