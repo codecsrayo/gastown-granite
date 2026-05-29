@@ -214,6 +214,11 @@ async fn run<R, MR, PR, OR>(
         "[gt] shutting down (dead-letters: {})",
         root.dead_letters()
     );
+    // hq-mc72.12 C2 Deacon — drain in-flight merges before tearing the reactor down. Subscribe
+    // BEFORE `begin_drain` so a same-tick `DrainComplete` (pending empty at drain time) is not
+    // missed. `GT_DRAIN_TIMEOUT_SECS` caps the wait (default 30) so a wedged merge cannot pin
+    // shutdown forever.
+    drain_via_deacon(&root).await;
     // Stop the reactor first — that drops its broadcast Sender, which is the only way the
     // outbox writer (and the sessions projector) receive `Closed`. Once root.shutdown returns,
     // no new EventRecords are produced and the consumers drain to completion deterministically.
@@ -238,6 +243,44 @@ async fn run<R, MR, PR, OR>(
         pipeline.shutdown_graceful().await;
     }
     eprintln!("[gt] shutdown complete");
+}
+
+/// Trigger a deacon drain and wait briefly for `DrainComplete` before the reactor is torn
+/// down (hq-mc72.12 C2 Deacon). Bounded by `GT_DRAIN_TIMEOUT_SECS` (default 30s). The
+/// broadcast subscribe happens *before* `begin_drain` so a same-tick `DrainComplete` (empty
+/// pending set at drain time) is not missed.
+async fn drain_via_deacon<R>(root: &RootHandle<R>)
+where
+    R: gt_beads::BeadRepository + Clone + 'static,
+{
+    let timeout_secs = std::env::var("GT_DRAIN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30u64);
+    let mut rx = root.subscribe_events();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Err(e) = gt_deacon::deacon::begin_drain(&root.deacon, "sigterm", now).await {
+        eprintln!("[gt] drain begin failed: {e} — proceeding to shutdown");
+        return;
+    }
+    let drained = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
+        loop {
+            match rx.recv().await {
+                Ok(rec) if rec.kind == "deacon.drain_complete" => return,
+                Ok(_) => continue,
+                Err(_) => return, // Closed/lagged — give up; reactor teardown follows anyway.
+            }
+        }
+    })
+    .await;
+    if drained.is_err() {
+        eprintln!("[gt] drain timed out after {timeout_secs}s — proceeding to shutdown");
+    } else {
+        eprintln!("[gt] drain complete");
+    }
 }
 
 /// Spawn the supervised Refinery MERGE_READY daemon (hq-mc72.12 C2). The channel root comes

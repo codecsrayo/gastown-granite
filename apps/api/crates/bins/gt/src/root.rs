@@ -495,6 +495,7 @@ where
         sched: sched.clone(),
         patrol: patrol.clone(),
         merge: merge.clone(),
+        deacon: deacon.clone(),
         repo: repo.clone(),
         effects,
         clock,
@@ -567,6 +568,9 @@ struct Reactor<R, FX, CK> {
     sched: SchedHandle,
     patrol: PatrolHandle,
     merge: MergeHandle,
+    /// hq-mc72.12 C2 Deacon — track in-flight merges and drive `DrainComplete` on SIGTERM.
+    /// Merge::Ready arms `deacon.track`; Merge::Merged / Failed arm `deacon.finish`.
+    deacon: DeaconHandle,
     repo: R,
     effects: FX,
     clock: CK,
@@ -669,17 +673,24 @@ where
             }
             // Refinery observed MERGE_READY (Paso 6.b): advance the slot to Merging. The real
             // `git merge` is an edge effect that then reports Complete/Fail back to the actor.
+            // hq-mc72.12 C2 Deacon: also register the bead as an in-flight merge item so the
+            // drain on SIGTERM waits for it to finish.
             GtEvent::Merge(MergeEvent::Ready { bead, .. }) => {
                 self.merge.start(bead.clone()).await;
+                gt_deacon::deacon::track(&self.deacon, bead, "merge").await?;
             }
             // Merge landed: close the bead and free the capacity it held (the cross-domain
-            // integration gt-merge deliberately left to the root).
+            // integration gt-merge deliberately left to the root). hq-mc72.12 C2 Deacon: clear
+            // the in-flight entry — when draining and pending hits zero, the actor emits
+            // `DrainComplete` in the same tick.
             GtEvent::Merge(MergeEvent::Merged { bead, .. }) => {
                 if let Some(mut b) = self.repo.get(bead).await? {
                     b.status = BeadStatus::Done;
                     self.repo.upsert(&b).await?;
                 }
                 self.sched.capacity_freed().await;
+                let now = self.clock.now_secs();
+                gt_deacon::deacon::finish(&self.deacon, bead, now).await?;
             }
             // Predictive rotation (Paso 6.c): the account will block (or just did) — rotate.
             // hq-mysw: also raise the quota-block operator signal (notification-only; rotation
@@ -711,13 +722,17 @@ where
                 .await?;
             }
             // hq-mysw: a merge slot failed — the feed's `TimeoutMissed` (`.failed` terminal)
-            // class, surfaced live. Stuck lane → status bead + notification.
+            // class, surfaced live. Stuck lane → status bead + notification. hq-mc72.12 C2
+            // Deacon: a failed merge also terminates the in-flight entry (FinishItem for an
+            // unknown id is a no-op so an isolated Failed without a prior Ready is safe).
             GtEvent::Merge(MergeEvent::Failed { bead, reason }) => {
                 self.escalate(Signal::MergeStuck {
                     bead: bead.clone(),
                     reason: reason.clone(),
                 })
                 .await?;
+                let now = self.clock.now_secs();
+                gt_deacon::deacon::finish(&self.deacon, bead, now).await?;
             }
             // hq-0bko.2 gate: a rotation landed. Flip the keychain's live pointer so the next
             // edge call uses the new account's credentials. Failure here is a real bug — log

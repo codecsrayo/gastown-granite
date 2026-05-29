@@ -87,7 +87,10 @@ impl DeaconCommand {
     }
 
     /// Re-validate and produce the events to apply + emit. `BeginDrain` while already
-    /// draining returns `Ok(vec![])` (idempotent). `Finish` that empties the pending set
+    /// draining returns `Ok(vec![])` (idempotent). `BeginDrain` on an **empty** pending set
+    /// produces `DrainRequested` AND `DrainComplete` in the same tick (no in-flight work →
+    /// drain is immediately done; this is the SIGTERM-with-idle-town case wired by
+    /// `bins/gt::drain_via_deacon`, hq-mc72.12 C2). `Finish` that empties the pending set
     /// during drain produces both `ItemFinished` and `DrainComplete` in order.
     pub fn execute(&self, state: &DeaconState) -> Result<Vec<DeaconEvent>, AppError> {
         self.validate(state)?;
@@ -96,10 +99,18 @@ impl DeaconCommand {
                 if state.draining {
                     Ok(Vec::new())
                 } else {
-                    Ok(vec![DeaconEvent::DrainRequested {
+                    let mut out = vec![DeaconEvent::DrainRequested {
                         by: b.by.clone(),
                         at: b.at,
-                    }])
+                    }];
+                    // Empty pending at drain time → DrainComplete fires in the same tick,
+                    // mirroring the Finish-empties-pending path. `state.completed` guards
+                    // re-emission on replay (it is set by `DeaconState::apply` for
+                    // DrainComplete).
+                    if !state.completed && state.pending.is_empty() {
+                        out.push(DeaconEvent::DrainComplete { at: b.at });
+                    }
+                    Ok(out)
                 }
             }
             DeaconCommand::Track(t) => Ok(vec![DeaconEvent::ItemBegun {
