@@ -8,12 +8,14 @@
 > `internal/session/*.go`, `apps/api/crates/bins/{gt,gt-web,gt-mcp}/`,
 > `apps/api/crates/domain/*/`.
 
-Snapshot date: 2026-05-28. Base commit `3f59b37f`. **Refreshed** after the first
-audit (`28103fcf`) to absorb three material moves on the Rust side:
+Snapshot date: 2026-05-29. Base commit `c9787bc6`. **Refreshed** after the first
+audit (`28103fcf`) to absorb material moves on the Rust side:
 `211c5fff` (boot hydration + sessions write-path + **`SessionRole`/crew shipped**,
 hq-8iur.1/.7/.2), `525f1d5d` (MCP `agent.add` now emits an event + new
 `quota.register` + `scheduling.create_bead`, hq-mc72.10), `64cba819`
-(`rig.create`, hq-mc72.11), `135367bb` (`/health` + `/readyz`, hq-8iur.5).
+(`rig.create`, hq-mc72.11), `135367bb` (`/health` + `/readyz`, hq-8iur.5), and the
+new **`gt-rig` catalog domain** (hq-mc72.12.29) — orchestrator-state side of `gt rig`
+landed (events + commands + actor + repository port); filesystem bootstrap stays B1.
 Refresh again when either side moves materially.
 
 ---
@@ -206,7 +208,7 @@ Spawn signal = how the daemon's tmux session is identified (see §Roles below).
 | `gt install` | Create a new HQ workspace | none (CLI bootstrap is a Go responsibility) | **M** (intentional) |
 | `gt init` | Initialize cwd as a rig | none | **M** (intentional) |
 | `gt town` | Town-level subcmds | none | **M** |
-| `gt rig` | Manage rigs | MCP `rig.create` **RETIRED** (Paso 10 D2, hq-mc72.12.1 — removed the Go-exec). Rig creation is filesystem bootstrap (B1): relocates to `gt-cli`/`deploy/`, not orchestrator state. list / remove / park have no Rust path | **M** (B1) |
+| `gt rig` | Manage rigs | MCP `rig.create` **RETIRED** (Paso 10 D2, hq-mc72.12.1). Orchestrator-state side now in Rust via `gt-rig` domain (hq-mc72.12.29): RigEvent (Added/Adopted/Removed/PrefixChanged/DefaultBranchChanged), RigCommand (Add/Adopt/Remove/SetPrefix/SetDefaultBranch), `RigCatalog` actor + `RigRepository` port. Filesystem bootstrap (clone, bd init, redirects, dolt orphans) stays B1 in `deploy/bootstrap`; the bootstrap edge will publish events into this domain once it lands. CLI list/remove/park surfaces still pending | **P** (orchestrator state) / **M** (B1 bootstrap + CLI) |
 | `gt worktree` | Create worktree in another rig | none | **M** |
 | `gt config` | Manage configuration | none | **M** (intentional — config is filesystem) |
 | `gt hooks` / `gt hook` | Install / manage hooks | none (claude-side hooks live in JSON) | **M** |
