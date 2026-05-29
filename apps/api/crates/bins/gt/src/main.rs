@@ -33,9 +33,10 @@ use gt_beads::{BeadRepository, InMemoryBeads};
 use gt_merge::{InMemoryMergeRepo, MergeRepository};
 use gt_orchestration::{InMemoryOrchRepo, OrchRepository};
 use gt_patrol::{InMemoryPatrolRepo, PatrolRepository};
+use gt_plugin::{PluginRegistry, SheriffPlugin};
 use gt_root::{
-    load_state, spawn_hydrated, spawn_sessions_projector, RealEffects, RootConfig, RootHandle,
-    SystemClock,
+    load_state, spawn_hydrated, spawn_plugin_relay, spawn_sessions_projector, RealEffects,
+    RootConfig, RootHandle, SystemClock,
 };
 use gt_store_dolt::{DoltBeads, DoltMerge, DoltOrch, DoltPatrol, DoltSessions};
 use gt_store_pg::{PgOutboxDrain, PgOutboxWriter};
@@ -178,6 +179,12 @@ async fn run<R, MR, PR, OR>(
     // the sessions table so the read-side (`gt-web`) owns the truth, replacing `gt sling`.
     let sessions_task = sessions_writer.map(|w| spawn_sessions_projector(&root, w));
 
+    // Observer plugin chain (hq-evks): Sheriff is registered as a stub so the relay has a
+    // live consumer end-to-end; 9.D (hq-92z9) replaces it with the real watchdog through the
+    // same trait, no wiring change here.
+    let plugin_registry = Arc::new(PluginRegistry::new().register(SheriffPlugin::new()));
+    let plugin_task = spawn_plugin_relay(&root, plugin_registry);
+
     eprintln!(
         "[gt] composition root up — event log: {}",
         root.log_path().display()
@@ -199,6 +206,9 @@ async fn run<R, MR, PR, OR>(
     if let Some(task) = sessions_task {
         let _ = task.await;
     }
+    // The plugin relay also exits on broadcast `Closed`; await so any in-flight `on_event`
+    // returns before tearing telemetry down.
+    let _ = plugin_task.await;
     if let Some(pipeline) = pipeline {
         pipeline.shutdown_graceful().await;
     }

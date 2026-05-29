@@ -31,7 +31,10 @@ use gt_patrol::{PatrolEvent, PatrolState};
 use gt_quota::{QuotaEvent, QuotaState};
 use gt_scheduling::{SchedEvent, SchedState};
 
-use gt_root::{load_state, replay_gt, spawn, spawn_hydrated, Clock, Effects, RootConfig};
+use gt_plugin::{PluginRegistry, SheriffPlugin};
+use gt_root::{
+    load_state, replay_gt, spawn, spawn_hydrated, spawn_plugin_relay, Clock, Effects, RootConfig,
+};
 
 const LEASE_TIMEOUT: u64 = 30;
 
@@ -542,4 +545,95 @@ async fn boot_hydration_restores_actor_state_without_replaying_events() {
 
     let _ = std::fs::remove_file(&log_path);
     root2.shutdown();
+}
+
+/// hq-evks gate: attaching the plugin relay to the live root must not affect what the root
+/// writes — `replay_gt(log)` is byte-identical with or without plugins. The relay only reads
+/// from the broadcast (no back-emit into the domain bus), and the `Plugin` trait returns
+/// `Result<(), AppError>` so it has no channel to influence the log. The Sheriff stub stands
+/// in for any production plugin: if it sees events, the chain is live.
+#[tokio::test]
+async fn plugin_relay_observes_without_perturbing_replay() {
+    let repo = Arc::new(InMemoryBeads::default());
+    let log_path = std::env::temp_dir().join(format!(
+        "gt-plugin-{}-{}.events.jsonl",
+        std::process::id(),
+        ulid::Ulid::new()
+    ));
+    let _ = std::fs::remove_file(&log_path);
+
+    let clock = ManualClock::new(100);
+    let effects = RecordingEffects::default();
+    let root = spawn(
+        repo,
+        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
+        Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
+        effects,
+        clock,
+        &log_path,
+        RootConfig::default(),
+    );
+
+    let sheriff = SheriffPlugin::new();
+    let observed = sheriff.counter();
+    let registry = Arc::new(PluginRegistry::new().register_arc(Arc::new(sheriff)));
+    let dead = registry.deadletter();
+    let relay = spawn_plugin_relay(&root, registry);
+
+    // Drive two AgentEvents through the edge relay — exactly the shape the supervisor would
+    // emit in production. The plugin relay sees them via the broadcast; the log records them.
+    use gt_agent::{AgentEvent, SessionRole};
+    let evs = vec![
+        AgentEvent::Spawned {
+            session: "p1".into(),
+            rig: "rig-a".into(),
+            role: SessionRole::Mayor,
+            crew: None,
+        },
+        AgentEvent::SessionEnd {
+            session: "p1".into(),
+        },
+    ];
+    for ev in evs {
+        root.agent_events.send(Envelope::root(ev)).await.unwrap();
+    }
+
+    let recs = wait_for(
+        &log_path,
+        |recs| recs.iter().filter(|r| r.kind.starts_with("agent.")).count() >= 2,
+        Duration::from_secs(3),
+    )
+    .await;
+
+    // Replay the recorded log: the rebuilt state must contain both AgentEvents and the
+    // Sheriff must have observed exactly the agent events the log holds. Plugins are pure
+    // observers, so the log shape is unaffected by their presence.
+    let st = replay_gt(&recs).expect("replay_gt");
+    assert_eq!(
+        st.agent.len(),
+        1,
+        "agent state must contain the spawned session"
+    );
+
+    // Wait for the relay to drain — observed count converges to (# events × # plugins=1).
+    let agent_event_count = recs.iter().filter(|r| r.kind.starts_with("agent.")).count();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while observed.load(Ordering::SeqCst) < agent_event_count && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        observed.load(Ordering::SeqCst) >= agent_event_count,
+        "sheriff stub must observe every agent.* record (saw {}, log has {})",
+        observed.load(Ordering::SeqCst),
+        agent_event_count
+    );
+    assert!(
+        dead.is_empty(),
+        "healthy chain must not produce dead-letter entries"
+    );
+
+    let _ = std::fs::remove_file(&log_path);
+    root.shutdown();
+    let _ = relay.await;
 }

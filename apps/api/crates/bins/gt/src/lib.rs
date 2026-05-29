@@ -20,6 +20,6 @@ pub mod root;
 pub use effects_real::{QuotaSlot, RealEffects};
 pub use event::{replay_gt, GtEvent, GtState};
 pub use root::{
-    load_state, spawn, spawn_hydrated, spawn_sessions_projector, Clock, Effects, HydrationState,
-    LogEffects, RootConfig, RootHandle, SystemClock,
+    load_state, spawn, spawn_hydrated, spawn_plugin_relay, spawn_sessions_projector, Clock,
+    Effects, HydrationState, LogEffects, RootConfig, RootHandle, SystemClock,
 };

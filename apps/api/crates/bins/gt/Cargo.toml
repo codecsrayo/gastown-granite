@@ -22,6 +22,8 @@ gt-bus = { path = "../../kernel/gt-bus" }
 gt-audit = { path = "../../kernel/gt-audit" }
 gt-beads = { path = "../../kernel/gt-beads" }
 gt-telemetry = { path = "../../kernel/gt-telemetry" }
+# Observer plugin chain (hq-evks): `root::spawn_plugin_relay` wires it onto the broadcast.
+gt-plugin = { path = "../../kernel/gt-plugin" }
 # Every domain — only the composition root is allowed this fan-in.
 gt-agent = { path = "../../domain/gt-agent" }
 gt-scheduling = { path = "../../domain/gt-scheduling" }

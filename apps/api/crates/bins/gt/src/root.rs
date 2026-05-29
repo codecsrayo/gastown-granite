@@ -26,6 +26,7 @@ use gt_audit::{read_all, EventRecord, EventStore, JsonlWriter};
 use gt_beads::{BeadRepository, BeadStatus};
 use gt_bus::DeadLetterEntry;
 use gt_events::{AppError, Envelope, EventKind};
+use gt_plugin::PluginRegistry;
 
 use gt_agent::actor::{self as agent_actor, AgentHandle};
 use gt_agent::{AgentEvent, Session, SessionState, SessionWriter};
@@ -300,6 +301,24 @@ where
             }
         }
     })
+}
+
+/// Observer plugin relay (hq-evks). Subscribes the registered plugins to the root's
+/// `EventRecord` broadcast in a dedicated tokio task; per-event fan-out runs sequentially in
+/// registration order, errors land in the registry's [`gt_plugin::PluginDeadLetter`] and the
+/// chain keeps going. The relay is strictly read-only — plugins observe the audit log shape,
+/// they never publish back into the domain bus — which is what keeps `replay_gt` byte-
+/// identical with or without plugins attached (the gate criterion in Paso 9.B). Sheriff /
+/// watchdog behavior is registered against this relay; 9.D replaces the stub plugin without
+/// changing the wiring.
+pub fn spawn_plugin_relay<R>(
+    root: &RootHandle<R>,
+    registry: Arc<PluginRegistry>,
+) -> JoinHandle<()>
+where
+    R: BeadRepository + Clone + 'static,
+{
+    gt_plugin::spawn_plugin_relay(root.subscribe_events(), registry)
 }
 
 /// Spawn the whole system with explicit boot hydration (hq-8iur.1). The actors are seeded

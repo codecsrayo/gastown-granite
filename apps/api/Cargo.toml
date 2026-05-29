@@ -59,6 +59,13 @@ schemars = "1"
 # feature flag, and procedural macros; other crates do not pull this in.
 rmcp = { version = "1.7", features = ["server", "macros", "transport-io"] }
 anyhow = "1"
+# `gt-plugin` carve-out: heterogeneous observer plugins resolved at runtime (watchdogs,
+# sheriffs). The only kernel crate that pulls this in (`docs/01-architecture.md`).
+async-trait = "0.1"
+# Content hashing for plugin directory drift detection (gt-plugin::sync).
+sha2 = "0.10"
+# Filesystem fixtures for plugin scanner / sync integration tests.
+tempfile = "3"
 
 # Perfil dev rápido (sin requerir mold/lld para que compile en cualquier host).
 [profile.dev]
