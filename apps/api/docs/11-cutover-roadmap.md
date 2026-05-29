@@ -85,7 +85,7 @@ Orden Paso 9: **9.B + 9.C** (cero deps) → **9.D** (tras 9.B) → **9.A + 9.E +
 
 ## Instrucciones por agente
 
-### Paso 8 — Agente A (hq-8iur.7 → .1 → .2)
+### Paso 8 — Agente A (hq-8iur.7 → .1 → .2) ✅
 
 ```
 Trabaja hq-8iur.7, hq-8iur.1, hq-8iur.2 SECUENCIAL, mismo worktree. 8.7 desbloquea 8.2; 8.1 entre medio.
@@ -110,7 +110,7 @@ Worktree: git worktree add -b feat/hq-8iur-cutover-A <ruta> main.
 Hotspot: bins/*/main.rs + root.rs (agente C/8.5 también). Rebase antes de merge.
 ```
 
-### Paso 8 — Agente B (hq-8iur.3 paridad audit)
+### Paso 8 — Agente B (hq-8iur.3 paridad audit)✅
 
 ```
 Trabaja hq-8iur.3 (audit paridad Go↔Rust). Solo doc, cero conflicto código.
@@ -120,7 +120,7 @@ Extra: enumera los TIPOS de Dog (witness/refinery/deacon/sheriff) + cómo se ide
 Entregable: tabla COVERED/PARTIAL/MISSING en apps/api/docs/10-go-rust-parity.md, marca MISSING en camino crítico del flip.
 ```
 
-### Paso 8 — Agente C (hq-8iur.5 ops readiness)
+### Paso 8 — Agente C (hq-8iur.5 ops readiness)✅
 
 ```
 Trabaja hq-8iur.5 (operational readiness). Worktree: feat/hq-8iur-ops.
@@ -132,7 +132,7 @@ Gate: kill -TERM drena limpio (0 outbox rows perdidas), /readyz cambia correcto 
 Coordinación: /readyz depende del flag hydration-done de 8.1 (agente A). Si A no mergeó, expón el hook (AtomicBool) y deja readyz=ready; A lo conecta. Rebase antes de merge (hotspot bins/main.rs con A).
 ```
 
-### Paso 8 — Agente D (hq-8iur.8 event-format translation)
+### Paso 8 — Agente D (hq-8iur.8 event-format translation)✅
 
 ```
 Trabaja hq-8iur.8 (event-format translation Go→Rust + golden-log portability test). Worktree: feat/hq-8iur-portability.
