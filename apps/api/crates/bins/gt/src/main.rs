@@ -227,6 +227,11 @@ async fn run<R, MR, PR, OR>(
     // polecat at sling time; this loop is the live half.
     let polecat_ticker = spawn_polecat_supervisor(polecat_supervisor);
 
+    // hq-mc72.12 C2 Mayor — periodic orch scan. For every launched convoy not already
+    // tracked, file a Pending delegation to ops so a single canonical row tracks each in-
+    // flight convoy. Auto-resolve on convoy completion is a follow-up (reactor arm).
+    let mayor_loop = spawn_mayor_loop(&root);
+
     // hq-mc72.12 C10 — dog control. Watches a gt-channel for spawn/stop of named `hq-dog-<name>`
     // sessions and tracks them as `role=dog` sessions via the agent relay. Operator-driven
     // (gt-cli `gt emit-event`); same supervised channel shape as warrant/estop.
@@ -314,6 +319,9 @@ async fn run<R, MR, PR, OR>(
     // bin is going down, not the town.
     polecat_ticker.abort();
     let _ = polecat_ticker.await;
+    // Mayor scan loop: abort the timer; in-flight delegations stay durable in the audit log.
+    mayor_loop.abort();
+    let _ = mayor_loop.await;
     // Dog control channel watcher: abort it; live dog sessions keep running.
     if let Some(task) = dog_task {
         task.abort();
@@ -681,6 +689,51 @@ where
         };
         gt_polecat::supervise_daemon("dog", make, &mut tracker, u32::MAX, now_secs).await;
     }))
+}
+
+/// Spawn the periodic Mayor orchestration loop (hq-mc72.12 C2 Mayor). Every
+/// `GT_MAYOR_TICK_SECS` (default 60, floored at 1) it snapshots the orch convoy board + the
+/// mayor delegations, and for each `ConvoyState::Launched` convoy not already tracked it
+/// files a Pending delegation `convoy-<id>` to `ops`. Idempotent — re-scans skip already-
+/// delegated convoys. The auto-resolve on convoy completion (a reactor arm) is a follow-up.
+fn spawn_mayor_loop<R>(root: &RootHandle<R>) -> tokio::task::JoinHandle<()>
+where
+    R: BeadRepository + Clone + 'static,
+{
+    let mayor = root.mayor.clone();
+    let orch = root.orch.clone();
+    let interval_secs = std::env::var("GT_MAYOR_TICK_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(60)
+        .max(1);
+    eprintln!("[gt] mayor loop: orch scan every {interval_secs}s");
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(interval_secs));
+        tick.tick().await; // skip the immediate first tick
+        loop {
+            tick.tick().await;
+            let convoys = orch.snapshot().await;
+            let mayor_state = mayor.snapshot().await;
+            for convoy in convoys {
+                if !matches!(convoy.state, gt_orchestration::ConvoyState::Launched) {
+                    continue;
+                }
+                let id = format!("convoy-{}", convoy.id);
+                if mayor_state.delegations.contains_key(&id) {
+                    continue;
+                }
+                let summary = format!(
+                    "convoy {} launched ({} members)",
+                    convoy.id,
+                    convoy.members.len()
+                );
+                if let Err(e) = gt_mayor::mayor::delegate(&mayor, id, "ops", summary).await {
+                    eprintln!("[gt] mayor delegate failed: {e}");
+                }
+            }
+        }
+    })
 }
 
 /// Periodic Heartbeat for the `hq-boot` watchdog session (hq-mc72.12 C10 boot-status). Every
