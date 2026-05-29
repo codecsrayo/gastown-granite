@@ -158,6 +158,81 @@ async fn merge_merged_releases_capacity_even_when_repo_get_errors() {
     root.shutdown();
 }
 
+/// hq-mcyc.6 regression sibling: a failed merge (Merging -> Failed) must also release the
+/// dispatcher slot. Previously the Failed handler only escalated + finished deacon and the
+/// slot stayed consumed forever.
+#[tokio::test]
+async fn merge_failed_releases_capacity() {
+    let dir = tempdir();
+    let log = dir.join("events.jsonl");
+
+    let lifecycle = PolecatLifecycle::new(Box::new(FakeTmux::new()), template());
+    let (effects, quota_slot) = RealEffects::new(lifecycle, test_polecat_supervisor());
+    let repo = Arc::new(FailingGet::new());
+    repo.inner
+        .upsert(&Bead::new("hq-mcyc-6-r1", "fail regression bead", BeadStatus::Pending, 1))
+        .await
+        .unwrap();
+
+    let root = spawn(
+        repo.clone(),
+        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
+        Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
+        effects,
+        SystemClock,
+        &log,
+        RootConfig {
+            capacity: 1,
+            ..RootConfig::default()
+        },
+    );
+    let _ = quota_slot.set(root.quota.clone());
+
+    root.sched
+        .exec(SchedCommand::MarkDispatched(MarkDispatched {
+            bead: "hq-mcyc-6-r1".into(),
+            worker: "worker-b".into(),
+        }))
+        .await
+        .expect("mark_dispatched");
+    let (_, in_flight) = root.sched.snapshot().await;
+    assert_eq!(in_flight, 1, "dispatch should consume the slot");
+
+    root.merge
+        .submit("hq-mcyc-6-r1", "feat/fail-regression", "msg-r6")
+        .await;
+    let saw_ready = wait_for(Duration::from_secs(3), || {
+        any_kind(root.log_path(), "merge.ready")
+    })
+    .await;
+    assert!(saw_ready, "merge.ready did not appear after submit");
+
+    root.merge
+        .fail("hq-mcyc-6-r1", "synthetic conflict")
+        .await;
+    let saw_failed = wait_for(Duration::from_secs(3), || {
+        any_kind(root.log_path(), "merge.failed")
+    })
+    .await;
+    assert!(saw_failed, "merge.failed did not appear after fail");
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let final_in_flight = loop {
+        let (_, n) = root.sched.snapshot().await;
+        if n == 0 || Instant::now() >= deadline {
+            break n;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(
+        final_in_flight, 0,
+        "in_flight stuck at {final_in_flight} after merge.failed"
+    );
+
+    root.shutdown();
+}
+
 fn any_kind(path: &std::path::Path, kind: &str) -> bool {
     gt_audit::read_all(path)
         .map(|recs| recs.iter().any(|r| r.kind == kind))

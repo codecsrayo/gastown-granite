@@ -776,6 +776,10 @@ where
             // Deacon: a failed merge also terminates the in-flight entry (FinishItem for an
             // unknown id is a no-op so an isolated Failed without a prior Ready is safe).
             GtEvent::Merge(MergeEvent::Failed { bead, reason }) => {
+                // hq-mcyc.6: release the dispatcher slot FIRST. A failed merge is just as
+                // terminal as a Merged one for the bead's capacity hold; without this the slot
+                // stayed consumed forever (same shape as the Merged leak hq-mcyc.2 fixed).
+                self.sched.capacity_freed().await;
                 self.escalate(Signal::MergeStuck {
                     bead: bead.clone(),
                     reason: reason.clone(),
