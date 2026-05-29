@@ -123,9 +123,100 @@ esperado, y bloquear el trabajo dependiente.
 
 ---
 
+## 2. Patrón validate → execute y convención `.` ↔ `_` (`hq-mcp-onboard.2`)
+
+Todo tool mutador en `gt-mcp` viene como **par**: `<tool>.validate` y
+`<tool>.execute`. La convención no es decorativa — refleja cómo los actores
+reciben el comando: `validate` chequea precondiciones sin tocar estado;
+`execute` corre la misma validación adentro del actor y luego aplica el
+efecto. Detalle del *por qué* (audit, replay, invariantes) en
+[§3](#3-why-rationale-hq-mcp-onboard3).
+
+### 2.1 Cuándo correr `validate`
+
+Por defecto **no hace falta**: `execute` valida internamente y devuelve el
+mismo error si la precondición no se cumple. Úsalo solo en:
+
+- **Preview** — quieres mostrar al usuario "esto haría X, ¿confirmas?" sin
+  consumir slot ni emitir evento.
+- **Pipelines** — chequeo barato antes de gastar capacidad (e.g. `enqueue`
+  contra slot ya lleno).
+- **Form validation** — UI que quiere feedback inmediato sobre `id` libre,
+  `priority` en rango, `rig` registrado, etc.
+
+`validate` **nunca** muta. Si el actor devuelve `ok` y luego corres `execute`,
+puede fallar igual: hay una carrera entre ambos llamados. La invariante real
+sigue siendo la chequeada *dentro* de `execute`.
+
+### 2.2 Cuándo correr `execute` directo
+
+Caso normal. El actor corre validate adentro de la misma transacción que el
+efecto, así que **no hay** ventana entre check y apply. Si el chequeo falla,
+te llega el mismo error que daría `validate` — sin estado mutado, sin evento
+emitido, sin slot consumido.
+
+### 2.3 Conversión `.` ↔ `_`
+
+El nombre **canónico** (en docs, eventos, código Rust, schemas de actor)
+usa puntos:
+
+```
+scheduling.create_bead.execute
+patrol.register.execute
+agent.transition.validate
+```
+
+El runtime de Claude Code expone los mismos tools con guiones bajos y prefijo
+de server:
+
+```
+mcp__gt-mcp__scheduling_create_bead_execute
+mcp__gt-mcp__patrol_register_execute
+mcp__gt-mcp__agent_transition_validate
+```
+
+Reglas exactas:
+
+| Forma canónica | Forma runtime |
+|---|---|
+| `<dominio>.<accion>.<fase>` | `mcp__<server>__<dominio>_<accion>_<fase>` |
+| `.` (separador) | `_` (en runtime) |
+| `<server>` ausente (implícito) | `mcp__<server>__` prefijo explícito |
+| `accion` con guión bajo (`create_bead`) | igual (`create_bead` no se altera) |
+
+El `accion` puede contener `_` propios (`create_bead`, `mark_dispatched`,
+`set_prefix`, `complete_member`) — esos guiones bajos **son parte del nombre
+de la acción** y no separadores. Reconstruir el nombre canónico desde el
+runtime requiere conocer dónde corta `dominio`/`accion`/`fase`. Heurística:
+`fase` siempre es la última pieza y es `validate` o `execute`; `dominio`
+es la primera pieza; lo del medio es `accion` completa (incluyendo sus
+`_` internos).
+
+Ejemplo:
+
+```
+mcp__gt-mcp__scheduling_create_bead_execute
+└── server ─┘└─ dom ─┘└────── accion ──────┘└ fase ┘
+
+→ scheduling.create_bead.execute
+```
+
+### 2.4 Cómo lo ves en logs
+
+Los eventos del event-log usan **siempre** la forma canónica con puntos:
+
+```
+2026-05-29T23:38:01Z scheduling.dispatched bead=hq-mcp-issues.1 worker=claude-host
+2026-05-29T23:48:35Z agent.transition.executed id=hq-mcp-onboard from=open to=working
+```
+
+Si necesitas correlacionar un tool call de Claude Code con su evento, mapea
+el `mcp__<server>__a_b_c_phase` → `a.b_c.phase` con la regla de §2.3.
+
+---
+
 ## Secciones pendientes
 
-- `hq-mcp-onboard.2` — validate → execute pattern + convención `.` ↔ `_`
 - `hq-mcp-onboard.3` — why-rationale (audit + scope + invariantes + replay)
 - `hq-mcp-onboard.4` — gap discipline workflow
 - `hq-mcp-onboard.5` — in-session vs out-of-session split
