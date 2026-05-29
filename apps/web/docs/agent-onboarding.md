@@ -386,9 +386,101 @@ disciplina del sistema. Tú no.
 
 ---
 
+## 5. In-session vs out-of-session (`hq-mcp-onboard.5`)
+
+"Agente" no es una sola cosa. Hay al menos dos modos de operar y los tools
+disponibles, el flujo de errores, y la forma de reportar progreso cambian
+entre ambos. Saber en cuál estás ahorra confusiones.
+
+### 5.1 In-session (Claude Code)
+
+Sesión interactiva o headless de Claude Code (lo que está leyendo este
+documento ahora mismo). Tools MCP llegan **inyectados al runtime** — los ves
+como `mcp__gt-mcp__<...>` en el catálogo de tools. El runtime gestiona la
+conexión HTTP, los timeouts, y los reintentos.
+
+Características:
+
+- Tools MCP están deferred al inicio; se cargan vía `ToolSearch` por nombre
+  o keyword (§1.2).
+- Recursos se leen con `ReadMcpResourceTool` / `ListMcpResourcesTool` —
+  primitivas del runtime, no tools del server.
+- Identidad del caller = sesión Claude (no agente Gas Town). El `actor` que
+  llega al server depende de cómo está configurada la conexión (stdio
+  hereda env; HTTP usa headers).
+- Errores llegan como tool_use_error con el JSON del server adentro;
+  reintenta si es transitorio, abre bead si es scope o gap.
+- No tienes acceso a HTTP raw — el runtime tiene su capa MCP propia.
+
+**Ejemplo**: claim de bead desde el host (esta sesión) → tools
+`mcp__gt-mcp__*` directos. Si el tool no existe, opciones son `ToolSearch`,
+abrir bead, o escalar al humano (no `curl`).
+
+### 5.2 Out-of-session (CLI, scripts, agentes no-Claude)
+
+Cualquier cosa que **no** sea Claude Code: shell del operador,
+job programado, agente custom, gateway. Acceden al server vía:
+
+- **`gt-mcp-cli`** — Rust client en `/home/nixos/gt-mcp-cli`, instalado
+  vía cargo. Subcomandos: `tools`, `resources`, `call`, `read`.
+- **HTTP raw** — POST a `http://127.0.0.1:8765/mcp` con frames JSON-RPC
+  streamable. Útil cuando necesitas control fino o desde un lenguaje que
+  no tiene cliente MCP.
+- **Otro cliente MCP** — Cursor, Inspector, etc. Mismas reglas.
+
+Características:
+
+- Catálogo se descubre por llamada explícita (`tools/list`, `resources/list`),
+  no inyección runtime.
+- Identidad la pones tú vía headers de la conexión (`X-GT-Actor`,
+  `X-GT-Role`); sin eso, el server asume default (operator/anon, depende
+  config).
+- Errores son JSON-RPC; sin runtime que los empaquete, los manejas tú.
+- Conexión es tu responsabilidad: reconectar tras restart, manejar timeouts,
+  no pisar el slot del dispatcher si encolas en bucle.
+
+**Ejemplo**: smoke test de un nuevo tool. Operador corre:
+
+```bash
+gt-mcp-cli call scheduling.create_bead.execute \
+  --arg id=test-smoke-1 \
+  --arg title="smoke test" \
+  --arg priority=2
+```
+
+Out-of-session también es el modo correcto para **automation** que corre
+fuera de Claude (cron, hooks, sheriffs). Si necesitas que algo pase sin un
+agente humano, va por CLI o HTTP, no por una sesión Claude headless.
+
+### 5.3 Reglas que cambian entre modos
+
+| Aspecto | In-session | Out-of-session |
+|---|---|---|
+| Discovery | `ToolSearch` + runtime inject | `tools/list` HTTP |
+| Identidad | runtime + env de sesión | headers explícitos |
+| Errores | tool_use_error | JSON-RPC raw |
+| Reintentos | runtime parcial | tú mismo |
+| Recursos | `Read/ListMcpResourceTool` | `resources/read`, `resources/list` |
+| Disponibilidad | requiere sesión viva | persistente |
+
+### 5.4 Cuál usar para qué
+
+- **Trabajo de agente** (claim, transition, commit): in-session.
+- **Bootstrap, smoke tests, reproducir bugs**: out-of-session (CLI).
+- **Integración con CI / cron / hooks externos**: out-of-session (CLI o
+  HTTP).
+- **Operador haciendo recuperación manual**: out-of-session + escape hatch
+  Dolt si MCP no llega.
+
+Si te pillas mezclando (sesión Claude que abre un shell que llama
+`gt-mcp-cli` para hacer lo que ya podría hacer in-session) — para. Es
+señal de que falta un tool, o de que estás duplicando RBAC, o de que algo
+del runtime no se cargó. Diagnostica antes de codificar el atajo.
+
+---
+
 ## Secciones pendientes
 
-- `hq-mcp-onboard.5` — in-session vs out-of-session split
 - `hq-mcp-onboard.6` — memory frontmatter version/status
 - `hq-mcp-onboard.7` — tool `help` (índice + URIs + version inline)
 - `hq-mcp-onboard.8` — tool `report_gap`
