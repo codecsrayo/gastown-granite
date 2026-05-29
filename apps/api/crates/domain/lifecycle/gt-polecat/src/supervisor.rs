@@ -9,7 +9,9 @@
 //! Like `gt_agent::supervisor`, it never touches the (sync, `!Send`) bus directly: it pushes
 //! envelopes to an `mpsc` the bus-owning task drains.
 
+use std::collections::HashMap;
 use std::io;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -17,8 +19,9 @@ use tokio::sync::mpsc;
 use gt_agent::AgentEvent;
 use gt_events::Envelope;
 
-use crate::lifecycle::{heartbeat_is_stale, spawn_process, SpawnSpec, SpawnedPolecat};
-use crate::restart::RestartTracker;
+use crate::lifecycle::{heartbeat_is_stale, spawn_process, spawn_tmux, SpawnSpec, SpawnedPolecat};
+use crate::restart::{RestartConfig, RestartTracker};
+use crate::tmux::Tmux;
 
 /// Why a watched polecat stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,5 +247,229 @@ mod daemon_tests {
         .await;
         // initial + 2 restarts, then crash-loop blocks further restarts.
         assert_eq!(runs.load(Ordering::SeqCst), 3);
+    }
+}
+
+/// Supervises the set of **production tmux polecats** the orchestrator has slung (hq-mc72.12
+/// C5). Unlike [`supervise_polecat`] — which owns a single direct-child `tokio::process::Child`
+/// — production polecats are detached `tmux` sessions (a coding agent in a pane) created by
+/// `RealEffects::sling` via [`crate::PolecatLifecycle`]; this watcher can only observe them by
+/// asking `tmux` whether the session still exists. Each [`tick`] is one supervision pass:
+/// a watched session whose `tmux has-session` is gone is presumed dead and re-slung (subject
+/// to the same [`RestartTracker`] backoff + crash-loop budget polecats already use); a session
+/// that is still alive resets its budget; one that has exhausted its budget is dropped.
+///
+/// `unwatch_member` is how completed work leaves the set: when a slung bead finishes (the
+/// composition root observes `MergeEvent::Merged`), the entry whose `hook_bead` matches is
+/// removed so finished work is never re-slung. The type is `Send + Sync` (interior `Mutex`) so
+/// the same `Arc<PolecatSupervisor>` can be shared by the sling edge (which calls [`watch`]),
+/// the reactor (which calls [`unwatch_member`]), and the boot loop (which calls [`tick`]).
+///
+/// [`tick`]: PolecatSupervisor::tick
+/// [`watch`]: PolecatSupervisor::watch
+/// [`unwatch_member`]: PolecatSupervisor::unwatch_member
+pub struct PolecatSupervisor {
+    tmux: Arc<dyn Tmux>,
+    state: Mutex<SupervisorState>,
+}
+
+struct SupervisorState {
+    /// session id -> spec to re-sling it from.
+    watched: HashMap<String, SpawnSpec>,
+    tracker: RestartTracker,
+    /// Per-session re-sling count (separate from the tracker's crash-loop window) — a hard
+    /// cap so a permanently-broken polecat is eventually abandoned.
+    restarts: HashMap<String, u32>,
+    max_restarts: u32,
+}
+
+impl PolecatSupervisor {
+    pub fn new(tmux: Arc<dyn Tmux>, config: RestartConfig, max_restarts: u32) -> Self {
+        Self {
+            tmux,
+            state: Mutex::new(SupervisorState {
+                watched: HashMap::new(),
+                tracker: RestartTracker::new(config),
+                restarts: HashMap::new(),
+                max_restarts,
+            }),
+        }
+    }
+
+    /// Register a freshly-slung polecat so its death is detected and recovered. Keyed by
+    /// `spec.session`; re-watching the same session replaces the spec.
+    pub fn watch(&self, spec: SpawnSpec) {
+        let mut st = self.state.lock().unwrap();
+        st.watched.insert(spec.session.clone(), spec);
+    }
+
+    /// Stop supervising a session by id (e.g. operator-killed; do not resurrect).
+    pub fn unwatch(&self, session: &str) {
+        let mut st = self.state.lock().unwrap();
+        st.watched.remove(session);
+        st.restarts.remove(session);
+    }
+
+    /// Stop supervising whatever polecat was slung for `member` (its `hook_bead`). Called when
+    /// the work completes so finished beads are never re-slung. Removes every matching entry.
+    pub fn unwatch_member(&self, member: &str) {
+        let mut st = self.state.lock().unwrap();
+        let drop: Vec<String> = st
+            .watched
+            .iter()
+            .filter(|(_, spec)| spec.hook_bead.as_deref() == Some(member))
+            .map(|(session, _)| session.clone())
+            .collect();
+        for session in drop {
+            st.watched.remove(&session);
+            st.restarts.remove(&session);
+        }
+    }
+
+    /// Number of polecats currently supervised.
+    pub fn watched_count(&self) -> usize {
+        self.state.lock().unwrap().watched.len()
+    }
+
+    /// One supervision pass. For each watched session: alive (tmux has-session) → reset its
+    /// restart budget; dead → re-sling if budget + backoff allow, else drop. Returns how many
+    /// were re-slung this pass. `now` is edge-stamped unix seconds (same discipline as the
+    /// rest of the kernel). The `tmux` I/O runs while the state lock is held — `tick` is driven
+    /// by a single slow timer and `watch`/`unwatch` are rare, so contention is negligible.
+    pub fn tick(&self, now: u64) -> usize {
+        let mut st = self.state.lock().unwrap();
+        let sessions: Vec<String> = st.watched.keys().cloned().collect();
+        let mut reslung = 0usize;
+        let mut to_drop: Vec<String> = Vec::new();
+        for session in sessions {
+            if self.tmux.has_session(&session) {
+                st.tracker.record_success(&session, now);
+                continue;
+            }
+            // Dead. Check the hard cap and the tracker's backoff / crash-loop gate.
+            let count = *st.restarts.get(&session).unwrap_or(&0);
+            if count >= st.max_restarts || !st.tracker.can_restart(&session, now) {
+                to_drop.push(session);
+                continue;
+            }
+            st.tracker.record_restart(&session, now);
+            let spec = st.watched.get(&session).cloned();
+            if let Some(spec) = spec {
+                match spawn_tmux(self.tmux.as_ref(), &spec) {
+                    Ok(()) => {
+                        *st.restarts.entry(session).or_insert(0) += 1;
+                        reslung += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("[polecat-supervisor] re-sling failed session={session}: {e}");
+                    }
+                }
+            }
+        }
+        for session in to_drop {
+            st.watched.remove(&session);
+            st.restarts.remove(&session);
+            eprintln!(
+                "[polecat-supervisor] giving up on session={session} (restart budget exhausted)"
+            );
+        }
+        reslung
+    }
+}
+
+#[cfg(test)]
+mod polecat_supervisor_tests {
+    use super::*;
+    use crate::tmux::FakeTmux;
+
+    fn spec(session: &str, member: &str) -> SpawnSpec {
+        SpawnSpec {
+            session: session.to_string(),
+            rig: "granite".to_string(),
+            polecat: session.to_string(),
+            crew: None,
+            workdir: std::env::temp_dir(),
+            command: "sleep".to_string(),
+            args: vec!["30".to_string()],
+            env: vec![("GT_ROLE".to_string(), "polecat".to_string())],
+            hook_bead: Some(member.to_string()),
+            issue: None,
+            heartbeat: std::env::temp_dir().join(format!("{session}.hb")),
+        }
+    }
+
+    #[test]
+    fn dead_session_is_reslung_alive_is_left_alone() {
+        let tmux: Arc<FakeTmux> = Arc::new(FakeTmux::new());
+        let sup = PolecatSupervisor::new(
+            tmux.clone(),
+            RestartConfig {
+                initial_backoff_secs: 1,
+                crash_loop_count: 100,
+                ..RestartConfig::default()
+            },
+            u32::MAX,
+        );
+        // Sling it once (the session now exists) and watch it.
+        let s = spec("gt-furiosa", "hq-1");
+        spawn_tmux(tmux.as_ref(), &s).unwrap();
+        sup.watch(s);
+        assert!(tmux.has_session("gt-furiosa"));
+
+        // Alive → no re-sling.
+        assert_eq!(sup.tick(0), 0);
+
+        // Kill it → next tick re-slings (session re-created).
+        tmux.kill_session("gt-furiosa").unwrap();
+        assert!(!tmux.has_session("gt-furiosa"));
+        assert_eq!(sup.tick(1000), 1);
+        assert!(tmux.has_session("gt-furiosa"), "re-slung session exists again");
+    }
+
+    #[test]
+    fn unwatch_member_stops_resurrection() {
+        let tmux: Arc<FakeTmux> = Arc::new(FakeTmux::new());
+        let sup = PolecatSupervisor::new(tmux.clone(), RestartConfig::default(), u32::MAX);
+        let s = spec("gt-nux", "hq-7");
+        spawn_tmux(tmux.as_ref(), &s).unwrap();
+        sup.watch(s);
+        assert_eq!(sup.watched_count(), 1);
+
+        // Work completed → unwatch by member; a dead session is now NOT re-slung.
+        sup.unwatch_member("hq-7");
+        assert_eq!(sup.watched_count(), 0);
+        tmux.kill_session("gt-nux").unwrap();
+        assert_eq!(sup.tick(1000), 0);
+        assert!(!tmux.has_session("gt-nux"), "completed polecat stays dead");
+    }
+
+    #[test]
+    fn restart_budget_exhaustion_drops_the_entry() {
+        let tmux: Arc<FakeTmux> = Arc::new(FakeTmux::new());
+        let sup = PolecatSupervisor::new(
+            tmux.clone(),
+            RestartConfig {
+                initial_backoff_secs: 1,
+                crash_loop_count: 1000,
+                ..RestartConfig::default()
+            },
+            2, // hard cap: 2 re-slings then give up
+        );
+        let s = spec("gt-slit", "hq-9");
+        spawn_tmux(tmux.as_ref(), &s).unwrap();
+        sup.watch(s);
+
+        // Kill + tick three times with an advancing clock so backoff windows pass. The first
+        // two ticks re-sling; the third hits the cap and drops the entry.
+        for (i, now) in [1000u64, 2000, 3000].into_iter().enumerate() {
+            tmux.kill_session("gt-slit").unwrap();
+            let reslung = sup.tick(now);
+            if i < 2 {
+                assert_eq!(reslung, 1, "tick {i} should re-sling");
+            } else {
+                assert_eq!(reslung, 0, "tick {i} is past the cap");
+            }
+        }
+        assert_eq!(sup.watched_count(), 0, "exhausted polecat dropped");
     }
 }
