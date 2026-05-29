@@ -30,7 +30,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gt_beads::{BeadRepository, InMemoryBeads};
+use gt_beads::{Bead, BeadRepository, BeadStatus, InMemoryBeads};
+use serde::Deserialize;
 use gt_merge::{InMemoryMergeRepo, MergeRepository};
 use gt_orchestration::{InMemoryOrchRepo, OrchRepository};
 use gt_patrol::{InMemoryPatrolRepo, PatrolRepository};
@@ -202,6 +203,11 @@ async fn run<R, MR, PR, OR>(
     // read-side and would double-submit if it also subscribed.
     let refinery_task = spawn_refinery_daemon(&root);
 
+    // hq-mc72.12 C8 — operator warrant daemon. Watches a gt-channel for JSON-shaped warrant
+    // messages and turns each into an escalation status bead. Operators emit via
+    // `gt emit-event` (C7, gt-cli). Same supervised shape as the refinery.
+    let warrant_task = spawn_warrant_daemon(&root);
+
     eprintln!(
         "[gt] composition root up — event log: {}",
         root.log_path().display()
@@ -236,6 +242,12 @@ async fn run<R, MR, PR, OR>(
     // its subscribe thread; in-flight work for any message already submitted is durable in
     // the merge actor / audit log.
     if let Some(task) = refinery_task {
+        task.abort();
+        let _ = task.await;
+    }
+    // Warrant daemon: same teardown — abort the channel watcher; already-upserted escalation
+    // beads are durable in the repo / audit log.
+    if let Some(task) = warrant_task {
         task.abort();
         let _ = task.await;
     }
@@ -320,14 +332,106 @@ where
                 }
             }
         };
-        gt_polecat::supervise_daemon("refinery", make, &mut tracker, u32::MAX, || {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0)
-        })
-        .await;
+        gt_polecat::supervise_daemon("refinery", make, &mut tracker, u32::MAX, now_secs)
+            .await;
     }))
+}
+
+/// JSON shape an operator emits on the `warrant` channel (hq-mc72.12 C8). Sent via
+/// `gt emit-event warrant '{"worker":"...","reason":"..."}'` (gt-cli C7).
+#[derive(Debug, Deserialize)]
+struct WarrantRequest {
+    worker: String,
+    reason: String,
+}
+
+/// Build the deterministic escalation bead an operator-filed warrant leaves behind. Status
+/// `Failed` + priority 0 (P0) mirrors the cross-domain `escalation_bead` in root.rs (one row
+/// per worker; re-filing upserts the same id instead of piling up duplicates).
+fn warrant_bead(req: &WarrantRequest) -> Bead {
+    Bead::new(
+        format!("escalation-{}", req.worker),
+        format!(
+            "Warrant filed: worker {} ({})",
+            req.worker, req.reason
+        ),
+        BeadStatus::Failed,
+        0,
+    )
+}
+
+/// Spawn the supervised operator-warrant daemon (hq-mc72.12 C8). Watches `GT_WARRANT_CHANNEL`
+/// (default `warrant`) under `GT_CHANNEL_ROOT`; each well-formed `WarrantRequest` becomes a
+/// `BeadStatus::Failed` escalation row in the bead repo. Malformed messages are acked +
+/// logged (same policy as the refinery — never re-deliver). Returns `None` when the channel
+/// cannot be opened. Same supervised shape as the refinery so transient channel/watcher
+/// failures auto-recover with backoff.
+fn spawn_warrant_daemon<R>(root: &RootHandle<R>) -> Option<tokio::task::JoinHandle<()>>
+where
+    R: BeadRepository + Clone + 'static,
+{
+    let root_dir = std::env::var("GT_CHANNEL_ROOT")
+        .unwrap_or_else(|_| "/gt/.channels".to_string());
+    let channel_name =
+        std::env::var("GT_WARRANT_CHANNEL").unwrap_or_else(|_| "warrant".to_string());
+    let channel = match gt_channel::Channel::open(&root_dir, &channel_name) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "[gt] warrant disabled — channel open failed at {root_dir}/{channel_name}: {e}"
+            );
+            return None;
+        }
+    };
+    eprintln!("[gt] warrant: operator channel {}", channel.dir().display());
+
+    let repo = root.repo.clone();
+    Some(tokio::spawn(async move {
+        let mut tracker = gt_polecat::RestartTracker::new(gt_polecat::RestartConfig::default());
+        let make = move || {
+            let channel = channel.clone();
+            let repo = repo.clone();
+            async move {
+                let mut rx = match channel.subscribe(64) {
+                    Ok(rx) => rx,
+                    Err(e) => {
+                        eprintln!("[gt] warrant subscribe failed: {e} — supervisor will restart");
+                        return;
+                    }
+                };
+                while let Some(msg) = rx.recv().await {
+                    match serde_json::from_slice::<WarrantRequest>(&msg.payload) {
+                        Ok(req) => {
+                            let bead = warrant_bead(&req);
+                            match repo.upsert(&bead).await {
+                                Ok(()) => eprintln!(
+                                    "[gt] warrant filed worker={} bead={}",
+                                    req.worker, bead.id
+                                ),
+                                Err(e) => eprintln!(
+                                    "[gt] warrant upsert failed worker={}: {e}",
+                                    req.worker
+                                ),
+                            }
+                        }
+                        Err(e) => eprintln!(
+                            "[gt] warrant malformed payload (ack + drop): {e}"
+                        ),
+                    }
+                    let _ = channel.ack(&msg);
+                }
+            }
+        };
+        gt_polecat::supervise_daemon("warrant", make, &mut tracker, u32::MAX, now_secs).await;
+    }))
+}
+
+/// Edge-stamped unix seconds for the supervisor clock.
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Wait for SIGTERM or SIGINT. Returns the unit when the first arrives. If signal install

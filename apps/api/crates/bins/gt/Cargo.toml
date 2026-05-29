@@ -57,7 +57,8 @@ gt-store-pg = { path = "../../kernel/gt-store-pg" }
 # `signal` (ctrl_c) is bin-only; the workspace tokio set stays minimal for the libs.
 tokio = { workspace = true, features = ["signal"] }
 serde.workspace = true
+# hq-mc72.12 C8 — warrant daemon decodes JSON-shaped channel messages.
+serde_json.workspace = true
 
 [dev-dependencies]
 ulid.workspace = true
-serde_json.workspace = true
