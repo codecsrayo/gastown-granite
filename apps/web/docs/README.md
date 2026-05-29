@@ -65,18 +65,18 @@ internal/web/                     ← Go viejo, retirado, NO TOCAR
 
 ## Cómo abro un bead nuevo (si encuentro un gap)
 
-**Los agentes hablan con el orquestador SOLO vía MCP.** El servidor está
-registrado como **`gt-mcp`** en `~/.claude.json` (HTTP a
-`http://127.0.0.1:8765/mcp`), así que dentro de una sesión Claude Code los
-tools ya aparecen nativos en tu lista como `mcp__gt-mcp__*` — **llámalos
-directamente**. No abras shell en `gastown-dolt` ni en `gastown-gt`, no busques
-binarios en rutas. Si el MCP no expone una operación, **el gap mismo se vuelve
-un bead** — no es excusa para hacer bypass.
+**Canal único = `gt-mcp`** (servidor MCP registrado en `~/.claude.json`).
+Dentro de Claude Code tus tools ya incluyen `mcp__gt-mcp__*` — llámalos
+directamente. Snapshots con `ReadMcpResourceTool(server="gt-mcp", uri="gt://…")`.
 
-1. Verifica que el gap no esté ya listado en
+Agentes **no** necesitan saber URL, container name, ni CLI binarios. Esos son
+detalles de backend. Si la operación que necesitas no está en
+`mcp__gt-mcp__*`, **el gap se vuelve un bead** — no se bypassea.
+
+1. Verifica que el gap no esté listado en
    [frontend-api-surface.md](frontend-api-surface.md) o
    [frontend-migration-sveltekit.md](frontend-migration-sveltekit.md).
-2. Si es nuevo: crea bead vía los tools nativos:
+2. Crea bead vía el tool nativo:
    ```
    mcp__gt-mcp__scheduling_create_bead_validate({
      "id":"hq-fe-…","title":"…","priority":2
@@ -85,8 +85,6 @@ un bead** — no es excusa para hacer bypass.
      "id":"hq-fe-…","title":"…","priority":2
    })
    ```
-   Equivalente fuera de Claude Code (shell, scripts):
-   `gt-mcp-cli call scheduling.create_bead.execute --json '…'`.
    **Limitación conocida (2026-05-29):** `scheduling.create_bead` escribe en
    la tabla `beads` (5 columnas: id, title, status, priority, assignee),
    no en `issues` (~25 columnas, leída por el dashboard kanban + el plan
@@ -97,9 +95,10 @@ un bead** — no es excusa para hacer bypass.
 3. Actualiza la tabla de estado en
    [frontend-migration-sveltekit.md](frontend-migration-sveltekit.md).
 4. Si abres dependencias entre beads, añádelas al grafo del mismo doc.
-5. **No** uses `docker exec gastown-dolt dolt sql` desde un agente — es
-   escape hatch operador-only (sin audit, sin scope, sin invariantes del
-   reactor).
+5. **Nunca** desde un agente: `docker exec`, acceso directo a Dolt, ni CLI
+   binarios externos. Esos son escape hatch operador-only (sin audit, sin
+   scope, sin invariantes del reactor). Ver
+   [`feedback_mcp_canonical_for_agents`](../../../../.claude/projects/-home-nixos-gastown/memory/feedback_mcp_canonical_for_agents.md).
 
 ## Decisiones de scope (NO en MVP)
 

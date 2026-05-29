@@ -128,13 +128,20 @@ Frontend should filter them out unless building an audit view.
 ## gt-mcp surface (not the browser path)
 
 The browser frontend does **not** call gt-mcp. This is the **agent**
-frontier: registered as `gt-mcp` in `~/.claude.json`, HTTP at
-`127.0.0.1:8765/mcp`. Inside a Claude Code session, every tool listed
-below appears as `mcp__gt-mcp__<tool_with_underscores>` (e.g.
-`agent.transition.execute` → `mcp__gt-mcp__agent_transition_execute`).
-Agents call those directly — no shell, no `docker exec`. Outside
-Claude Code (scripts, other clients): use `gt-mcp-cli` against the same
-endpoint.
+frontier — the single channel agents use to talk to the orchestrator.
+
+**Channel = `gt-mcp`.** Registered in `~/.claude.json`; inside Claude Code
+every tool listed below is in your tool list as
+`mcp__gt-mcp__<tool_with_underscores>` (the dots in the method name become
+underscores: `agent.transition.execute` → `mcp__gt-mcp__agent_transition_execute`).
+Resources go through `ReadMcpResourceTool(server="gt-mcp", uri="gt://…")` and
+`ListMcpResourcesTool(server="gt-mcp")`. **Agents call those directly** — no
+shell, no URL, no container path.
+
+Backend wire-up (operator detail, not agent-visible): HTTP transport,
+`127.0.0.1:8765/mcp`, container `gastown-gt-mcp`. External clients
+(scripts, automation outside Claude Code) hit the same endpoint via
+`gt-mcp-cli`.
 
 ### Resources (read-only snapshots)
 
