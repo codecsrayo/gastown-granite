@@ -12,7 +12,8 @@
 use serde_json::json;
 
 use gt_audit::EventRecord;
-use gt_feed::{detect, Curator, DeadEntry, FeedProblem, FeedState};
+use gt_feed::activity::{self, ActivityInfo};
+use gt_feed::{detect, escalation, Curator, DeadEntry, FeedProblem, FeedState};
 
 fn record(event_id: &str, correlation_id: &str, ts: &str, kind: &str) -> EventRecord {
     EventRecord {
@@ -137,4 +138,102 @@ fn detect_quiet_when_failure_followed_by_success_recovery() {
         problems.is_empty(),
         "recovery (expired + later success) must not flag; got {problems:?}",
     );
+}
+
+// --- hq-mysw: activity color-coding (port of internal/activity) -------------------------
+
+#[test]
+fn activity_color_thresholds_match_go_original() {
+    // <5m green, 5-10m yellow, >10m red.
+    assert!(ActivityInfo::from_age(0).is_active());
+    assert!(ActivityInfo::from_age(4 * 60).is_active());
+    assert!(ActivityInfo::from_age(5 * 60).is_stale(), "exactly 5m is stale");
+    assert!(ActivityInfo::from_age(9 * 60).is_stale());
+    assert!(ActivityInfo::from_age(10 * 60).is_stuck(), "exactly 10m is stuck");
+    assert!(ActivityInfo::from_age(60 * 60).is_stuck());
+    assert_eq!(ActivityInfo::unknown().color, activity::COLOR_UNKNOWN);
+    assert_eq!(ActivityInfo::unknown().age_secs, None);
+}
+
+#[test]
+fn activity_format_age_is_short() {
+    assert_eq!(ActivityInfo::from_age(30).formatted_age, "<1m");
+    assert_eq!(ActivityInfo::from_age(5 * 60).formatted_age, "5m");
+    assert_eq!(ActivityInfo::from_age(2 * 60 * 60).formatted_age, "2h");
+    assert_eq!(ActivityInfo::from_age(3 * 24 * 60 * 60).formatted_age, "3d");
+}
+
+#[test]
+fn activity_view_codes_each_correlation_against_now() {
+    // c-fresh: last event 1 minute before now → green.
+    // c-stuck: last event 20 minutes before now → red.
+    let log = vec![
+        record("e1", "c-fresh", "2026-05-27T10:00:00Z", "agent.spawned"),
+        record("e2", "c-fresh", "2026-05-27T10:09:00Z", "agent.heartbeat"),
+        record("e3", "c-stuck", "2026-05-27T09:50:00Z", "scheduling.dispatched"),
+    ];
+    let state = Curator::fold(&log);
+    // now = 2026-05-27T10:10:00Z
+    let now = activity::parse_epoch_secs("2026-05-27T10:10:00Z").unwrap();
+
+    let rows = activity::activity_view(&state, now);
+    let fresh = rows.iter().find(|r| r.subject == "c-fresh").unwrap();
+    let stuck = rows.iter().find(|r| r.subject == "c-stuck").unwrap();
+
+    assert!(fresh.activity.is_active(), "1m old → green, got {:?}", fresh.activity);
+    assert!(stuck.activity.is_stuck(), "20m old → red, got {:?}", stuck.activity);
+}
+
+#[test]
+fn activity_view_unknown_for_unparseable_ts() {
+    let log = vec![record("e1", "c1", "not-a-timestamp", "agent.spawned")];
+    let state = Curator::fold(&log);
+    let rows = activity::activity_view(&state, 1_000_000);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].activity.color, activity::COLOR_UNKNOWN);
+}
+
+#[test]
+fn activity_view_clamps_future_timestamp_to_zero_age() {
+    // last_ts after now (clock skew) → age clamped to 0 → green, never underflow.
+    let log = vec![record("e1", "c1", "2026-05-27T10:00:00Z", "agent.spawned")];
+    let state = Curator::fold(&log);
+    let now = activity::parse_epoch_secs("2026-05-27T09:00:00Z").unwrap();
+    let rows = activity::activity_view(&state, now);
+    assert_eq!(rows[0].activity.age_secs, Some(0));
+    assert!(rows[0].activity.is_active());
+}
+
+// --- hq-mysw: escalation intents from feed gaps -----------------------------------------
+
+#[test]
+fn escalation_intents_raised_for_stuck_and_handler_error() {
+    let problems = vec![
+        FeedProblem::TimeoutMissed {
+            correlation_id: "c-merge".into(),
+            terminal_kind: "merge.failed".into(),
+            terminal_ts: "2026-05-27T10:00:00Z".into(),
+        },
+        FeedProblem::DeadLetterDrain {
+            kind: "merge.ready".into(),
+            error: "disk full".into(),
+        },
+    ];
+    let intents = escalation::intents(&problems);
+    assert_eq!(intents.len(), 2);
+    assert_eq!(intents[0].class, "timeout_missed");
+    assert_eq!(intents[0].subject, "c-merge");
+    assert_eq!(intents[1].class, "handler_error");
+    assert_eq!(intents[1].subject, "merge.ready");
+}
+
+#[test]
+fn escalation_intents_skip_unhandled_event() {
+    // Unhandled = no subscriber → feed-only, no operator escalation.
+    let problems = vec![FeedProblem::UnhandledEvent {
+        kind: "agent.spawned".into(),
+        event_id: "e1".into(),
+        correlation_id: Some("c1".into()),
+    }];
+    assert!(escalation::intents(&problems).is_empty());
 }

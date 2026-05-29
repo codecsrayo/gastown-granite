@@ -86,6 +86,7 @@ es la especificación de referencia.
 | [09-llm-integration.md](09-llm-integration.md) | Integración con modelos: `gt-mcp`, patrón `Command { validate, execute }`, scopes |
 | [10-go-rust-parity.md](10-go-rust-parity.md) | Auditoría Go ↔ Rust: cada `gt` command / daemon mapeado a route / MCP tool / RealEffects (COVERED/PARTIAL/MISSING + critical-path del flip + Roles/Dog kinds) |
 | [11-cutover-roadmap.md](11-cutover-roadmap.md) | Roadmap cutover Go→Rust: épicas Paso 8 (`hq-8iur`) + Paso 9, dependencias, e instrucciones de despacho por agente |
+| [13-operator-signals.md](13-operator-signals.md) | Señales de operador (hq-mysw): activity log read-side, escalation action, Notifier PORT, y la tabla de ruteo mail vs feed-only |
 
 ### Features
 

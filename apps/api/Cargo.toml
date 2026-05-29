@@ -23,6 +23,8 @@ members = [
     "crates/domain/gt-feed",
     # hq-t9vt Paso 9.C — ephemeral wisp domain + reaper compaction.
     "crates/domain/gt-wisp",
+    # hq-mysw Paso 9.F — Notifier PORT (operator signals: escalation / quota-block / merge-stuck).
+    "crates/domain/gt-notify",
     # hq-92z9 Paso 9.D role crates — scaffolding pass; behavior fills in subsequent commits.
     "crates/domain/gt-mayor",
     "crates/domain/gt-witness",

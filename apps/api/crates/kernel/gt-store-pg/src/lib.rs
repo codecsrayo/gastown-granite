@@ -9,12 +9,14 @@
 //! `docs/features/token-tracking-prediction.md` shape and the doc-04 persistence rules:
 //! append-heavy, no lost-update, idempotent on the relay key (`event_id`).
 
+mod activity;
 mod audit;
 mod conn;
 mod outbox;
 mod quota_repo;
 mod schema;
 
+pub use activity::{ActivityEntry, PgActivity};
 pub use audit::PgAudit;
 pub use conn::connect;
 pub use outbox::{PgFeedProjections, PgOutboxDrain, PgOutboxWriter};

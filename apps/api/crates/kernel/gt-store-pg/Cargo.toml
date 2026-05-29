@@ -9,6 +9,9 @@ gt-events = { path = "../gt-events" }
 gt-beads = { path = "../gt-beads" }
 gt-audit = { path = "../gt-audit" }
 gt-quota = { path = "../../domain/gt-quota" }
+# hq-mysw: the activity projection reuses gt-feed's color/age calculator + RFC3339 parse so the
+# SQL read-side and the in-memory `activity_view` share ONE threshold source of truth.
+gt-feed = { path = "../../domain/gt-feed" }
 tokio.workspace = true
 time = { workspace = true, features = ["std", "formatting", "macros"] }
 serde_json.workspace = true
@@ -18,6 +21,3 @@ serde_json.workspace = true
 # `macros` habilita el macro `sqlx::migrate!()`, que embebe los .sql leyendo solo el
 # directorio en build-time (no DB). `migrate` habilita el `Migrator` runtime.
 sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "time", "migrate", "macros"] }
-
-[dev-dependencies]
-gt-feed = { path = "../../domain/gt-feed" }

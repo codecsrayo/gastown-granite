@@ -11,6 +11,9 @@ gt-audit = { path = "../../kernel/gt-audit" }
 gt-events = { path = "../../kernel/gt-events" }
 serde.workspace = true
 serde_json.workspace = true
+# RFC3339 timestamp parsing in the activity view (hq-mysw). Parsing is pure + clock-free, so
+# the curator/reducer stay deterministic; only the activity projection reads `now` (injected).
+time = { workspace = true, features = ["parsing"] }
 
 [dev-dependencies]
 time.workspace = true

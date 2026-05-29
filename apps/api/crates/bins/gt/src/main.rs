@@ -36,8 +36,8 @@ use gt_patrol::{InMemoryPatrolRepo, PatrolRepository};
 use gt_plugin::PluginRegistry;
 use gt_sheriff::SheriffPlugin;
 use gt_root::{
-    load_state, spawn_hydrated, spawn_plugin_relay, spawn_sessions_projector, RealEffects,
-    RootConfig, RootHandle, SystemClock,
+    load_state, spawn_hydrated, spawn_plugin_relay, spawn_sessions_projector, MailNotifier,
+    RealEffects, RootConfig, RootHandle, SystemClock,
 };
 use gt_store_dolt::{DoltBeads, DoltMerge, DoltOrch, DoltPatrol, DoltSessions};
 use gt_store_pg::{PgOutboxDrain, PgOutboxWriter};
@@ -161,6 +161,17 @@ async fn run<R, MR, PR, OR>(
         }
     };
 
+    // hq-mysw: route operator signals through the bead-backed mail adapter (mail = beads in
+    // Gas Town). `repo.clone()` shares the same bead store the root writes to, so escalation
+    // mail lands where `gt mail` reads it. Addresses are configurable; defaults match the
+    // mayor→ops escalation lane.
+    let mail_from = std::env::var("GT_MAIL_FROM").unwrap_or_else(|_| "mayor/".to_string());
+    let mail_to = std::env::var("GT_MAIL_TO").unwrap_or_else(|_| "ops/".to_string());
+    let config = RootConfig {
+        notifier: Arc::new(MailNotifier::new(repo.clone(), mail_from, mail_to)),
+        ..RootConfig::default()
+    };
+
     let root = spawn_hydrated(
         repo,
         merge_repo,
@@ -169,7 +180,7 @@ async fn run<R, MR, PR, OR>(
         effects,
         SystemClock,
         log_path,
-        RootConfig::default(),
+        config,
         hydration,
     );
     let _ = quota_slot.set(root.quota.clone());

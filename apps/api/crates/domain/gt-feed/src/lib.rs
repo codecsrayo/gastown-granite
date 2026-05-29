@@ -14,13 +14,17 @@
 //!   log**. Para no acoplar `gt-feed` a `gt-bus`, el dead-letter entra por un tipo local
 //!   [`DeadEntry`] que el bin traduce desde su `DeadLetterEntry<GtEvent>` real.
 
+pub mod activity;
 mod curator;
 mod dead;
+pub mod escalation;
 mod problems;
 mod state;
 pub mod view;
 
+pub use activity::{activity_view, ActivityInfo, ActivityRow};
 pub use curator::Curator;
 pub use dead::DeadEntry;
+pub use escalation::{intents as escalation_intents, EscalationIntent};
 pub use problems::{detect, FeedProblem};
 pub use state::{Correlation, FeedState};

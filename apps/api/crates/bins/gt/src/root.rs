@@ -23,9 +23,10 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 
 use gt_audit::{read_all, EventRecord, EventStore, JsonlWriter};
-use gt_beads::{BeadRepository, BeadStatus};
+use gt_beads::{Bead, BeadRepository, BeadStatus};
 use gt_bus::DeadLetterEntry;
 use gt_events::{AppError, Envelope, EventKind};
+use gt_notify::{Channel, Notification, Notifier, Signal};
 use gt_plugin::PluginRegistry;
 
 use gt_agent::actor::{self as agent_actor, AgentHandle};
@@ -94,6 +95,22 @@ impl Effects for LogEffects {
     }
     fn rotate(&self, account: &str) {
         eprintln!("[gt] quota: rotate off account={account}");
+    }
+}
+
+/// Default [`Notifier`] (hq-mysw): log to stderr. The escalation status bead is the durable
+/// record regardless; this fallback just means no mail goes out until the bin wires the real
+/// bead-backed adapter (`MailNotifier`) into [`RootConfig::notifier`].
+pub struct LogNotifier;
+
+impl Notifier for LogNotifier {
+    fn notify(&self, n: &Notification) {
+        eprintln!(
+            "[gt] notify [{}/{}] {}",
+            n.signal.tag(),
+            n.severity.as_str(),
+            n.subject
+        );
     }
 }
 
@@ -200,6 +217,10 @@ pub struct RootConfig {
     /// the in-memory adapter so the bin boots end-to-end on a host without a configured
     /// secret store; the production bin replaces it with `gt_quota::keychain::linux::LinuxKeychain`.
     pub keychain: Arc<dyn Keychain>,
+    /// Operator-signal sink (hq-mysw). The reactor routes escalation / quota-block /
+    /// merge-stuck signals through this port. Defaults to [`LogNotifier`]; the production bin
+    /// installs the bead-backed `MailNotifier`, the gate injects `gt_notify::FakeNotifier`.
+    pub notifier: Arc<dyn Notifier>,
 }
 
 impl Default for RootConfig {
@@ -209,6 +230,7 @@ impl Default for RootConfig {
             model_weights: HashMap::new(),
             event_buffer: 1024,
             keychain: Arc::new(InMemoryKeychain::new()),
+            notifier: Arc::new(LogNotifier),
         }
     }
 }
@@ -482,6 +504,7 @@ where
         dead_count: dead_count.clone(),
         events: events_tx.clone(),
         keychain: keychain.clone(),
+        notifier: config.notifier.clone(),
     };
 
     let mut sched_rx = sched_rx;
@@ -560,6 +583,10 @@ struct Reactor<R, FX, CK> {
     /// Credential store the rotation chain flips on `Quota::Rotated`. The reaction is at the
     /// edge so the core stays pure (`docs/06-observability.md`).
     keychain: Arc<dyn Keychain>,
+    /// Operator-signal sink (hq-mysw). Escalation / quota-block / merge-stuck reactions build
+    /// a [`Notification`], decide via `gt_notify::route` whether it warrants mail, and (for
+    /// stuck escalations) also create a durable status bead through `repo`.
+    notifier: Arc<dyn Notifier>,
 }
 
 impl<R, FX, CK> Reactor<R, FX, CK>
@@ -655,9 +682,42 @@ where
                 self.sched.capacity_freed().await;
             }
             // Predictive rotation (Paso 6.c): the account will block (or just did) — rotate.
+            // hq-mysw: also raise the quota-block operator signal (notification-only; rotation
+            // already created the corrective action, so no status bead).
             GtEvent::Quota(QuotaEvent::BlockPredicted { account, .. })
             | GtEvent::Quota(QuotaEvent::AccountLimited { account, .. }) => {
                 self.effects.rotate(account);
+                self.escalate(Signal::QuotaBlock {
+                    account: account.clone(),
+                })
+                .await?;
+            }
+            // hq-mysw: a fully blocked account. Rotation may already have run upstream; this
+            // is the human heads-up that the account went dark.
+            GtEvent::Quota(QuotaEvent::Blocked { account, .. }) => {
+                self.escalate(Signal::QuotaBlock {
+                    account: account.clone(),
+                })
+                .await?;
+            }
+            // hq-mysw escalation action: the Witness raised a stuck-worker escalation
+            // (`witness.escalation_raised`). Create a status bead + route a notification.
+            // This is the "wired via Witness" path the gate exercises with a synthetic Stuck.
+            GtEvent::Witness(WitnessEvent::EscalationRaised { worker, age_secs }) => {
+                self.escalate(Signal::WorkerStuck {
+                    worker: worker.clone(),
+                    age_secs: *age_secs,
+                })
+                .await?;
+            }
+            // hq-mysw: a merge slot failed — the feed's `TimeoutMissed` (`.failed` terminal)
+            // class, surfaced live. Stuck lane → status bead + notification.
+            GtEvent::Merge(MergeEvent::Failed { bead, reason }) => {
+                self.escalate(Signal::MergeStuck {
+                    bead: bead.clone(),
+                    reason: reason.clone(),
+                })
+                .await?;
             }
             // hq-0bko.2 gate: a rotation landed. Flip the keychain's live pointer so the next
             // edge call uses the new account's credentials. Failure here is a real bug — log
@@ -673,5 +733,46 @@ where
             _ => {}
         }
         Ok(())
+    }
+
+    /// hq-mysw escalation action. Builds the canonical [`Notification`] for `signal`, creates a
+    /// durable status bead for stuck escalations (so the gap survives a restart and shows in
+    /// the bead queue), and — when `gt_notify::route` says the signal warrants mail — pushes it
+    /// through the injected [`Notifier`]. Quota-block is notification-only (no bead): rotation
+    /// already created the corrective action. A status-bead write failure dead-letters via the
+    /// `?`; the notification itself is best-effort and never blocks the loop.
+    async fn escalate(&mut self, signal: Signal) -> Result<(), AppError> {
+        if let Some(bead) = escalation_bead(&signal) {
+            self.repo.upsert(&bead).await?;
+        }
+        if gt_notify::route(&signal) == Channel::Mail {
+            self.notifier.notify(&Notification::for_signal(signal));
+        }
+        Ok(())
+    }
+}
+
+/// The status bead an escalation leaves behind, or `None` for notification-only signals.
+///
+/// Created as [`BeadStatus::Failed`], priority 0 (P0): `Failed` keeps the scheduler from
+/// dispatching the alert as if it were work (only `Pending` beads are claimable), while P0
+/// surfaces it at the top of any operator panel. The id is deterministic per subject so a
+/// repeated escalation upserts the same row instead of piling up duplicates.
+fn escalation_bead(signal: &Signal) -> Option<Bead> {
+    match signal {
+        Signal::WorkerStuck { worker, age_secs } => Some(Bead::new(
+            format!("escalation-{worker}"),
+            format!("Escalation: worker {worker} stuck ({age_secs}s past threshold)"),
+            BeadStatus::Failed,
+            0,
+        )),
+        Signal::MergeStuck { bead, reason } => Some(Bead::new(
+            format!("escalation-merge-{bead}"),
+            format!("Escalation: merge {bead} stuck ({reason})"),
+            BeadStatus::Failed,
+            0,
+        )),
+        // Quota-block self-heals via rotation; the notification is the heads-up, no bead.
+        Signal::QuotaBlock { .. } => None,
     }
 }

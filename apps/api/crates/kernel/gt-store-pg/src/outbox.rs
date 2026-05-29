@@ -305,6 +305,43 @@ async fn apply_projection(
             upsert_projection(tx, "session", &key, "tokens_total", tokens).await?;
         }
     }
+
+    // hq-mysw activity projection: track last-activity per correlation lifeline. Parse the
+    // event's own RFC3339 `ts` → epoch secs via gt-feed (so the parse + thresholds match the
+    // in-memory `activity_view`); skip a row whose `ts` is unparseable rather than fail the
+    // whole drain. The UPSERT keeps the MAX so a redelivered/out-of-order event converges.
+    if let Some(secs) = gt_feed::activity::parse_epoch_secs(&rec.ts) {
+        upsert_activity(tx, &rec.correlation_id, secs as i64, &rec.kind).await?;
+    }
+    Ok(())
+}
+
+/// Upsert one correlation's last-activity. `last_kind` only advances when this event is at
+/// least as recent as the stored one — both `SET` RHS read the pre-update row, so the CASE
+/// compares against the old `last_activity_secs` correctly.
+async fn upsert_activity(
+    tx: &mut Transaction<'_, Postgres>,
+    subject: &str,
+    last_activity_secs: i64,
+    last_kind: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO activity_projections (subject, last_activity_secs, last_kind, updated_at)
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT (subject) DO UPDATE
+           SET last_kind = CASE
+                   WHEN EXCLUDED.last_activity_secs >= activity_projections.last_activity_secs
+                   THEN EXCLUDED.last_kind ELSE activity_projections.last_kind END,
+               last_activity_secs = GREATEST(
+                   activity_projections.last_activity_secs, EXCLUDED.last_activity_secs),
+               updated_at = now()",
+    )
+    .bind(subject)
+    .bind(last_activity_secs)
+    .bind(last_kind)
+    .execute(&mut **tx)
+    .await
+    .map_err(map_err)?;
     Ok(())
 }
 
