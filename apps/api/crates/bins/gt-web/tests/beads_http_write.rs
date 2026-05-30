@@ -11,7 +11,7 @@ use serde_json::json;
 use tokio::net::TcpListener;
 
 use gt_agent::InMemorySessions;
-use gt_beads::InMemoryBeads;
+use gt_beads::{BeadRepository, InMemoryBeads};
 use gt_root::{root::Effects, spawn, RootConfig, SystemClock};
 use gt_web::{router, AppState, AuthConfig, InMemoryWebAudit, ReadinessGate, WebAuditSink};
 
@@ -158,6 +158,143 @@ async fn patch_missing_id_returns_404() {
         .await
         .expect("patch");
     assert_eq!(resp.status(), 404);
+    root.shutdown();
+}
+
+// hq-fe-api-w.4: POST /api/beads/:id/transition — operator state-machine override.
+// The route does not touch dispatcher capacity (the gate verifies status only); a real
+// `MergeEvent::Merged` flow stays the canonical close path.
+
+async fn seed(base: &str, id: &str) {
+    reqwest::Client::new()
+        .post(format!("{base}/api/beads"))
+        .json(&json!({ "id": id, "title": "seed", "priority": 2 }))
+        .send()
+        .await
+        .expect("seed");
+}
+
+#[tokio::test]
+async fn transition_pending_to_done_succeeds() {
+    let (base, beads, root, _srv) = boot().await;
+    seed(&base, "hq-tx-1").await;
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/beads/hq-tx-1/transition"))
+        .json(&json!({ "to": "done" }))
+        .send()
+        .await
+        .expect("transition");
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(body["status"], "done");
+    let stored = beads.get("hq-tx-1").await.unwrap().expect("bead");
+    assert_eq!(stored.status, gt_beads::BeadStatus::Done);
+    root.shutdown();
+}
+
+#[tokio::test]
+async fn transition_pending_to_dispatched_rejected() {
+    // Scheduler-owned move: `pending → dispatched` must stay on `scheduling.mark_dispatched`
+    // so capacity bookkeeping is not bypassed.
+    let (base, _beads, root, _srv) = boot().await;
+    seed(&base, "hq-tx-2").await;
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/beads/hq-tx-2/transition"))
+        .json(&json!({ "to": "dispatched" }))
+        .send()
+        .await
+        .expect("transition");
+    assert_eq!(resp.status(), 400);
+    root.shutdown();
+}
+
+#[tokio::test]
+async fn transition_done_to_failed_rejected() {
+    // Terminal-to-terminal crossover must round-trip through `pending` so the re-open is
+    // explicit. Seed via repo to bypass the create handler's `Pending`-only contract.
+    let (base, beads, root, _srv) = boot().await;
+    beads
+        .upsert(&gt_beads::Bead::new(
+            "hq-tx-3",
+            "done bead",
+            gt_beads::BeadStatus::Done,
+            2,
+        ))
+        .await
+        .unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/beads/hq-tx-3/transition"))
+        .json(&json!({ "to": "failed" }))
+        .send()
+        .await
+        .expect("transition");
+    assert_eq!(resp.status(), 400);
+    root.shutdown();
+}
+
+#[tokio::test]
+async fn transition_self_loop_rejected() {
+    let (base, _beads, root, _srv) = boot().await;
+    seed(&base, "hq-tx-4").await;
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/beads/hq-tx-4/transition"))
+        .json(&json!({ "to": "pending" }))
+        .send()
+        .await
+        .expect("transition");
+    assert_eq!(resp.status(), 400);
+    root.shutdown();
+}
+
+#[tokio::test]
+async fn transition_unknown_target_rejected() {
+    let (base, _beads, root, _srv) = boot().await;
+    seed(&base, "hq-tx-5").await;
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/beads/hq-tx-5/transition"))
+        .json(&json!({ "to": "winning" }))
+        .send()
+        .await
+        .expect("transition");
+    assert_eq!(resp.status(), 400);
+    root.shutdown();
+}
+
+#[tokio::test]
+async fn transition_missing_bead_returns_404() {
+    let (base, _beads, root, _srv) = boot().await;
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/beads/hq-no-such/transition"))
+        .json(&json!({ "to": "done" }))
+        .send()
+        .await
+        .expect("transition");
+    assert_eq!(resp.status(), 404);
+    root.shutdown();
+}
+
+#[tokio::test]
+async fn transition_done_to_pending_reopens() {
+    // Re-open path: a terminal row goes back to `pending` so the scheduler can re-pick it.
+    let (base, beads, root, _srv) = boot().await;
+    beads
+        .upsert(&gt_beads::Bead::new(
+            "hq-tx-6",
+            "closed bead",
+            gt_beads::BeadStatus::Done,
+            2,
+        ))
+        .await
+        .unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/beads/hq-tx-6/transition"))
+        .json(&json!({ "to": "pending" }))
+        .send()
+        .await
+        .expect("transition");
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(body["status"], "pending");
     root.shutdown();
 }
 

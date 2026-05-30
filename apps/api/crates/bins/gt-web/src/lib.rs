@@ -85,6 +85,13 @@ where
             get(routes::list_beads::<R, SQ>).post(routes::create_bead::<R, SQ>),
         )
         .route("/api/beads/:id", patch(routes::update_bead::<R, SQ>))
+        // hq-fe-api-w.4 — operator override for the bead state machine. Not a reactor:
+        // dispatcher capacity stays unchanged so a real worker's lifecycle is not double-
+        // counted. See [`routes::transition_bead`] for the allowed transition matrix.
+        .route(
+            "/api/beads/:id/transition",
+            post(routes::transition_bead::<R, SQ>),
+        )
         .route("/api/issues", get(routes::list_issues::<R, SQ>))
         .route("/api/worktrees", get(routes::list_worktrees::<R, SQ>))
         .route(

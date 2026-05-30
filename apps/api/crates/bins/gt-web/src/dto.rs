@@ -103,6 +103,24 @@ impl BeadUpdateRequest {
     }
 }
 
+/// Body of `POST /api/beads/:id/transition` (hq-fe-api-w.4). Manual override for the
+/// dispatcher's bead state machine: when a worker dies before the reactor closes the
+/// bead, or when the operator wants to mark a `pending` row done/failed without running
+/// the dispatch flow, this route flips the status field in-place.
+///
+/// The set of permitted transitions is intentionally narrower than the full Cartesian
+/// product (see [`crate::routes::transition_bead`]): scheduler-owned moves
+/// (`pending` → `dispatched`) stay on `scheduling.mark_dispatched`, and crossing
+/// `done` ↔ `failed` directly must round-trip through `pending` so the re-open is
+/// explicit in the audit trail. Operator overrides do **not** touch dispatcher capacity
+/// — a parallel worker holding a real claim must still close it via the reactor path.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BeadTransitionRequest {
+    /// Target status: `pending|dispatched|working|done|failed`. Validated against the
+    /// state machine before the upsert; unknown values return 400.
+    pub to: String,
+}
+
 /// Query for `GET /api/beads?status=pending`. Default = pending (the operator-visible queue).
 #[derive(Debug, Clone, Deserialize)]
 pub struct BeadsQuery {

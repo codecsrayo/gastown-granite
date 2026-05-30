@@ -215,7 +215,7 @@ to the old API; pick the cleanest contract per feature.
 | Command bus interno en gt-root (validate+execute) | **gap** (lógica está, sin abstracción) | hq-fe-api-w.1 |
 | `Idempotency-Key` middleware en gt-web | **gap** | hq-fe-api-w.2 |
 | `POST /api/beads` (create) · `PATCH /api/beads/:id` (update) | **gap** (solo gt-mcp tools) | hq-fe-api-w.3 |
-| `POST /api/beads/:id/transition` (state machine) | **gap** | hq-fe-api-w.4 |
+| `POST /api/beads/:id/transition` (state machine) | **done** (gt-web) | hq-fe-api-w.4 |
 | `POST /api/beads/:id/comments` | **gap** | hq-fe-api-w.5 |
 | `DELETE /api/sessions/:id` (kill via gt-polecat SIGTERM) | **gap** | hq-fe-api-w.6 |
 | `POST /api/sessions/:id/restart` | **gap** | hq-fe-api-w.7 |

@@ -17,9 +17,9 @@ use gt_root::RootCommand;
 use gt_store_dolt::{IssueFilter, IssueRow};
 
 use crate::dto::{
-    BeadCreateRequest, BeadDto, BeadUpdateRequest, BeadsQuery, DirtyFileDto, IssueDto,
-    IssuesQuery, NudgeRequest, NudgeResponse, QuotaRetireResponse, QuotaRotateRequest,
-    SessionDto, SessionsQuery, WorktreeDto,
+    BeadCreateRequest, BeadDto, BeadTransitionRequest, BeadUpdateRequest, BeadsQuery,
+    DirtyFileDto, IssueDto, IssuesQuery, NudgeRequest, NudgeResponse, QuotaRetireResponse,
+    QuotaRotateRequest, SessionDto, SessionsQuery, WorktreeDto,
 };
 use crate::state::AppState;
 use crate::stream::{sse_from_json_receiver, sse_from_receiver};
@@ -172,6 +172,72 @@ where
     }
     state.beads.upsert(&updated).await.map_err(AppError::from)?;
     Ok(Json(BeadDto::from(updated)))
+}
+
+/// `POST /api/beads/:id/transition` — operator override for the bead state machine
+/// (hq-fe-api-w.4). Flips `BeadStatus` in-place via `BeadRepository::upsert`, gated by
+/// [`is_operator_transition_allowed`]. The route is **not** a reactor: it does not
+/// consume/free scheduler capacity, register patrols, or emit `MergeEvent`s — those
+/// stay on the reactor path (`scheduling.mark_dispatched`, `MergeEvent::Merged`, etc.).
+/// Operator-driven moves are intentionally restricted to:
+///
+/// - `pending → working|done|failed` (kanban "claim/close")
+/// - `dispatched → pending|failed`   (release a stuck claim manually)
+/// - `working → pending|done|failed` (release/close in-flight work)
+/// - `done → pending` and `failed → pending` (re-open + retry)
+///
+/// Forbidden: self-transitions, `pending → dispatched` (scheduler-owned), and crossing
+/// `done` ↔ `failed` directly (must round-trip through `pending` so the re-open is
+/// explicit in the audit log).
+pub async fn transition_bead<R, SQ>(
+    State(state): State<AppState<R, SQ>>,
+    Path(id): Path<String>,
+    Json(req): Json<BeadTransitionRequest>,
+) -> Result<Json<BeadDto>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
+    if id.is_empty() {
+        return Err(AppError::bad_request("bead id is empty"));
+    }
+    let target = BeadStatus::parse(&req.to)
+        .ok_or_else(|| AppError::bad_request(format!("unknown status: {}", req.to)))?;
+    let existing = state
+        .beads
+        .get(&id)
+        .await
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::not_found(format!("bead {id}")))?;
+    if !is_operator_transition_allowed(existing.status, target) {
+        return Err(AppError::bad_request(format!(
+            "transition {} -> {} not permitted for operator override",
+            existing.status.as_str(),
+            target.as_str()
+        )));
+    }
+    let mut updated = existing;
+    updated.status = target;
+    state.beads.upsert(&updated).await.map_err(AppError::from)?;
+    Ok(Json(BeadDto::from(updated)))
+}
+
+/// State-machine guard for [`transition_bead`]. Returns `true` only for transitions an
+/// operator is allowed to drive manually through the HTTP route. Scheduler-owned moves
+/// and self-transitions are rejected here so the caller surfaces a 400 with the source
+/// and target verbatim (same shape as `gt-mcp`'s `issues.transition`).
+fn is_operator_transition_allowed(from: BeadStatus, to: BeadStatus) -> bool {
+    use BeadStatus::*;
+    if from == to {
+        return false;
+    }
+    match (from, to) {
+        (Pending, Working) | (Pending, Done) | (Pending, Failed) => true,
+        (Dispatched, Pending) | (Dispatched, Failed) => true,
+        (Working, Pending) | (Working, Done) | (Working, Failed) => true,
+        (Done, Pending) | (Failed, Pending) => true,
+        _ => false,
+    }
 }
 
 /// `POST /api/quota/accounts/:id/rotate` — promote `quota.rotate` from MCP-only to an
