@@ -349,6 +349,26 @@ pub struct CreateIssue {
     /// Optional initial owner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+    /// Closed-set semantic domains the bead affects (hq-taxon, doc 14 §3).
+    /// Required for the dependency graph; defaults to empty here so the schema
+    /// stays back-compat — the `validate()` upgrade in hq-taxon.2 will reject
+    /// empty after the live root epics are backfilled (hq-taxon.6).
+    #[serde(default)]
+    pub domain: Vec<crate::taxonomy::Domain>,
+    /// Physical impact surface — crate names or repo paths the bead touches
+    /// (doc 14 §2). Free-form; hotspot detection uses substring match. Empty
+    /// when the bead is pure spec/process work.
+    #[serde(default)]
+    pub surface: Vec<String>,
+    /// Forward dependency edges (this bead is blocked until each listed bead
+    /// closes). Bead ids referenced here must exist in `hq.issues`; cycle
+    /// detection is enforced by `validate()` in hq-taxon.2.
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// Responsible role. When set, every entry in [`Self::domain`] must satisfy
+    /// [`Role::allows`] (doc 14 §4); enforcement lands in hq-taxon.2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_scope: Option<crate::taxonomy::Role>,
 }
 
 fn default_priority() -> u8 {

@@ -10,6 +10,7 @@ pub mod audit;
 pub mod auth;
 pub mod http;
 pub mod service;
+pub mod taxonomy;
 
 pub use audit::{AuditEvent, AuditSink, InMemoryAudit, JsonlAudit, Outcome};
 pub use auth::{Scope, ScopeConfig, ScopeSpec};
@@ -17,3 +18,4 @@ pub use service::{
     CreateBead, CreateIssue, IssuesRead, McpService, RegisterAccount, ReportGap, RetireAccount,
     SessionsRead, UpdateIssue,
 };
+pub use taxonomy::{Domain, Role};
