@@ -28,6 +28,7 @@ use rmcp::{
 
 use gt_events::{AppError, Envelope};
 
+use gt_root::{CommandBus, RootCommand};
 use gt_agent::actor::AgentHandle;
 use gt_agent::{
     AddSession, AgentCommand, AgentEvent, RemoveSession, Session, SessionQueries, SessionRole,
@@ -35,15 +36,10 @@ use gt_agent::{
 };
 use gt_beads::{Bead, BeadStatus};
 use gt_store_dolt::{DoltIssues, DoltSessions, IssueFilter};
-use gt_merge::actor::MergeHandle;
 use gt_merge::{CompleteMerge, FailMerge, MergeCommand, SubmitMerge};
-use gt_orchestration::actor::OrchHandle;
 use gt_orchestration::{CompleteMember, FailMember, LaunchConvoy, OrchCommand};
-use gt_patrol::actor::PatrolHandle;
 use gt_patrol::{CloseLease, Heartbeat, PatrolCommand, RegisterLease, Tick};
-use gt_scheduling::actor::SchedHandle;
 use gt_scheduling::{Enqueue, MarkDispatched, SchedCommand};
-use gt_quota::actor::QuotaHandle;
 use gt_quota::{
     Account, AccountQuotaStatus, AccountWindow, ProbeWindow, QuotaCommand, RotateAccount,
     SampleTokens, WindowKind,
@@ -226,22 +222,17 @@ pub struct McpService {
 }
 
 struct Inner {
-    agent: AgentHandle,
+    /// hq-fe-api-w.1 — the single dispatcher for every domain command. Every `run_*`
+    /// helper used to own a sibling actor handle + per-domain match; they now all route
+    /// through `bus.validate` / `bus.dispatch` and share the same scope + audit boundary.
+    /// The bus carries an `Option<RigHandle>` internally, preserving the previous "rig
+    /// domain not wired" behavior for tests that build via [`McpService::new`].
+    bus: CommandBus,
     sessions: SessionsRead,
     /// Read-side for the `gt://issues` snapshot (hq-mcp-issues.1). Default is
     /// the [`IssuesRead::none`] variant so the existing test ctors keep one
     /// call; `with_issues` wires the Dolt-backed reader.
     issues: IssuesRead,
-    merge: MergeHandle,
-    sched: SchedHandle,
-    patrol: PatrolHandle,
-    orch: OrchHandle,
-    quota: QuotaHandle,
-    /// Rig catalog handle (hq-mc72.12.29). `None` until the composition root spawns the
-    /// `gt-rig` actor (TODO hq-mc72.12.30 — see prompt-for-parallel-agent in commit body):
-    /// `rig.*` tools return `unavailable` and `gt://rigs` returns an empty array. Tests
-    /// built via [`McpService::new`] also default to `None` until they need rig coverage.
-    rig: Option<RigHandle>,
     scope: Scope,
     audit: Arc<dyn AuditSink>,
     /// Edge relay for agent events. The agent actor is relay-less by design (the supervisor
@@ -256,18 +247,39 @@ impl McpService {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         agent: AgentHandle,
-        merge: MergeHandle,
-        sched: SchedHandle,
-        patrol: PatrolHandle,
-        orch: OrchHandle,
-        quota: QuotaHandle,
+        merge: gt_merge::actor::MergeHandle,
+        sched: gt_scheduling::actor::SchedHandle,
+        patrol: gt_patrol::actor::PatrolHandle,
+        orch: gt_orchestration::actor::OrchHandle,
+        quota: gt_quota::actor::QuotaHandle,
         scope: Scope,
         audit: Arc<dyn AuditSink>,
     ) -> Self {
         let sessions = SessionsRead::Actor(agent.clone());
-        Self::with_sessions(
-            agent, sessions, merge, sched, patrol, orch, quota, scope, audit, None,
-        )
+        let bus = CommandBus::new(agent, merge, sched, patrol, orch, quota);
+        Self::from_bus(bus, sessions, scope, audit, None)
+    }
+
+    /// Build directly from a [`CommandBus`] — the path the composition root takes via
+    /// `RootHandle::commands()` (hq-fe-api-w.1). `with_sessions` is the legacy ctor for
+    /// callers that still hand over the individual actor handles.
+    pub fn from_bus(
+        bus: CommandBus,
+        sessions: SessionsRead,
+        scope: Scope,
+        audit: Arc<dyn AuditSink>,
+        agent_events: Option<mpsc::Sender<Envelope<AgentEvent>>>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                bus,
+                sessions,
+                issues: IssuesRead::none(),
+                scope,
+                audit,
+                agent_events,
+            }),
+        }
     }
 
     /// Builder-style setter for the Dolt-backed `gt://issues` snapshot
@@ -279,15 +291,9 @@ impl McpService {
         let prev = &*self.inner;
         Self {
             inner: Arc::new(Inner {
-                agent: prev.agent.clone(),
+                bus: prev.bus.clone(),
                 sessions: prev.sessions.clone(),
                 issues,
-                merge: prev.merge.clone(),
-                sched: prev.sched.clone(),
-                patrol: prev.patrol.clone(),
-                orch: prev.orch.clone(),
-                quota: prev.quota.clone(),
-                rig: prev.rig.clone(),
                 scope: prev.scope.clone(),
                 audit: prev.audit.clone(),
                 agent_events: prev.agent_events.clone(),
@@ -302,58 +308,35 @@ impl McpService {
     /// and `None` relay via [`McpService::new`].
     ///
     /// Rig domain (hq-mc72.12.29) wires through [`McpService::with_rig`]; this constructor
-    /// keeps `rig=None` so existing test ctors stay one-call.
+    /// keeps the bus's rig slot empty so existing test ctors stay one-call.
     #[allow(clippy::too_many_arguments)]
     pub fn with_sessions(
         agent: AgentHandle,
         sessions: SessionsRead,
-        merge: MergeHandle,
-        sched: SchedHandle,
-        patrol: PatrolHandle,
-        orch: OrchHandle,
-        quota: QuotaHandle,
+        merge: gt_merge::actor::MergeHandle,
+        sched: gt_scheduling::actor::SchedHandle,
+        patrol: gt_patrol::actor::PatrolHandle,
+        orch: gt_orchestration::actor::OrchHandle,
+        quota: gt_quota::actor::QuotaHandle,
         scope: Scope,
         audit: Arc<dyn AuditSink>,
         agent_events: Option<mpsc::Sender<Envelope<AgentEvent>>>,
     ) -> Self {
-        Self {
-            inner: Arc::new(Inner {
-                agent,
-                sessions,
-                issues: IssuesRead::none(),
-                merge,
-                sched,
-                patrol,
-                orch,
-                quota,
-                rig: None,
-                scope,
-                audit,
-                agent_events,
-            }),
-        }
+        let bus = CommandBus::new(agent, merge, sched, patrol, orch, quota);
+        Self::from_bus(bus, sessions, scope, audit, agent_events)
     }
 
     /// Builder-style setter for the rig catalog handle (hq-mc72.12.29). Returns a fresh
-    /// [`McpService`] sharing the audit sink + scope; the composition root chains this after
-    /// [`McpService::with_sessions`] once `gt-rig::actor::spawn` is wired (see TODO
-    /// hq-mc72.12.30). When unset, the `rig.*` tools return `AppError::Other("rig domain
-    /// not wired")` and the `gt://rigs` resource returns an empty JSON array.
+    /// [`McpService`] whose bus exposes the rig actor; before this is called, `rig.*`
+    /// tools return `AppError::Other("rig domain not wired")` and `gt://rigs` returns an
+    /// empty array.
     pub fn with_rig(self, rig: RigHandle) -> Self {
-        // Re-build Inner with the rig field populated. Cheap because actor handles are
-        // already `Clone` over an mpsc sender; the Arc dance is one allocation per call.
         let prev = &*self.inner;
         Self {
             inner: Arc::new(Inner {
-                agent: prev.agent.clone(),
+                bus: prev.bus.clone().with_rig(rig),
                 sessions: prev.sessions.clone(),
                 issues: prev.issues.clone(),
-                merge: prev.merge.clone(),
-                sched: prev.sched.clone(),
-                patrol: prev.patrol.clone(),
-                orch: prev.orch.clone(),
-                quota: prev.quota.clone(),
-                rig: Some(rig),
                 scope: prev.scope.clone(),
                 audit: prev.audit.clone(),
                 agent_events: prev.agent_events.clone(),
@@ -361,13 +344,15 @@ impl McpService {
         }
     }
 
-    /// Scope check + dispatch + audit. Shared by the macro-generated tool methods so
-    /// the wire boundary and the tests cover the same code path.
-    pub async fn run(
+    /// Scope check + bus dispatch + audit (hq-fe-api-w.1). Every domain-command tool
+    /// goes through here — the per-domain `run_*` siblings are thin shims that wrap
+    /// their command into the [`RootCommand`] tag. The MCP frontier owns scope, audit
+    /// and the edge-only `Spawned` relay; the bus owns the actor-routing.
+    pub async fn run_command(
         &self,
         tool: &str,
         arguments: serde_json::Value,
-        cmd: AgentCommand,
+        cmd: RootCommand,
         validate_only: bool,
     ) -> Result<CallToolResult, McpError> {
         if let Err(err) = self.inner.scope.check(tool) {
@@ -383,9 +368,10 @@ impl McpService {
         // execute must publish `Spawned` on the edge relay so the event reaches the log,
         // the SSE broadcast and the sessions projector — the same path the supervisor/sling
         // edge uses (hq-mc72.10). `new()` matches the polecat default of `Session::new`, so
-        // the emitted event and the actor snapshot agree.
+        // the emitted event and the actor snapshot agree. Pull the event out before
+        // moving `cmd` into the dispatcher.
         let spawn_event = match (&cmd, validate_only) {
-            (AgentCommand::Add(a), false) => Some(AgentEvent::Spawned {
+            (RootCommand::Agent(AgentCommand::Add(a)), false) => Some(AgentEvent::Spawned {
                 session: a.id.clone(),
                 rig: a.rig.clone(),
                 role: SessionRole::Polecat,
@@ -395,9 +381,9 @@ impl McpService {
         };
 
         let domain_result = if validate_only {
-            self.inner.agent.validate(cmd).await
+            self.inner.bus.validate(&cmd, None).await
         } else {
-            self.inner.agent.exec(cmd).await
+            self.inner.bus.dispatch(cmd, None).await
         };
 
         let outcome = match &domain_result {
@@ -423,6 +409,20 @@ impl McpService {
             Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
             Err(err) => Err(McpError::internal_error(err.to_string(), None)),
         }
+    }
+
+    /// Pre-bus legacy entry point (`AgentCommand` only). Kept so existing tests that drive
+    /// `service.run("agent.add.execute", ..., AgentCommand::Add(...), ...)` keep compiling.
+    /// New code should call [`Self::run_command`] with `RootCommand::Agent(...)`.
+    pub async fn run(
+        &self,
+        tool: &str,
+        arguments: serde_json::Value,
+        cmd: AgentCommand,
+        validate_only: bool,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_command(tool, arguments, RootCommand::Agent(cmd), validate_only)
+            .await
     }
 
     #[tool(
@@ -509,10 +509,7 @@ impl McpService {
         .await
     }
 
-    /// Merge-domain twin of [`McpService::run`]: same scope + audit boundary, dispatching to
-    /// the merge actor instead of the agent. Kept as a sibling (not a generic) so each domain's
-    /// dispatch stays a flat, readable method — the registry grows one `run_*` per domain as
-    /// the epic retrofits them.
+    /// Merge-domain shim around [`Self::run_command`] (hq-fe-api-w.1).
     pub async fn run_merge(
         &self,
         tool: &str,
@@ -520,36 +517,8 @@ impl McpService {
         cmd: MergeCommand,
         validate_only: bool,
     ) -> Result<CallToolResult, McpError> {
-        if let Err(err) = self.inner.scope.check(tool) {
-            self.inner.audit.record(AuditEvent::Unauthorized {
-                actor: self.inner.scope.actor.clone(),
-                tool: tool.to_string(),
-                reason: err.to_string(),
-            });
-            return Err(McpError::invalid_request(err.to_string(), None));
-        }
-
-        let domain_result = if validate_only {
-            self.inner.merge.validate(cmd).await
-        } else {
-            self.inner.merge.exec(cmd).await
-        };
-
-        let outcome = match &domain_result {
-            Ok(()) => Outcome::Ok,
-            Err(e) => Outcome::Failed { error: e.to_string() },
-        };
-        self.inner.audit.record(AuditEvent::Invoked {
-            actor: self.inner.scope.actor.clone(),
-            tool: tool.to_string(),
-            arguments,
-            outcome,
-        });
-
-        match domain_result {
-            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
-            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
-        }
+        self.run_command(tool, arguments, RootCommand::Merge(cmd), validate_only)
+            .await
     }
 
     #[tool(
@@ -629,9 +598,7 @@ impl McpService {
         self.run_merge("merge.fail.execute", json, MergeCommand::Fail(args), false).await
     }
 
-    /// Scheduling-domain twin of [`McpService::run`]: same scope + audit boundary, dispatching
-    /// to the dispatcher actor instead of the agent. A sibling per domain (not a generic) so
-    /// each dispatch stays a flat, readable method — the registry grows one `run_*` per domain.
+    /// Scheduling-domain shim around [`Self::run_command`] (hq-fe-api-w.1).
     pub async fn run_sched(
         &self,
         tool: &str,
@@ -639,36 +606,8 @@ impl McpService {
         cmd: SchedCommand,
         validate_only: bool,
     ) -> Result<CallToolResult, McpError> {
-        if let Err(err) = self.inner.scope.check(tool) {
-            self.inner.audit.record(AuditEvent::Unauthorized {
-                actor: self.inner.scope.actor.clone(),
-                tool: tool.to_string(),
-                reason: err.to_string(),
-            });
-            return Err(McpError::invalid_request(err.to_string(), None));
-        }
-
-        let domain_result = if validate_only {
-            self.inner.sched.validate(cmd).await
-        } else {
-            self.inner.sched.exec(cmd).await
-        };
-
-        let outcome = match &domain_result {
-            Ok(()) => Outcome::Ok,
-            Err(e) => Outcome::Failed { error: e.to_string() },
-        };
-        self.inner.audit.record(AuditEvent::Invoked {
-            actor: self.inner.scope.actor.clone(),
-            tool: tool.to_string(),
-            arguments,
-            outcome,
-        });
-
-        match domain_result {
-            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
-            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
-        }
+        self.run_command(tool, arguments, RootCommand::Sched(cmd), validate_only)
+            .await
     }
 
     #[tool(
@@ -754,7 +693,7 @@ impl McpService {
             args.validate()
         } else {
             match args.validate() {
-                Ok(()) => self.inner.sched.create_bead(args.to_bead()).await,
+                Ok(()) => self.inner.bus.sched().create_bead(args.to_bead()).await,
                 Err(e) => Err(e),
             }
         };
@@ -798,9 +737,9 @@ impl McpService {
         self.run_create_bead("scheduling.create_bead.execute", args, false).await
     }
 
-    /// Patrol-domain twin of [`McpService::run`]: same scope + audit boundary, dispatching to
-    /// the lease-tracker actor. A `Tick` may emit several `LeaseExpired`s; the actor relays
-    /// them — `run_patrol` only reports the single ok/err the dispatch returned.
+    /// Patrol-domain shim around [`Self::run_command`] (hq-fe-api-w.1). The lease tracker
+    /// may emit several `LeaseExpired`s for a single `Tick`; the actor relays them — the
+    /// shim only reports the single ok/err the dispatch returned.
     pub async fn run_patrol(
         &self,
         tool: &str,
@@ -808,36 +747,8 @@ impl McpService {
         cmd: PatrolCommand,
         validate_only: bool,
     ) -> Result<CallToolResult, McpError> {
-        if let Err(err) = self.inner.scope.check(tool) {
-            self.inner.audit.record(AuditEvent::Unauthorized {
-                actor: self.inner.scope.actor.clone(),
-                tool: tool.to_string(),
-                reason: err.to_string(),
-            });
-            return Err(McpError::invalid_request(err.to_string(), None));
-        }
-
-        let domain_result = if validate_only {
-            self.inner.patrol.validate(cmd).await
-        } else {
-            self.inner.patrol.exec(cmd).await
-        };
-
-        let outcome = match &domain_result {
-            Ok(()) => Outcome::Ok,
-            Err(e) => Outcome::Failed { error: e.to_string() },
-        };
-        self.inner.audit.record(AuditEvent::Invoked {
-            actor: self.inner.scope.actor.clone(),
-            tool: tool.to_string(),
-            arguments,
-            outcome,
-        });
-
-        match domain_result {
-            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
-            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
-        }
+        self.run_command(tool, arguments, RootCommand::Patrol(cmd), validate_only)
+            .await
     }
 
     #[tool(
@@ -936,9 +847,7 @@ impl McpService {
         self.run_patrol("patrol.tick.execute", json, PatrolCommand::Tick(args), false).await
     }
 
-    /// Orchestration-domain twin of [`McpService::run`]: same scope + audit boundary,
-    /// dispatching to the convoy actor. A launch/complete can emit several events (the
-    /// handoff); the actor relays them — `run_orch` reports the single ok/err of the dispatch.
+    /// Orchestration-domain shim around [`Self::run_command`] (hq-fe-api-w.1).
     pub async fn run_orch(
         &self,
         tool: &str,
@@ -946,36 +855,8 @@ impl McpService {
         cmd: OrchCommand,
         validate_only: bool,
     ) -> Result<CallToolResult, McpError> {
-        if let Err(err) = self.inner.scope.check(tool) {
-            self.inner.audit.record(AuditEvent::Unauthorized {
-                actor: self.inner.scope.actor.clone(),
-                tool: tool.to_string(),
-                reason: err.to_string(),
-            });
-            return Err(McpError::invalid_request(err.to_string(), None));
-        }
-
-        let domain_result = if validate_only {
-            self.inner.orch.validate(cmd).await
-        } else {
-            self.inner.orch.exec(cmd).await
-        };
-
-        let outcome = match &domain_result {
-            Ok(()) => Outcome::Ok,
-            Err(e) => Outcome::Failed { error: e.to_string() },
-        };
-        self.inner.audit.record(AuditEvent::Invoked {
-            actor: self.inner.scope.actor.clone(),
-            tool: tool.to_string(),
-            arguments,
-            outcome,
-        });
-
-        match domain_result {
-            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
-            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
-        }
+        self.run_command(tool, arguments, RootCommand::Orch(cmd), validate_only)
+            .await
     }
 
     #[tool(
@@ -1050,8 +931,7 @@ impl McpService {
         self.run_orch("orch.fail_member.execute", json, OrchCommand::Fail(args), false).await
     }
 
-    /// Quota-domain twin of [`McpService::run`]: same scope + audit boundary, dispatching to
-    /// the quota actor.
+    /// Quota-domain shim around [`Self::run_command`] (hq-fe-api-w.1).
     pub async fn run_quota(
         &self,
         tool: &str,
@@ -1059,36 +939,8 @@ impl McpService {
         cmd: QuotaCommand,
         validate_only: bool,
     ) -> Result<CallToolResult, McpError> {
-        if let Err(err) = self.inner.scope.check(tool) {
-            self.inner.audit.record(AuditEvent::Unauthorized {
-                actor: self.inner.scope.actor.clone(),
-                tool: tool.to_string(),
-                reason: err.to_string(),
-            });
-            return Err(McpError::invalid_request(err.to_string(), None));
-        }
-
-        let domain_result = if validate_only {
-            self.inner.quota.validate(cmd).await
-        } else {
-            self.inner.quota.exec(cmd).await
-        };
-
-        let outcome = match &domain_result {
-            Ok(()) => Outcome::Ok,
-            Err(e) => Outcome::Failed { error: e.to_string() },
-        };
-        self.inner.audit.record(AuditEvent::Invoked {
-            actor: self.inner.scope.actor.clone(),
-            tool: tool.to_string(),
-            arguments,
-            outcome,
-        });
-
-        match domain_result {
-            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
-            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
-        }
+        self.run_command(tool, arguments, RootCommand::Quota(cmd), validate_only)
+            .await
     }
 
     #[tool(
@@ -1184,7 +1036,7 @@ impl McpService {
         let json = serde_json::to_value(&args).expect("RegisterAccount is Serialize");
         let domain_result = args.validate();
         if domain_result.is_ok() && !validate_only {
-            self.inner.quota.upsert_account(args.to_account()).await;
+            self.inner.bus.quota().upsert_account(args.to_account()).await;
         }
 
         let outcome = match &domain_result {
@@ -1248,7 +1100,7 @@ impl McpService {
         let json = serde_json::to_value(&args).expect("RetireAccount is Serialize");
         let validate_result = args.validate();
         let removed = if validate_result.is_ok() && !validate_only {
-            self.inner.quota.remove_account(args.account.clone()).await
+            self.inner.bus.quota().remove_account(args.account.clone()).await
         } else {
             false
         };
@@ -1299,11 +1151,9 @@ impl McpService {
         self.run_quota_retire("quota.retire.execute", args, false).await
     }
 
-    /// Rig-domain twin of [`McpService::run`]: same scope + audit boundary, dispatching to the
-    /// `gt-rig` catalog actor (hq-mc72.12.29). Unlike the other `run_*` helpers the handle is
-    /// optional: until the composition root spawns the actor (TODO hq-mc72.12.30), the tool
-    /// records an audit row with a `rig domain not wired` failure and returns it — the wire
-    /// surface is complete and testable, only the actor injection is pending.
+    /// Rig-domain shim around [`Self::run_command`] (hq-fe-api-w.1). The bus surfaces
+    /// the same `rig domain not wired` error when [`Self::with_rig`] has not been called,
+    /// preserving the pre-bus contract.
     pub async fn run_rig(
         &self,
         tool: &str,
@@ -1311,41 +1161,8 @@ impl McpService {
         cmd: RigCommand,
         validate_only: bool,
     ) -> Result<CallToolResult, McpError> {
-        if let Err(err) = self.inner.scope.check(tool) {
-            self.inner.audit.record(AuditEvent::Unauthorized {
-                actor: self.inner.scope.actor.clone(),
-                tool: tool.to_string(),
-                reason: err.to_string(),
-            });
-            return Err(McpError::invalid_request(err.to_string(), None));
-        }
-
-        let domain_result = match &self.inner.rig {
-            Some(rig) => {
-                if validate_only {
-                    rig.validate(cmd).await
-                } else {
-                    rig.exec(cmd).await
-                }
-            }
-            None => Err(AppError::Other("rig domain not wired".into())),
-        };
-
-        let outcome = match &domain_result {
-            Ok(()) => Outcome::Ok,
-            Err(e) => Outcome::Failed { error: e.to_string() },
-        };
-        self.inner.audit.record(AuditEvent::Invoked {
-            actor: self.inner.scope.actor.clone(),
-            tool: tool.to_string(),
-            arguments,
-            outcome,
-        });
-
-        match domain_result {
-            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
-            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
-        }
+        self.run_command(tool, arguments, RootCommand::Rig(cmd), validate_only)
+            .await
     }
 
     #[tool(
@@ -1598,15 +1415,15 @@ impl McpService {
                     .map_err(|e| AppError::Other(format!("encode sessions: {e}")))
             }
             "gt://scheduling/queue" => {
-                let (queued, in_flight) = self.inner.sched.snapshot().await;
+                let (queued, in_flight) = self.inner.bus.sched().snapshot().await;
                 Ok(serde_json::json!({ "queued": queued, "in_flight": in_flight }))
             }
             "gt://patrol/leases" => {
-                let (live_leases, expired_emitted) = self.inner.patrol.snapshot().await;
+                let (live_leases, expired_emitted) = self.inner.bus.patrol().snapshot().await;
                 Ok(serde_json::json!({ "live_leases": live_leases, "expired_emitted": expired_emitted }))
             }
             "gt://merge/slots" => {
-                let slots = self.inner.merge.snapshot().await;
+                let slots = self.inner.bus.merge().snapshot().await;
                 let arr: Vec<serde_json::Value> = slots
                     .iter()
                     .map(|s| serde_json::json!({ "bead": s.bead, "branch": s.branch, "state": s.state.as_str() }))
@@ -1614,7 +1431,7 @@ impl McpService {
                 Ok(serde_json::Value::Array(arr))
             }
             "gt://orch/convoys" => {
-                let convoys = self.inner.orch.snapshot().await;
+                let convoys = self.inner.bus.orch().snapshot().await;
                 let arr: Vec<serde_json::Value> = convoys
                     .iter()
                     .map(|c| {
@@ -1629,13 +1446,13 @@ impl McpService {
                 Ok(serde_json::Value::Array(arr))
             }
             "gt://quota/accounts" => {
-                let (accounts, predictions_emitted) = self.inner.quota.snapshot().await;
+                let (accounts, predictions_emitted) = self.inner.bus.quota().snapshot().await;
                 Ok(serde_json::json!({ "accounts": accounts, "predictions_emitted": predictions_emitted }))
             }
             "gt://rigs" => {
                 // Empty array until the composition root wires the actor (TODO hq-mc72.12.30).
                 // RigEntry is Serialize, so once `rig` is Some this is the catalog snapshot.
-                let rigs = match &self.inner.rig {
+                let rigs = match self.inner.bus.rig() {
                     Some(rig) => rig.rigs().await,
                     None => Vec::new(),
                 };

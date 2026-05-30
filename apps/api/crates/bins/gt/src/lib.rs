@@ -13,11 +13,13 @@
 //! The pure unifier (`event`) is sync and replay-able; the wiring (`root`) is the async edge
 //! with the side-effect and clock ports injected.
 
+pub mod commands;
 mod effects_real;
 mod event;
 mod notify_real;
 pub mod root;
 
+pub use commands::{CommandBus, RootCommand};
 pub use effects_real::{QuotaSlot, RealEffects};
 pub use event::{replay_gt, GtEvent, GtState};
 pub use notify_real::MailNotifier;

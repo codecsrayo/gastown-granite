@@ -54,6 +54,7 @@ use gt_rig::{RigCatalog, RigEvent};
 use gt_scheduling::actor::{self as sched_actor, SchedHandle};
 use gt_scheduling::SchedEvent;
 
+use crate::commands::CommandBus;
 use crate::event::{replay_gt, GtEvent, GtState};
 
 /// Wall-clock at the edge. The core never reads it; the root stamps `now_secs` onto the
@@ -206,6 +207,22 @@ impl<R: BeadRepository + Clone> RootHandle<R> {
     /// without re-spawning an adapter, and the gate test assert on the live pointer.
     pub fn keychain(&self) -> Arc<dyn Keychain> {
         self.keychain.clone()
+    }
+
+    /// Build a [`CommandBus`] over every domain actor this root owns (hq-fe-api-w.1).
+    /// Frontiers (gt-mcp tools, future gt-web routes, gt CLI) call
+    /// `commands().dispatch(...)` instead of routing per-domain themselves. The bus
+    /// carries clones of the actor handles, so it is cheap to construct per request.
+    pub fn commands(&self) -> CommandBus {
+        CommandBus::new(
+            self.agent.clone(),
+            self.merge.clone(),
+            self.sched.clone(),
+            self.patrol.clone(),
+            self.orch.clone(),
+            self.quota.clone(),
+        )
+        .with_rig(self.rig.clone())
     }
 
     /// Stop the loop. The actors stop when their handles drop.
