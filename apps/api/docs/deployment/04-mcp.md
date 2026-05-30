@@ -18,7 +18,10 @@ el protocolo MCP (rmcp) en vez de HTTP-REST.
   `CALL DOLT_COMMIT`; cierra el bypass `docker exec dolt sql`),
   `issues.update.*` (hq-mcp-issues.3: patch parcial de campos editables —
   title/description/design/acceptance_criteria/notes/priority/issue_type/assignee/
-  owner/external_ref; status cambia via `issues.transition.*`).
+  owner/external_ref; status cambia via `issues.transition.*`),
+  `issues.transition.*` (hq-mcp-issues.4: state machine open ↔ working;
+  o→closed / w→closed legales; closed→open re-abre; closed→working rechazado;
+  status-guarded UPDATE distingue NotFound vs InvalidTransition).
   `*.validate` = dry-run (sin cambio de estado); `*.execute` = muta vía el actor o
   (issues / scheduling.create_bead) via el repo Dolt.
 - **Resources** — snapshots `gt://*`: `agent/sessions`, `scheduling/queue`, `patrol/leases`,

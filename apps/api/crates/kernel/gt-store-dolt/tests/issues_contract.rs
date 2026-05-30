@@ -8,7 +8,7 @@
 
 use mysql_async::prelude::Queryable;
 
-use gt_store_dolt::{DoltIssues, IssueFilter, IssuePatch, NewIssue};
+use gt_store_dolt::{DoltIssues, IssueFilter, IssuePatch, IssueStatus, NewIssue};
 
 const TEST_DB: &str = "gt_rs_issues_test";
 
@@ -252,5 +252,66 @@ async fn update_patches_visible_fields_and_commits() {
         err.to_string().to_lowercase().contains("not found")
             || err.to_string().to_lowercase().contains("issue hq-missing"),
         "expected NotFound, got `{err}`",
+    );
+}
+
+#[tokio::test]
+async fn transition_state_machine_round_trip() {
+    let Ok(base) = std::env::var("GT_DOLT_URL") else {
+        eprintln!("GT_DOLT_URL unset — skipping DoltIssues.transition contract");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    seed(&base).await.expect("seed");
+
+    let repo = DoltIssues::connect(&format!("{base}/{TEST_DB}")).expect("connect");
+
+    let id = format!("hq-tr-{}", ulid::Ulid::new());
+    let row = NewIssue {
+        id: id.clone(),
+        title: "transition gate".into(),
+        description: String::new(),
+        design: String::new(),
+        acceptance_criteria: String::new(),
+        notes: String::new(),
+        priority: 2,
+        issue_type: "task".into(),
+        created_by: "test".into(),
+        external_ref: None,
+        assignee: None,
+        owner: None,
+    };
+    repo.insert(&row).await.expect("seed insert");
+
+    // open -> working: legal
+    repo.transition(&id, IssueStatus::Working).await.expect("open->working");
+    assert_eq!(repo.current_status(&id).await.unwrap().as_deref(), Some("working"));
+
+    // working -> closed: legal, stamps closed_at
+    repo.transition(&id, IssueStatus::Closed).await.expect("working->closed");
+    assert_eq!(repo.current_status(&id).await.unwrap().as_deref(), Some("closed"));
+
+    // closed -> working: illegal per state machine
+    let err = repo
+        .transition(&id, IssueStatus::Working)
+        .await
+        .expect_err("closed->working must reject");
+    assert!(
+        err.to_string().contains("invalid transition"),
+        "got `{err}`",
+    );
+
+    // closed -> open: legal (re-open)
+    repo.transition(&id, IssueStatus::Open).await.expect("closed->open");
+    assert_eq!(repo.current_status(&id).await.unwrap().as_deref(), Some("open"));
+
+    // Missing id surfaces NotFound rather than InvalidTransition.
+    let err = repo
+        .transition("hq-no-such", IssueStatus::Working)
+        .await
+        .expect_err("missing id must error");
+    assert!(
+        err.to_string().to_lowercase().contains("not found"),
+        "got `{err}`",
     );
 }

@@ -6,6 +6,48 @@ use serde::{Deserialize, Serialize};
 
 use crate::conn::map_err;
 
+/// Status states the `issues.transition` tool (hq-mcp-issues.4) understands.
+/// `bd`'s lifecycle uses additional internal labels (`hooked`, etc.) but those
+/// are owned by the polecat actor — the user-facing surface stays open/working/
+/// closed for predictable kanban semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueStatus {
+    Open,
+    Working,
+    Closed,
+}
+
+impl IssueStatus {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "open" => Some(Self::Open),
+            "working" => Some(Self::Working),
+            "closed" => Some(Self::Closed),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Working => "working",
+            Self::Closed => "closed",
+        }
+    }
+
+    /// Legal transitions in the issue state machine. `open ↔ working`, plus
+    /// either side may close; `closed` re-opens through `open` but never jumps
+    /// straight back to `working` — matches the example the bead description
+    /// calls out (`closed -> working` is rejected).
+    pub fn can_transition_to(self, target: Self) -> bool {
+        use IssueStatus::*;
+        matches!(
+            (self, target),
+            (Open, Working) | (Open, Closed) | (Working, Open) | (Working, Closed) | (Closed, Open)
+        )
+    }
+}
+
 /// Filters applied when listing issues for the `gt://issues` MCP resource
 /// (hq-mcp-issues.1). All fields are optional and combined with `AND`; `None`
 /// means "no filter on this column". `limit` caps the result set so a noisy
@@ -400,6 +442,111 @@ impl DoltIssues {
         }
 
         let commit_msg = format!("update {id}");
+        conn.exec_drop(
+            "CALL DOLT_COMMIT('-A', '-m', :msg)",
+            mysql_async::params! {
+                "msg" => commit_msg,
+            },
+        )
+        .await
+        .map_err(map_err)?;
+
+        Ok(())
+    }
+
+    /// Read the current status of `id`. `None` when the row does not exist.
+    /// Used by [`Self::transition`] to distinguish `NotFound` from
+    /// `InvalidTransition` after a status-guarded UPDATE fails to match.
+    pub async fn current_status(&self, id: &str) -> Result<Option<String>, AppError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        let row: Option<String> = conn
+            .exec_first(
+                "SELECT status FROM issues WHERE id = :id LIMIT 1",
+                mysql_async::params! { "id" => id },
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(row)
+    }
+
+    /// Move an issue across the [`IssueStatus`] state machine (hq-mcp-issues.4).
+    /// Uses a status-guarded `UPDATE` so a concurrent transition cannot land an
+    /// illegal jump under us — the `affected_rows == 0` path then falls back to
+    /// a `current_status` read to tell `NotFound` from `InvalidTransition`.
+    /// Atomic Dolt commit on success.
+    pub async fn transition(
+        &self,
+        id: &str,
+        target: IssueStatus,
+    ) -> Result<(), AppError> {
+        let legal_sources: Vec<&'static str> = [
+            IssueStatus::Open,
+            IssueStatus::Working,
+            IssueStatus::Closed,
+        ]
+        .into_iter()
+        .filter(|s| s.can_transition_to(target))
+        .map(|s| s.as_str())
+        .collect();
+
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+
+        let placeholders: Vec<String> = legal_sources
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!(":src_{i}"))
+            .collect();
+        let mut params_vec: Vec<(String, mysql_async::Value)> = vec![
+            ("id".to_string(), mysql_async::Value::from(id.to_string())),
+            (
+                "target".to_string(),
+                mysql_async::Value::from(target.as_str().to_string()),
+            ),
+        ];
+        for (i, s) in legal_sources.iter().enumerate() {
+            params_vec.push((format!("src_{i}"), mysql_async::Value::from(s.to_string())));
+        }
+
+        let closed_at_set = match target {
+            IssueStatus::Closed => "closed_at = NOW(),",
+            IssueStatus::Open => "closed_at = NULL,",
+            IssueStatus::Working => "",
+        };
+
+        let where_status = if placeholders.is_empty() {
+            // No legal source -> impossible to satisfy. Skip the UPDATE.
+            String::from("1 = 0")
+        } else {
+            format!("status IN ({})", placeholders.join(", "))
+        };
+
+        let sql = format!(
+            "UPDATE issues
+             SET status = :target,
+                 {closed_at_set}
+                 updated_at = NOW()
+             WHERE id = :id AND {where_status}"
+        );
+
+        let result = conn
+            .exec_iter(sql, mysql_async::Params::from(params_vec))
+            .await
+            .map_err(map_err)?;
+        let affected = result.affected_rows();
+        let _ = result.drop_result().await.map_err(map_err)?;
+
+        if affected == 0 {
+            // Disambiguate NotFound vs InvalidTransition for the frontier.
+            return match self.current_status(id).await? {
+                None => Err(AppError::NotFound(format!("issue {id}"))),
+                Some(current) => Err(AppError::Validation(format!(
+                    "invalid transition: {current} -> {}",
+                    target.as_str()
+                ))),
+            };
+        }
+
+        let commit_msg = format!("transition {id} -> {}", target.as_str());
         conn.exec_drop(
             "CALL DOLT_COMMIT('-A', '-m', :msg)",
             mysql_async::params! {

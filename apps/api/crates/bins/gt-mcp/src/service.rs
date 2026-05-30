@@ -36,7 +36,9 @@ use gt_agent::{
     TransitionSession,
 };
 use gt_beads::{Bead, BeadStatus};
-use gt_store_dolt::{DoltIssues, DoltSessions, IssueFilter, IssuePatch, NewIssue};
+use gt_store_dolt::{
+    DoltIssues, DoltSessions, IssueFilter, IssuePatch, IssueStatus, NewIssue,
+};
 use gt_merge::{CompleteMerge, FailMerge, MergeCommand, SubmitMerge};
 use gt_orchestration::{CompleteMember, FailMember, LaunchConvoy, OrchCommand};
 use gt_patrol::{CloseLease, Heartbeat, PatrolCommand, RegisterLease, Tick};
@@ -129,6 +131,15 @@ impl IssuesRead {
     pub async fn update(&self, id: &str, patch: &IssuePatch) -> Result<(), AppError> {
         match &self.inner {
             Some(d) => d.update(id, patch).await,
+            None => Err(AppError::Other("issues backend not wired".into())),
+        }
+    }
+
+    /// State-machine transition through to the Dolt backend (hq-mcp-issues.4).
+    /// Mirrors [`Self::insert`]'s unwired-backend behavior.
+    pub async fn transition(&self, id: &str, target: IssueStatus) -> Result<(), AppError> {
+        match &self.inner {
+            Some(d) => d.transition(id, target).await,
             None => Err(AppError::Other("issues backend not wired".into())),
         }
     }
@@ -570,6 +581,40 @@ impl UpdateIssue {
             owner: self.owner.clone(),
             external_ref: self.external_ref.clone(),
         }
+    }
+}
+
+/// Input for the `issues.transition` tool (hq-mcp-issues.4). State-machine
+/// guard over `hq.issues.status`: `open ↔ working`, either side may `close`,
+/// `closed` re-opens through `open` but never jumps straight to `working`.
+/// Illegal transitions are rejected at the DB (status-guarded `UPDATE`) and
+/// surface as `Validation` errors so the agent sees the source/target verbatim.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct TransitionIssue {
+    /// Target bead id. Non-empty.
+    pub id: String,
+    /// Target status: one of `open`, `working`, `closed`. Validated at the
+    /// frontier so a misspelled value never reaches Dolt.
+    pub target: String,
+}
+
+impl TransitionIssue {
+    fn validate(&self) -> Result<(), AppError> {
+        if self.id.is_empty() {
+            return Err(AppError::Validation("issue id is empty".into()));
+        }
+        if IssueStatus::parse(&self.target).is_none() {
+            return Err(AppError::Validation(format!(
+                "unknown target status `{}` (expected open/working/closed)",
+                self.target
+            )));
+        }
+        Ok(())
+    }
+
+    fn target_status(&self) -> IssueStatus {
+        // `validate` rules out the parse failure before any path that calls this.
+        IssueStatus::parse(&self.target).expect("validate guards target parse")
     }
 }
 
@@ -1231,6 +1276,74 @@ impl McpService {
         Parameters(args): Parameters<UpdateIssue>,
     ) -> Result<CallToolResult, McpError> {
         self.run_update_issue("issues.update.execute", args, false).await
+    }
+
+    /// Scope check + (validate | state-guarded transition + DOLT_COMMIT) + audit
+    /// for `issues.transition` (hq-mcp-issues.4). Frontier rejects unknown target
+    /// labels; backend rejects illegal moves via a status-guarded UPDATE that
+    /// disambiguates `NotFound` from `InvalidTransition` for the audit row.
+    pub async fn run_transition_issue(
+        &self,
+        tool: &str,
+        args: TransitionIssue,
+        validate_only: bool,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let json = serde_json::to_value(&args).expect("TransitionIssue is Serialize");
+        let domain_result = if validate_only {
+            args.validate()
+        } else {
+            match args.validate() {
+                Ok(()) => self.inner.issues.transition(&args.id, args.target_status()).await,
+                Err(e) => Err(e),
+            }
+        };
+
+        let outcome = match &domain_result {
+            Ok(()) => Outcome::Ok,
+            Err(e) => Outcome::Failed { error: e.to_string() },
+        };
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments: json,
+            outcome,
+        });
+
+        match domain_result {
+            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
+            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "issues.transition.validate",
+        description = "Check whether a status transition (open ↔ working; either -> closed; closed -> open) would be accepted. No state change."
+    )]
+    async fn issues_transition_validate(
+        &self,
+        Parameters(args): Parameters<TransitionIssue>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_transition_issue("issues.transition.validate", args, true).await
+    }
+
+    #[tool(
+        name = "issues.transition.execute",
+        description = "Move hq.issues.status across the open/working/closed state machine + atomic Dolt commit. Illegal moves (e.g. closed -> working) are rejected by the backend."
+    )]
+    async fn issues_transition_execute(
+        &self,
+        Parameters(args): Parameters<TransitionIssue>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_transition_issue("issues.transition.execute", args, false).await
     }
 
     /// Patrol-domain shim around [`Self::run_command`] (hq-fe-api-w.1). The lease tracker
