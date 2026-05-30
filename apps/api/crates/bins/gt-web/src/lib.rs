@@ -172,10 +172,7 @@ where
         // title/priority/assignee. Status transitions stay on the reactor.
         .route(
             "/api/beads",
-            get(routes::list_beads::<R, SQ, M>)
-                .route_layer(req("beads.read"))
-                .post(routes::create_bead::<R, SQ, M>)
-                .route_layer(req("beads.write")),
+            get(routes::list_beads::<R, SQ, M>).route_layer(req("beads.read")),
         )
         .route(
             "/api/beads/:id",
@@ -234,10 +231,7 @@ where
         // `resume` are deferred — domain has no Pause/Resume commands today.
         .route(
             "/api/convoys",
-            get(routes::list_convoys::<R, SQ, M>)
-                .route_layer(req("convoys.read"))
-                .post(routes::create_convoy::<R, SQ, M>)
-                .route_layer(req("convoys.write")),
+            get(routes::list_convoys::<R, SQ, M>).route_layer(req("convoys.read")),
         )
         .route(
             "/api/convoys/:convoy/members/:member/fail",
@@ -271,6 +265,23 @@ where
         )
         .with_state(state.clone());
 
+    // hq-fe-rbac.3 — POST handlers on dual-method paths (`/api/beads`, `/api/convoys`)
+    // live on a sibling router so each method gets its own scope guard. Stacking
+    // `route_layer` calls on a `MethodRouter` wraps *every* method in scope (axum's
+    // MR layer is per-router, not per-method), which would force a reader token to also
+    // carry the write scope on the GET path. The merge route below keeps `beads.read`
+    // limited to the GET handler and `beads.write` limited to the POST handler.
+    let writes = Router::new()
+        .route(
+            "/api/beads",
+            post(routes::create_bead::<R, SQ, M>).route_layer(req("beads.write")),
+        )
+        .route(
+            "/api/convoys",
+            post(routes::create_convoy::<R, SQ, M>).route_layer(req("convoys.write")),
+        )
+        .with_state(state.clone());
+
     // hq-fe-api-w.11 — rate-limited bulk-create surface. The per-actor counter sits on
     // a sibling sub-router so the layer applies only to the bulk path; the rest of the
     // /api surface is unchanged. Merged into `api` *before* idempotency + auth so the
@@ -287,6 +298,7 @@ where
         ));
 
     let api = api
+        .merge(writes)
         .merge(bulk)
         // Idempotency-Key middleware (hq-fe-api-w.2). Layered between routes and auth so
         // an unauthorised retry never poisons the cache (auth runs first); replays still
