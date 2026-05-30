@@ -37,11 +37,14 @@ gt-polecat = { path = "../../domain/lifecycle/gt-polecat" }
 gt-quota = { path = "../../domain/orchestration/gt-quota" }
 # hq-fe-auth.2: PTY login driver behind POST /api/quota/accounts/:n/login{,/token,/cancel}.
 gt-login = { path = "../../domain/orchestration/gt-login" }
+# hq-fe-term.2: Attach port + tmux/pty adapters for the dashboard dock-terminal WS route.
+gt-terminal = { path = "../../domain/platform/gt-terminal" }
 # Real persistence adapters: opt-in via env (GT_DOLT_URL / GT_PG_AUDIT_URL).
 gt-store-dolt = { path = "../../kernel/gt-store-dolt" }
 gt-store-pg = { path = "../../kernel/gt-store-pg" }
 
-axum = "0.7"
+# `ws` enables `axum::extract::ws` for the dock-terminal upgrade (hq-fe-term.2).
+axum = { version = "0.7", features = ["ws"] }
 # hq-fe-cut.1 — ServeDir + ServeFile for the SvelteKit static build
 # (`apps/web/build`). `fs` is the only feature we need; the SPA history fallback
 # to `index.html` is wired in `lib.rs` via `ServeDir::fallback`.

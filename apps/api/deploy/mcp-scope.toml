@@ -25,3 +25,9 @@ allow = ["*"]
 #
 # [roles.reader]
 # scopes = ["beads.read", "merge.read"]
+#
+# [roles.operator]
+# # hq-fe-term.2 — `terminal.attach` gates the dock-terminal WebSocket
+# # (`GET /api/sessions/:id/term`). Operator-only on purpose so a quota.write
+# # grant never implicitly hands out shell access.
+# scopes = ["sessions.write", "terminal.attach"]

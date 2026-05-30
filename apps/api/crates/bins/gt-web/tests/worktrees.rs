@@ -84,6 +84,7 @@ async fn boot(town_root: std::path::PathBuf) -> String {
         login_registry: std::sync::Arc::new(gt_web::LoginRegistry::new()),
         login_pty: None,
         login_config: std::sync::Arc::new(gt_web::LoginConfig::default()),
+         terminal_attach: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -133,6 +134,7 @@ async fn empty_when_town_root_unset() {
         login_registry: std::sync::Arc::new(gt_web::LoginRegistry::new()),
         login_pty: None,
         login_config: std::sync::Arc::new(gt_web::LoginConfig::default()),
+         terminal_attach: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -282,6 +284,7 @@ async fn worktrees_stream_503_when_unwired() {
         login_registry: std::sync::Arc::new(gt_web::LoginRegistry::new()),
         login_pty: None,
         login_config: std::sync::Arc::new(gt_web::LoginConfig::default()),
+         terminal_attach: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -347,6 +350,7 @@ async fn worktrees_stream_delivers_snapshot() {
         login_registry: std::sync::Arc::new(gt_web::LoginRegistry::new()),
         login_pty: None,
         login_config: std::sync::Arc::new(gt_web::LoginConfig::default()),
+         terminal_attach: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -377,6 +377,21 @@ async fn serve<R, SQ, MR, PR, OR>(
         };
     let login_config = Arc::new(LoginConfig::from_env());
 
+    // hq-fe-term.2: dock-terminal attach adapter. Cli backend shells out to `tmux`; only
+    // wired when `GT_TERMINAL_ENABLE=1` so deploys without a tmux server (or that don't
+    // want to expose the WS yet) return 503 from `/api/sessions/:id/term` instead of
+    // attempting a `pipe-pane` call on an empty host. Mirrors the `GT_LOGIN_ENABLE` gate.
+    let terminal_attach: Option<Arc<dyn gt_terminal::Attach>> =
+        match std::env::var("GT_TERMINAL_ENABLE").as_deref() {
+            Ok("1") | Ok("true") => {
+                eprintln!("[gt-web] terminal attach: TmuxPipeAttach (GT_TERMINAL_ENABLE=1)");
+                Some(Arc::new(gt_terminal::TmuxPipeAttach::new(
+                    gt_terminal::CliTmuxAttachOps::new(),
+                )))
+            }
+            _ => None,
+        };
+
     let state = AppState {
         beads,
         sessions,
@@ -398,6 +413,7 @@ async fn serve<R, SQ, MR, PR, OR>(
         login_registry,
         login_pty,
         login_config,
+        terminal_attach,
     };
 
     // Idempotency-Key cache (hq-fe-api-w.2). TTL overridable via

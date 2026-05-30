@@ -12,6 +12,11 @@
 //! - [`TmuxAttachOps::send_keys_raw`] forwards user keystrokes via `tmux send-keys -l -t
 //!   <session> <bytes>` (literal mode, no key-name parsing).
 //!
+//! Reader/writer are split: the reader owns the fifo file handle (one task does the
+//! blocking read loop), the writer holds an `Arc<O>` + session id so keystrokes go through
+//! independently. This is what lets the WS route forward client input while the read side
+//! sits blocked waiting for tmux output.
+//!
 //! Unix-only: tmux + named FIFOs. The crate compiles on Linux/macOS; calling the prod impl
 //! on Windows would fail at the `mkfifo` shell call.
 
@@ -19,21 +24,22 @@ use std::ffi::OsStr;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::port::{Attach, AttachError, TerminalStream, TerminalTarget};
+use crate::port::{
+    Attach, AttachError, AttachHandle, TerminalReader, TerminalTarget, TerminalWriter,
+};
 
 /// Ops the [`TmuxPipeAttach`] adapter needs from a tmux backend. Lives here (not in
 /// `gt-polecat`) because `pipe-pane` + raw `send-keys` are attach-specific; the polecat
 /// supervisor's [`gt_polecat::tmux::Tmux`] trait stays focused on session lifecycle.
 pub trait TmuxAttachOps: Send + Sync + 'static {
-    /// True iff the session exists. Mirrors `gt_polecat::tmux::Tmux::has_session`.
     fn has_session(&self, session: &str) -> bool;
 
-    /// Start piping the session's active pane bytes back to the caller. The returned reader
-    /// yields bytes as tmux writes them; `Ok(0)` means the pane stream closed.
+    /// Start piping the session's active pane bytes back. The returned reader yields
+    /// bytes as tmux writes them; `Ok(0)` means the pane stream closed.
     fn open_pipe(&self, session: &str) -> io::Result<Box<dyn Read + Send>>;
 
     /// Stop the pipe started by [`Self::open_pipe`]. Idempotent — calling on a session
@@ -42,8 +48,7 @@ pub trait TmuxAttachOps: Send + Sync + 'static {
 
     /// Forward `bytes` to the session as keystrokes via `tmux send-keys -l`. Literal mode
     /// (`-l`) treats arguments as raw text, not tmux key names — what the WS route wants
-    /// when forwarding xterm input. Special chords (Escape, C-c) are still encoded as
-    /// the actual byte values the terminal would have produced.
+    /// when forwarding xterm input.
     fn send_keys_raw(&self, session: &str, bytes: &[u8]) -> io::Result<()>;
 }
 
@@ -63,7 +68,7 @@ impl<O: TmuxAttachOps> TmuxPipeAttach<O> {
 }
 
 impl<O: TmuxAttachOps> Attach for TmuxPipeAttach<O> {
-    fn open(&self, target: &TerminalTarget) -> Result<Box<dyn TerminalStream>, AttachError> {
+    fn open(&self, target: &TerminalTarget) -> Result<AttachHandle, AttachError> {
         let session = match target {
             TerminalTarget::Tmux { session, .. } => session.clone(),
             TerminalTarget::Spawn { program, .. } => {
@@ -75,53 +80,62 @@ impl<O: TmuxAttachOps> Attach for TmuxPipeAttach<O> {
         if !self.ops.has_session(&session) {
             return Err(AttachError::NotFound(format!("tmux session {session}")));
         }
-        let reader = self.ops.open_pipe(&session)?;
-        Ok(Box::new(TmuxPipeStream {
+        let pipe = self.ops.open_pipe(&session)?;
+        let reader = TmuxPipeReader { inner: pipe };
+        let writer = TmuxPipeWriter {
             ops: Arc::clone(&self.ops),
             session,
-            reader,
-            closed: false,
-        }))
+            closed: AtomicBool::new(false),
+        };
+        Ok(AttachHandle {
+            reader: Box::new(reader),
+            writer: Arc::new(writer),
+        })
     }
 }
 
-struct TmuxPipeStream<O: TmuxAttachOps> {
+struct TmuxPipeReader {
+    inner: Box<dyn Read + Send>,
+}
+
+impl TerminalReader for TmuxPipeReader {
+    fn read_chunk(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+struct TmuxPipeWriter<O: TmuxAttachOps> {
     ops: Arc<O>,
     session: String,
-    reader: Box<dyn Read + Send>,
-    closed: bool,
+    closed: AtomicBool,
 }
 
-impl<O: TmuxAttachOps> TerminalStream for TmuxPipeStream<O> {
-    fn read_chunk(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.closed {
-            return Ok(0);
-        }
-        self.reader.read(buf)
-    }
-
-    fn write_keys(&mut self, bytes: &[u8]) -> io::Result<()> {
-        if self.closed {
+impl<O: TmuxAttachOps> TerminalWriter for TmuxPipeWriter<O> {
+    fn write_keys(&self, bytes: &[u8]) -> io::Result<()> {
+        if self.closed.load(Ordering::SeqCst) {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
-                "tmux attach stream closed",
+                "tmux attach writer closed",
             ));
         }
         self.ops.send_keys_raw(&self.session, bytes)
     }
 
-    fn close(&mut self) {
-        if self.closed {
-            return;
+    fn close(&self) {
+        if self
+            .closed
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            // Best-effort: ignore the result. The WS route is tearing down; surfacing an
+            // error here just loses signal. The fifo file itself is owned by the reader
+            // (see `FifoReader::Drop`) so nothing to unlink here either.
+            let _ = self.ops.close_pipe(&self.session);
         }
-        self.closed = true;
-        // Best-effort: ignore the result. The WS route is already tearing down; surfacing
-        // an error here just loses signal.
-        let _ = self.ops.close_pipe(&self.session);
     }
 }
 
-impl<O: TmuxAttachOps> Drop for TmuxPipeStream<O> {
+impl<O: TmuxAttachOps> Drop for TmuxPipeWriter<O> {
     fn drop(&mut self) {
         self.close();
     }
@@ -152,8 +166,6 @@ impl CliTmuxAttachOps {
         self
     }
 
-    /// Pin a private tmux server socket (`tmux -L <socket>`); mirrors
-    /// [`gt_polecat::tmux::TmuxCli::with_socket`].
     pub fn with_socket(mut self, socket: impl Into<String>) -> Self {
         self.socket = Some(socket.into());
         self
@@ -243,21 +255,15 @@ impl TmuxAttachOps for CliTmuxAttachOps {
     fn open_pipe(&self, session: &str) -> io::Result<Box<dyn Read + Send>> {
         let fifo = self.unique_fifo_path();
         self.mkfifo(&fifo)?;
-        // tmux runs the redirect command under /bin/sh; quote the fifo path defensively in
-        // case the temp dir ever contains spaces.
         let pipe_cmd = format!("cat >> '{}'", fifo.display());
         if let Err(e) = self.run(["pipe-pane", "-O", "-t", session, &pipe_cmd]) {
             let _ = std::fs::remove_file(&fifo);
             return Err(e);
         }
-        // The pipe-pane child (`cat`) is now alive with the fifo open for write, so opening
-        // the read end will not block waiting for a writer.
         let file = match std::fs::File::open(&fifo) {
             Ok(f) => f,
             Err(e) => {
-                let _ = Command::new("tmux")
-                    .args(["pipe-pane", "-t", session])
-                    .status();
+                let _ = self.run(["pipe-pane", "-t", session]);
                 let _ = std::fs::remove_file(&fifo);
                 return Err(e);
             }
@@ -266,15 +272,10 @@ impl TmuxAttachOps for CliTmuxAttachOps {
     }
 
     fn close_pipe(&self, session: &str) -> io::Result<()> {
-        // `pipe-pane` with no command turns the pipe off. The fifo file is owned by the
-        // FifoReader that wraps it (cleaned up on drop), so nothing to unlink here.
         self.run(["pipe-pane", "-t", session])
     }
 
     fn send_keys_raw(&self, session: &str, bytes: &[u8]) -> io::Result<()> {
-        // `tmux send-keys -l` treats its arg as literal text (no key-name lookup). We need
-        // to pass UTF-8; non-UTF-8 binary input is rare from xterm but if it shows up we
-        // forward it as lossy text rather than failing the keystroke entirely.
         let text = match std::str::from_utf8(bytes) {
             Ok(s) => s.to_string(),
             Err(_) => String::from_utf8_lossy(bytes).into_owned(),
@@ -283,7 +284,7 @@ impl TmuxAttachOps for CliTmuxAttachOps {
     }
 }
 
-/// Wraps the read end of a fifo + unlinks the file when the stream is dropped.
+/// Wraps the read end of a fifo + unlinks the file when the reader is dropped.
 struct FifoReader {
     file: std::fs::File,
     path: PathBuf,
@@ -304,8 +305,7 @@ impl Drop for FifoReader {
 // ---------------------------------------------------------------------------
 // FakeTmuxAttachOps — in-memory test double.
 
-/// In-memory [`TmuxAttachOps`] for unit tests. Sessions are registered up front; the reader
-/// hands out a scripted byte sequence, writes are recorded.
+/// In-memory [`TmuxAttachOps`] for unit tests.
 #[derive(Default)]
 pub struct FakeTmuxAttachOps {
     inner: Mutex<FakeState>,
@@ -325,12 +325,10 @@ impl FakeTmuxAttachOps {
         Self::default()
     }
 
-    /// Register a session as present.
     pub fn add_session(&self, session: impl Into<String>) {
         self.inner.lock().unwrap().sessions.push(session.into());
     }
 
-    /// Stage the byte sequence the next `open_pipe(session)` will yield.
     pub fn set_pipe_script(&self, session: impl Into<String>, bytes: Vec<u8>) {
         self.inner
             .lock()
@@ -413,11 +411,12 @@ mod tests {
         ops.add_session("polecat-1");
         ops.set_pipe_script("polecat-1", b"shell output\n".to_vec());
         let adapter = TmuxPipeAttach::new(ops);
-        let mut stream = adapter.open(&TerminalTarget::tmux("polecat-1")).unwrap();
+        let handle = adapter.open(&TerminalTarget::tmux("polecat-1")).unwrap();
+        let AttachHandle { mut reader, .. } = handle;
         let mut buf = [0u8; 32];
-        let n = stream.read_chunk(&mut buf).unwrap();
+        let n = reader.read_chunk(&mut buf).unwrap();
         assert_eq!(&buf[..n], b"shell output\n");
-        assert_eq!(stream.read_chunk(&mut buf).unwrap(), 0);
+        assert_eq!(reader.read_chunk(&mut buf).unwrap(), 0);
     }
 
     #[test]
@@ -425,9 +424,9 @@ mod tests {
         let ops = Arc::new(FakeTmuxAttachOps::new());
         ops.add_session("polecat-2");
         let adapter = TmuxPipeAttach::from_arc(ops.clone());
-        let mut stream = adapter.open(&TerminalTarget::tmux("polecat-2")).unwrap();
-        stream.write_keys(b"ls\n").unwrap();
-        stream.write_keys(b"\x1b[A").unwrap(); // up-arrow escape sequence
+        let handle = adapter.open(&TerminalTarget::tmux("polecat-2")).unwrap();
+        handle.writer.write_keys(b"ls\n").unwrap();
+        handle.writer.write_keys(b"\x1b[A").unwrap(); // up-arrow escape sequence
         let writes = ops.writes();
         assert_eq!(
             writes,
@@ -439,26 +438,28 @@ mod tests {
     }
 
     #[test]
-    fn close_calls_close_pipe_and_blocks_subsequent_writes() {
+    fn writer_close_calls_close_pipe_and_blocks_subsequent_writes() {
         let ops = Arc::new(FakeTmuxAttachOps::new());
         ops.add_session("polecat-3");
         let adapter = TmuxPipeAttach::from_arc(ops.clone());
-        let mut stream = adapter.open(&TerminalTarget::tmux("polecat-3")).unwrap();
-        stream.close();
-        let err = stream.write_keys(b"ignored").unwrap_err();
+        let handle = adapter.open(&TerminalTarget::tmux("polecat-3")).unwrap();
+        handle.writer.close();
+        let err = handle.writer.write_keys(b"ignored").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
         assert_eq!(ops.closed_pipes(), vec!["polecat-3".to_string()]);
     }
 
     #[test]
-    fn close_is_idempotent() {
+    fn writer_close_is_idempotent_across_arc_clones() {
         let ops = Arc::new(FakeTmuxAttachOps::new());
         ops.add_session("polecat-4");
         let adapter = TmuxPipeAttach::from_arc(ops.clone());
-        let mut stream = adapter.open(&TerminalTarget::tmux("polecat-4")).unwrap();
-        stream.close();
-        stream.close();
-        drop(stream); // Drop -> close again
+        let handle = adapter.open(&TerminalTarget::tmux("polecat-4")).unwrap();
+        let writer_a = handle.writer.clone();
+        let writer_b = handle.writer;
+        writer_a.close();
+        writer_b.close();
+        // close_pipe fires only once even with two Arc clones racing close().
         assert_eq!(ops.closed_pipes(), vec!["polecat-4".to_string()]);
     }
 }

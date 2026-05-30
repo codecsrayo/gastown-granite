@@ -26,6 +26,7 @@ pub mod routes;
 pub mod scope;
 pub mod state;
 pub mod stream;
+pub mod term;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -168,6 +169,14 @@ where
         .route(
             "/api/sessions/:id/interrupt",
             post(routes::interrupt_session::<R, SQ, M>).route_layer(req("sessions.write")),
+        )
+        // hq-fe-term.2 — dashboard dock-terminal WebSocket. Upgrades to a binary
+        // duplex stream over a live tmux session; bytes both directions. Behind its
+        // own scope (`terminal.attach`) so a quota.write grant does not implicitly
+        // hand out shell access.
+        .route(
+            "/api/sessions/:id/term",
+            get(term::term_attach::<R, SQ, M>).route_layer(req("terminal.attach")),
         )
         // hq-fe-api-w.7 — cold-restart: respawn a stuck polecat with the same hook
         // bead + convoy by reading env from the dying session before tearing it down.

@@ -73,6 +73,7 @@ async fn boot_with_auth(
         login_registry: std::sync::Arc::new(gt_web::LoginRegistry::new()),
         login_pty: None,
         login_config: std::sync::Arc::new(gt_web::LoginConfig::default()),
+         terminal_attach: None,
     };
 
     let audit = InMemoryWebAudit::new();

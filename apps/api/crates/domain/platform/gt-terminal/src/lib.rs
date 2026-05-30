@@ -33,6 +33,6 @@ pub mod pty_attach;
 pub mod tmux_attach;
 
 pub use fake::FakeAttach;
-pub use port::{Attach, AttachError, TerminalStream, TerminalTarget};
+pub use port::{Attach, AttachError, AttachHandle, TerminalReader, TerminalTarget, TerminalWriter};
 pub use pty_attach::PtyAttach;
-pub use tmux_attach::TmuxPipeAttach;
+pub use tmux_attach::{CliTmuxAttachOps, FakeTmuxAttachOps, TmuxAttachOps, TmuxPipeAttach};

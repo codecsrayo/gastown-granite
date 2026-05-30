@@ -72,6 +72,7 @@ async fn boot(records: &[EventRecord]) -> (String, RootHandle<Arc<InMemoryBeads>
         login_registry: std::sync::Arc::new(gt_web::LoginRegistry::new()),
         login_pty: None,
         login_config: std::sync::Arc::new(gt_web::LoginConfig::default()),
+         terminal_attach: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -181,6 +182,7 @@ async fn feed_empty_when_event_log_unset() {
         login_registry: std::sync::Arc::new(gt_web::LoginRegistry::new()),
         login_pty: None,
         login_config: std::sync::Arc::new(gt_web::LoginConfig::default()),
+         terminal_attach: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

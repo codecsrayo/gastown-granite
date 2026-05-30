@@ -81,6 +81,7 @@ async fn boot_with_pty(
         login_registry: Arc::new(LoginRegistry::new()),
         login_pty: Some(pty),
         login_config: Arc::new(LoginConfig::default()),
+         terminal_attach: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -350,6 +351,7 @@ async fn start_without_pty_returns_503() {
         // No PTY wired — start must 503, not panic.
         login_pty: None,
         login_config: Arc::new(LoginConfig::default()),
+         terminal_attach: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -18,6 +18,7 @@ use crate::comments::IssueCommenter;
 use crate::control::{PolecatControl, PolecatRespawner};
 use crate::dto::WorktreeDto;
 use crate::login::{LoginConfig, LoginRegistry};
+use gt_terminal::Attach;
 
 /// Read-side composition root. Keep it `Clone` (Arc-backed) so axum can hand a fresh handle
 /// to each request without locks. `R`/`SQ`/`M` are the bead / session / merge ports.
@@ -99,6 +100,13 @@ where
     /// Shared login command config (program + args + account env var name). Read at
     /// boot from `GT_LOGIN_CMD` / `GT_LOGIN_ARGS`; defaults to `claude /login`.
     pub login_config: Arc<LoginConfig>,
+    /// Terminal attach adapter (hq-fe-term.2). Backs `GET /api/sessions/:id/term`
+    /// (WebSocket upgrade). Production wires [`gt_terminal::TmuxPipeAttach`] over
+    /// [`gt_terminal::CliTmuxAttachOps`]; tests wire [`gt_terminal::FakeAttach`].
+    /// `None` (default in deploys without `GT_TERMINAL_ENABLE=1`) makes the route
+    /// short-circuit with `503` instead of attempting a `tmux pipe-pane` call on a
+    /// host that has no tmux server — same posture as [`Self::login_pty`].
+    pub terminal_attach: Option<Arc<dyn Attach>>,
 }
 
 impl<R, SQ, M> Clone for AppState<R, SQ, M>
@@ -125,6 +133,7 @@ where
             login_registry: self.login_registry.clone(),
             login_pty: self.login_pty.clone(),
             login_config: self.login_config.clone(),
+            terminal_attach: self.terminal_attach.clone(),
         }
     }
 }
