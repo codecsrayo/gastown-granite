@@ -398,6 +398,50 @@ impl CreateIssue {
                 self.priority
             )));
         }
+
+        // hq-taxon.2 — taxonomy shape rules. Cross-bead cycle detection is
+        // unnecessary at create time: a fresh bead id cannot already appear in
+        // any existing `depends_on`, so the only reachable cycle is the
+        // self-edge guarded below. Cycles via `issues.update` belong on that
+        // tool's validate path (out of scope here).
+        if self.domain.is_empty() {
+            return Err(AppError::Validation(
+                "issue must declare at least one domain (hq-taxon.2 — see apps/api/docs/14-bead-taxonomy.md §2)".into(),
+            ));
+        }
+        if self.depends_on.iter().any(|d| d == &self.id) {
+            return Err(AppError::Validation(format!(
+                "depends_on contains the bead's own id ({}) — self-cycle",
+                self.id
+            )));
+        }
+        {
+            let mut seen = std::collections::HashSet::new();
+            for dep in &self.depends_on {
+                if !seen.insert(dep.as_str()) {
+                    return Err(AppError::Validation(format!(
+                        "depends_on lists `{dep}` more than once"
+                    )));
+                }
+            }
+        }
+        if let Some(role) = self.role_scope {
+            for d in &self.domain {
+                if !role.allows(*d) {
+                    let role_wire = serde_json::to_value(role)
+                        .ok()
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                        .unwrap_or_else(|| "role".into());
+                    let domain_wire = serde_json::to_value(d)
+                        .ok()
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                        .unwrap_or_else(|| "domain".into());
+                    return Err(AppError::Validation(format!(
+                        "role_scope `{role_wire}` cannot own domain `{domain_wire}` — see doc 14 §3.5"
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 

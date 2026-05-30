@@ -12,7 +12,7 @@ use std::sync::Arc;
 use gt_mcp::{
     audit::{AuditEvent, AuditSink, InMemoryAudit, Outcome},
     auth::Scope,
-    CreateIssue, McpService,
+    CreateIssue, Domain, McpService, Role,
 };
 use tokio::sync::mpsc;
 
@@ -47,7 +47,9 @@ fn ok_payload() -> CreateIssue {
         external_ref: Some("hq-test".into()),
         assignee: None,
         owner: None,
-        domain: Vec::new(),
+        // hq-taxon.2 — non-empty domain[] is now mandatory. `docs.spec` is
+        // an anyone-allowed layer so role_scope=None tests still pass.
+        domain: vec![Domain::DocsSpec],
         surface: Vec::new(),
         depends_on: Vec::new(),
         role_scope: None,
@@ -150,4 +152,73 @@ async fn narrow_scope_rejects_execute_and_audits_unauthorized() {
         )),
         "execute reached the actor despite scope denial",
     );
+}
+
+// ---- hq-taxon.2 taxonomy validation -----------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_rejects_empty_domain() {
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    let mut bad = ok_payload();
+    bad.domain.clear();
+    let err = svc
+        .run_create_issue("issues.create.validate", bad, true)
+        .await
+        .expect_err("empty domain[] must be rejected (hq-taxon.2)");
+    assert!(err.to_string().contains("at least one domain"), "got `{err}`");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_rejects_self_cycle_in_depends_on() {
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    let mut bad = ok_payload();
+    bad.depends_on = vec!["hq-test-1".into()]; // matches the bead's own id
+    let err = svc
+        .run_create_issue("issues.create.validate", bad, true)
+        .await
+        .expect_err("self-cycle must be rejected");
+    assert!(err.to_string().contains("self-cycle"), "got `{err}`");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_rejects_duplicate_depends_on() {
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    let mut bad = ok_payload();
+    bad.depends_on = vec!["hq-a".into(), "hq-a".into()];
+    let err = svc
+        .run_create_issue("issues.create.validate", bad, true)
+        .await
+        .expect_err("duplicate depends_on must be rejected");
+    assert!(err.to_string().contains("more than once"), "got `{err}`");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_rejects_role_outside_permitted_domains() {
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    let mut bad = ok_payload();
+    bad.role_scope = Some(Role::Sheriff);
+    bad.domain = vec![Domain::OrchQuota]; // sheriff does not own quota — see doc 14 §3.5
+    let err = svc
+        .run_create_issue("issues.create.validate", bad, true)
+        .await
+        .expect_err("sheriff on quota must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("sheriff"), "got `{err}`");
+    assert!(msg.contains("orch.quota"), "got `{err}`");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_accepts_role_with_in_scope_domain() {
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    let mut ok = ok_payload();
+    ok.role_scope = Some(Role::Refinery);
+    ok.domain = vec![Domain::OrchMerge, Domain::OrchQuota];
+    svc.run_create_issue("issues.create.validate", ok, true)
+        .await
+        .expect("refinery on merge+quota must be accepted");
 }
