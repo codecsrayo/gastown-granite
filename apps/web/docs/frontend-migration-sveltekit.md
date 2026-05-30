@@ -60,14 +60,14 @@ Docs hermanos (lectura obligada antes de tocar nada):
 | Epic | Descripción | Beads | Bloqueada por | Estado |
 |---|---|---|---|---|
 | **hq-fe-svelte** | Master · dashboard reconstruction | (todas abajo) | — | PLANEADO |
-| **hq-fe-api-r** | Read-side gaps (snapshots por dominio) | 11 | — | EN PROGRESO · r.8 + r.9 + r.10 + r.11 CLOSED |
+| **hq-fe-api-r** | Read-side gaps (snapshots por dominio) | 12 | — | EN PROGRESO · r.8-r.12 CLOSED |
 | **hq-fe-api-w** | Write-side commands (HTTP routes) | 11 | hq-fe-api-w.1 (bus) | PLANEADO |
 | **hq-fe-rbac** | RBAC · JWT · whoami · scopes | 5 | hq-fe-api-w.1 | PLANEADO |
 | **hq-fe-auth** | Account auth (Claude `/login` pty driver) | 5 | hq-fe-api-w (idem) | PLANEADO |
 | **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
 | **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | PLANEADO · spike obligatorio |
 | **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | PLANEADO |
-| **hq-fe-view** | Vistas + componentes (UI) | 18 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.14 + .15 + .16 + .17 + .18 CLOSED |
+| **hq-fe-view** | Vistas + componentes (UI) | 19 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.14-19 CLOSED |
 | **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | PLANEADO |
 | **hq-mcp-issues** | MCP `issues.*` CRUD (cerrar bypass docker exec) | 5 | hq-fe-api-w.1 | PLANEADO |
 | **hq-mcp-onboard** | MCP agent onboarding + discoverability (slogan-feedback gaps) | 10 | parcial hq-mcp-issues.2 + hq-fe-api-w.1 | DONE · claude-host-onboard |
@@ -163,6 +163,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-api-r.9 | `GET /api/issues` snapshot (hq.issues mirror) | P1 | closed | claude-host | DoltIssues reader; filters status/assignee/external_ref/limit; mirror del `gt://issues` MCP; backs hq-fe-view.15 |
 | hq-fe-api-r.10 | Extend `/api/worktrees` con HEAD subject + author | P2 | closed | claude-host | `git log -1 --format=%s%n%an` per wt; null gracefully; backs hq-fe-view.17 |
 | hq-fe-api-r.11 | Extend `/api/worktrees` con HEAD time (Unix seconds) | P2 | closed | claude-host | mismo `git log -1` extendido a `%s%n%an%n%ct`; backs hq-fe-view.18 sort |
+| hq-fe-api-r.12 | SSE `/api/worktrees/stream` — server poll + broadcast | P2 | closed | claude-host | 1 poller/proc; `broadcast::Sender<Vec<WorktreeDto>>`; `sse_from_json_receiver<T>` generic helper |
 
 ### Epic `hq-fe-api-w` — write-side commands
 
@@ -254,6 +255,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-view.16 | Worktrees panel: ocultar idle por default (clean + no claim/ + no main) | P2 | closed | claude-host | `lib/worktree-filter.ts::isActive` + 5 vitest cases; counter `X active · Y idle hidden` en header |
 | hq-fe-view.17 | Worktrees panel: HEAD subject + author bajo branch | P2 | closed | claude-host | render `subject — author` faint line; truncate + tooltip full text |
 | hq-fe-view.18 | Worktrees panel: sort active por HEAD time desc + relative age chip | P2 | closed | claude-host | `lib/relative-time.ts` (`relativeAge` + `byRecency`); 7 vitest cases; main pinned top |
+| hq-fe-view.19 | Worktrees panel: EventSource SSE en vez de setInterval poll | P2 | closed | claude-host | `EventSource('/api/worktrees/stream')`; auto-reconnect; issues sigue poll 12s |
 
 ### Epic `hq-fe-cut` — cutover
 
