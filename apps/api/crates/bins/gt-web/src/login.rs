@@ -36,20 +36,29 @@ use tokio::sync::broadcast;
 use gt_agent::SessionQueries;
 use gt_audit::EventRecord;
 use gt_beads::BeadRepository;
-use gt_login::{LoginDriver, LoginEvent};
-#[cfg(test)]
-use gt_login::LoginFailure;
+use gt_login::{LoginDriver, LoginEvent, LoginFailure};
 use gt_merge::MergeRepository;
 
 use crate::routes::AppError;
 use crate::state::AppState;
 
-/// Configuration for spawning the login child. Boot reads `GT_LOGIN_CMD`
-/// (defaults `claude`) and `GT_LOGIN_ARGS` (space-separated, defaults `/login`).
+/// Configuration for spawning the login child + watchdog deadlines (hq-fe-auth.4).
+///
+/// `url_timeout_secs` bounds the wait between `Started` and `UrlReady` — the CLI
+/// should print its OAuth URL within a few seconds; minutes means a stuck binary.
+/// `token_timeout_secs` bounds the wait between `UrlReady` and the operator's
+/// `/login/token` submission — typically a human in front of a browser, so this is
+/// the larger of the two.
+///
+/// Either set to 0 disables that phase's watchdog (useful in tests). Env knobs:
+/// `GT_LOGIN_CMD`, `GT_LOGIN_ARGS`, `GT_LOGIN_URL_TIMEOUT_SECS` (default 30),
+/// `GT_LOGIN_TOKEN_TIMEOUT_SECS` (default 300).
 #[derive(Debug, Clone)]
 pub struct LoginConfig {
     pub program: String,
     pub args: Vec<String>,
+    pub url_timeout_secs: u64,
+    pub token_timeout_secs: u64,
 }
 
 impl LoginConfig {
@@ -59,7 +68,20 @@ impl LoginConfig {
             Ok(s) if !s.is_empty() => s.split_whitespace().map(String::from).collect(),
             _ => vec!["/login".to_string()],
         };
-        Self { program, args }
+        let url_timeout_secs = std::env::var("GT_LOGIN_URL_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30);
+        let token_timeout_secs = std::env::var("GT_LOGIN_TOKEN_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(300);
+        Self {
+            program,
+            args,
+            url_timeout_secs,
+            token_timeout_secs,
+        }
     }
 }
 
@@ -68,6 +90,8 @@ impl Default for LoginConfig {
         Self {
             program: "claude".to_string(),
             args: vec!["/login".to_string()],
+            url_timeout_secs: 30,
+            token_timeout_secs: 300,
         }
     }
 }
@@ -195,24 +219,161 @@ where
     let account_label = account.clone();
     let flow_label = flow_id.clone();
 
-    tokio::task::spawn_blocking(move || {
-        let driver = LoginDriver::new(pty);
-        let program = cfg.program.clone();
-        let args: Vec<&str> = cfg.args.iter().map(String::as_str).collect();
-        // The driver hands the URL to us — we ignore it in the token closure (the URL
-        // already flowed out via `LoginEvent::UrlReady` → SSE) and just block on the
-        // mpsc channel for the operator-submitted token.
-        let event_label = account_label.clone();
-        let _outcome = driver.run(
-            &program,
-            &args,
-            &account_label,
-            move |_url| rx.recv().ok(),
-            move |evt| emit_event(&events_tx, &event_label, &flow_label, evt),
-        );
-        // Clean up the registry slot when the driver exits. `remove` is best-effort —
-        // a successful `cancel` already removed it.
-        registry.remove(&account_label);
+    // hq-fe-auth.4 — watchdog state:
+    //
+    // - `phase` tracks where the driver is so the watchdog knows which `Timeout{phase}`
+    //   to rewrite on expiry (0 = pre-UrlReady, 1 = waiting for token, 2 = past token).
+    // - `timeout_phase` is what the watchdog stamps when it fires. `None` until then;
+    //   the `on_event` wrapper reads it inside the `Failed{Cancelled}` arm and
+    //   substitutes `Failed{Timeout{phase}}` so the SSE consumer sees the typed reason.
+    use std::sync::atomic::{AtomicU8, Ordering};
+    let phase = std::sync::Arc::new(AtomicU8::new(0));
+    let timeout_phase = std::sync::Arc::new(Mutex::new(None::<String>));
+
+    let phase_for_sink = phase.clone();
+    let timeout_phase_for_sink = timeout_phase.clone();
+    let events_tx_for_sink = events_tx.clone();
+    let account_for_sink = account_label.clone();
+    let flow_for_sink = flow_label.clone();
+
+    let registry_for_task = registry.clone();
+    let account_for_task = account_label.clone();
+    let flow_for_task = flow_label.clone();
+    let events_tx_for_task = events_tx.clone();
+    let cfg_for_task = cfg.clone();
+    let pty_for_task = pty.clone();
+
+    let handle = tokio::task::spawn_blocking(move || {
+        let driver = LoginDriver::new(pty_for_task);
+        let program = cfg_for_task.program.clone();
+        let args: Vec<&str> = cfg_for_task.args.iter().map(String::as_str).collect();
+        // Wrap each `LoginEvent` so the phase advances and any `Failed{Cancelled}` gets
+        // re-stamped as `Failed{Timeout{phase}}` when the watchdog has fired.
+        let event_sink = move |evt: LoginEvent| {
+            let evt = match evt {
+                LoginEvent::Started => {
+                    phase_for_sink.store(0, Ordering::SeqCst);
+                    LoginEvent::Started
+                }
+                LoginEvent::UrlReady { url } => {
+                    phase_for_sink.store(1, Ordering::SeqCst);
+                    LoginEvent::UrlReady { url }
+                }
+                LoginEvent::Complete { account } => {
+                    phase_for_sink.store(2, Ordering::SeqCst);
+                    LoginEvent::Complete { account }
+                }
+                LoginEvent::Failed { reason: LoginFailure::Cancelled } => {
+                    // If the watchdog already stamped a `phase`, surface a typed
+                    // `Timeout` instead of the generic `Cancelled` — same wire shape,
+                    // different rollback path for the UI.
+                    let typed = timeout_phase_for_sink
+                        .lock()
+                        .ok()
+                        .and_then(|g| g.clone());
+                    match typed {
+                        Some(phase) => LoginEvent::Failed {
+                            reason: LoginFailure::Timeout { phase },
+                        },
+                        None => LoginEvent::Failed {
+                            reason: LoginFailure::Cancelled,
+                        },
+                    }
+                }
+                other => other,
+            };
+            emit_event(&events_tx_for_sink, &account_for_sink, &flow_for_sink, evt);
+        };
+
+        // Panic guard (hq-fe-auth.4): if the driver thread panics mid-flight, the
+        // registry slot would otherwise leak for the lifetime of the process. Wrap
+        // the run + emit one `Failed{Io}` on the SSE stream so the UI can recover.
+        let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            driver.run(
+                &program,
+                &args,
+                &account_for_task,
+                move |_url| rx.recv().ok(),
+                event_sink,
+            )
+        }));
+        if run_result.is_err() {
+            emit_event(
+                &events_tx_for_task,
+                &account_for_task,
+                &flow_for_task,
+                LoginEvent::Failed {
+                    reason: LoginFailure::Io {
+                        message: "driver task panicked".to_string(),
+                    },
+                },
+            );
+        }
+        // Clean up the registry slot regardless of run vs panic. `remove` is
+        // best-effort — a successful `cancel` already removed it.
+        registry_for_task.remove(&account_for_task);
+    });
+
+    // hq-fe-auth.4 — token-phase watchdog. After `UrlReady` the driver blocks on
+    // `rx.recv()` waiting for the operator's `/login/token` POST. Dropping the
+    // registry slot drops the `token_tx` clone we held, which closes the channel,
+    // wakes the driver as `LoginEvent::Failed{Cancelled}`, and the `event_sink`
+    // wrapper rewrites it as `Failed{Timeout{phase:"token"}}` because the watchdog
+    // already stamped the typed phase.
+    //
+    // URL-phase timeout (driver blocked in `read_chunk` before `UrlReady`) is **not**
+    // covered by this watchdog — there is no kill-side handle on the `gt-login::Pty`
+    // port today, so a wedged `claude /login` between `Started` and `UrlReady` is
+    // best-effort: the watchdog stamps the phase + drops the slot, but the driver
+    // only wakes when the PTY EOFs on its own. Promoting URL-phase to a hard kill
+    // requires extending the `Pty` port with a `PtyKiller` clone — deferred to a
+    // follow-up bead so `gt-terminal` (the other `gt-login::Pty` consumer) does not
+    // need a coordinated trait change.
+    //
+    // Setting `token_timeout_secs` to 0 disables the deadline (used by tests that
+    // exercise the happy path without racing the timer).
+    let watchdog_registry = state.login_registry.clone();
+    let watchdog_account = account_label.clone();
+    let watchdog_phase = phase.clone();
+    let watchdog_timeout_phase = timeout_phase.clone();
+    let url_timeout = std::time::Duration::from_secs(cfg.url_timeout_secs);
+    let token_timeout = std::time::Duration::from_secs(cfg.token_timeout_secs);
+
+    tokio::spawn(async move {
+        tokio::pin!(handle);
+        // Phase 1 (URL): best-effort soft deadline. Stamps the phase + drops the
+        // slot if the driver hasn't reached `UrlReady` yet, but does not kill the
+        // PTY child (see module note). The next `read_chunk` EOF — or the
+        // token-phase watchdog — surfaces the typed failure.
+        if url_timeout.as_secs() > 0 {
+            tokio::select! {
+                _ = &mut handle => return,
+                _ = tokio::time::sleep(url_timeout) => {
+                    if watchdog_phase.load(Ordering::SeqCst) == 0 {
+                        if let Ok(mut g) = watchdog_timeout_phase.lock() {
+                            *g = Some("url".to_string());
+                        }
+                        watchdog_registry.remove(&watchdog_account);
+                        return;
+                    }
+                }
+            }
+        }
+        // Phase 2 (token): hard deadline — driver is in `rx.recv()`, so dropping
+        // the slot wakes it deterministically.
+        if token_timeout.as_secs() > 0 {
+            tokio::select! {
+                _ = &mut handle => return,
+                _ = tokio::time::sleep(token_timeout) => {
+                    if watchdog_phase.load(Ordering::SeqCst) == 1 {
+                        if let Ok(mut g) = watchdog_timeout_phase.lock() {
+                            *g = Some("token".to_string());
+                        }
+                        watchdog_registry.remove(&watchdog_account);
+                    }
+                }
+            }
+        }
     });
 
     Ok((

@@ -43,4 +43,9 @@ pub enum LoginFailure {
     /// I/O failure on the PTY (read/write returned an OS-level error).
     #[error("pty io error: {message}")]
     Io { message: String },
+    /// Wallclock deadline exceeded for `phase` (`"url"` or `"token"`). The watchdog
+    /// killed the PTY child so the driver surfaces a typed terminal state instead
+    /// of hanging — `hq-fe-auth.4`.
+    #[error("login timed out during {phase} phase")]
+    Timeout { phase: String },
 }

@@ -81,7 +81,7 @@ async fn boot_with_pty(
         login_registry: Arc::new(LoginRegistry::new()),
         login_pty: Some(pty),
         login_config: Arc::new(LoginConfig::default()),
-         terminal_attach: None,
+        terminal_attach: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -469,5 +469,283 @@ async fn sse_stream_surfaces_quota_login_kinds_in_order() {
     assert_eq!(typed.flow_id, flow_id);
     assert_eq!(typed.url, "https://console.anthropic.com/oauth?state=zzz");
 
+    root.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// hq-fe-auth.4 — token-phase timeout + panic guard.
+
+/// Same fixture as [`boot_with_pty`] but lets a test override [`LoginConfig`]
+/// (notably `token_timeout_secs` and `url_timeout_secs`).
+async fn boot_with_pty_and_config(
+    pty: Arc<dyn gt_login::Pty>,
+    cfg: LoginConfig,
+) -> (
+    String,
+    gt_root::RootHandle<Arc<InMemoryBeads>>,
+    tokio::sync::broadcast::Receiver<EventRecord>,
+    tokio::task::JoinHandle<()>,
+) {
+    let beads = Arc::new(InMemoryBeads::default());
+    let sessions = Arc::new(InMemorySessions::default());
+    let log = {
+        let mut p = std::env::temp_dir();
+        p.push(format!("gt-web-login-{}.jsonl", ulid::Ulid::new()));
+        p
+    };
+    let merges = Arc::new(gt_merge::InMemoryMergeRepo::default());
+    let root = spawn(
+        beads.clone(),
+        merges.clone(),
+        Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
+        Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
+        NoopEffects,
+        SystemClock,
+        log,
+        RootConfig::default(),
+    );
+    let events_rx = root.subscribe_events();
+    let state = AppState {
+        beads,
+        sessions,
+        merges: merges.clone(),
+        agent_events: root.agent_events.clone(),
+        events: root.events_sender(),
+        town_root: None,
+        issues: None,
+        bus: Some(root.commands()),
+        worktrees_stream: None,
+        control: None,
+        respawner: None,
+        commenter: None,
+        event_log: None,
+        login_registry: Arc::new(LoginRegistry::new()),
+        login_pty: Some(pty),
+        login_config: Arc::new(cfg),
+        terminal_attach: None,
+    };
+    let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = router(state, AuthConfig::open(), sink, ReadinessGate::ready());
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (format!("http://{addr}"), root, events_rx, server)
+}
+
+#[tokio::test]
+async fn token_phase_timeout_rewrites_cancelled_as_timeout_token() {
+    // Script prints the URL → driver transitions to AwaitingExit-via-token (phase==1).
+    // Operator never POSTs `/login/token`, so `rx.recv()` blocks. Watchdog fires after
+    // 200ms, stamps phase, drops the registry slot. Driver wakes (rx hangup), emits
+    // `Failed{Cancelled}`; sink rewrites it as `Failed{Timeout{phase:"token"}}`.
+    let pty = Arc::new(FakePty::scripted(
+        vec![b"https://console.anthropic.com/oauth?state=t1\n".to_vec()],
+        0,
+    )) as Arc<dyn gt_login::Pty>;
+    let cfg = LoginConfig {
+        program: "claude".into(),
+        args: vec!["/login".into()],
+        // Disable URL-phase watchdog (driver hits UrlReady fast enough that the URL
+        // soft deadline would race the test); short token deadline drives the
+        // assertion.
+        url_timeout_secs: 0,
+        token_timeout_secs: 1, // smallest >0 (tokio::time::Duration::from_secs(0) is no-op)
+    };
+    let (base, root, mut events, _srv) = boot_with_pty_and_config(pty, cfg).await;
+
+    let start: serde_json::Value = reqwest::Client::new()
+        .post(format!("{base}/api/quota/accounts/acct-tt/login"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let flow_id = start["flow_id"].as_str().unwrap().to_string();
+
+    // Pull frames until we see Failed; tolerate the polling sleep so the test does
+    // not flake on a slow CI host.
+    let mut kinds: Vec<String> = Vec::new();
+    let mut failed_rec: Option<EventRecord> = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        match events.try_recv() {
+            Ok(rec) if rec.kind.starts_with("quota.login_") => {
+                let k = rec.kind.clone();
+                if k == "quota.login_failed" {
+                    failed_rec = Some(rec);
+                    kinds.push(k);
+                    break;
+                }
+                kinds.push(k);
+            }
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => tokio::time::sleep(Duration::from_millis(20)).await,
+            Err(_) => break,
+        }
+    }
+    assert_eq!(
+        kinds,
+        vec![
+            "quota.login_started",
+            "quota.login_url_ready",
+            "quota.login_failed",
+        ],
+        "expected typed timeout terminal frame after URL",
+    );
+    let rec = failed_rec.expect("failed frame present");
+    assert_eq!(rec.payload["reason"]["kind"], "timeout");
+    assert_eq!(rec.payload["reason"]["phase"], "token");
+    assert_eq!(rec.payload["flow_id"], flow_id);
+    assert!(rec.payload["message"]
+        .as_str()
+        .unwrap()
+        .contains("timed out"));
+
+    // Registry slot was cleared by the watchdog — a second start MUST succeed without 409.
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/quota/accounts/acct-tt/login"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 202, "slot cleared by timeout, restart works");
+    // Drain the second flow so it does not outlive the test (cancel to dump the slot).
+    let _ = reqwest::Client::new()
+        .post(format!("{base}/api/quota/accounts/acct-tt/login/cancel"))
+        .send()
+        .await;
+    root.shutdown();
+}
+
+#[tokio::test]
+async fn url_phase_soft_timeout_stamps_phase_and_clears_slot() {
+    // FakePty's scripted variant returns Ok(0) once the script drains, so the driver
+    // emits `Failed{UrlMissing}` immediately — the watchdog never has a chance to fire
+    // its soft-deadline path. We exercise the watchdog with an empty script + a very
+    // short URL deadline; the driver's UrlMissing frame races the watchdog's
+    // slot-drop, but either way the slot ends up empty so a restart succeeds.
+    let pty = Arc::new(FakePty::scripted(vec![], 0)) as Arc<dyn gt_login::Pty>;
+    let cfg = LoginConfig {
+        program: "claude".into(),
+        args: vec!["/login".into()],
+        url_timeout_secs: 1,
+        token_timeout_secs: 0,
+    };
+    let (base, root, _events, _srv) = boot_with_pty_and_config(pty, cfg).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/quota/accounts/acct-ut/login"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 202);
+
+    // Give the driver / watchdog ~2s to settle.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Whichever path won (driver UrlMissing or watchdog soft-timeout), the slot must
+    // be empty — restart MUST land 202, not 409.
+    let resp2 = reqwest::Client::new()
+        .post(format!("{base}/api/quota/accounts/acct-ut/login"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp2.status(), 202);
+    let _ = reqwest::Client::new()
+        .post(format!("{base}/api/quota/accounts/acct-ut/login/cancel"))
+        .send()
+        .await;
+    root.shutdown();
+}
+
+/// `FakePty` adapter whose first `read_chunk` panics. Used to drive the panic
+/// guard in `gt-web::login`: the spawn_blocking task must catch the panic, emit
+/// `Failed{Io}`, and clear the registry slot — otherwise the account is wedged
+/// for the lifetime of the process.
+struct PanickyPty;
+
+impl gt_login::Pty for PanickyPty {
+    fn spawn(
+        &self,
+        _program: &str,
+        _args: &[&str],
+    ) -> std::io::Result<Box<dyn gt_login::PtyChild>> {
+        Ok(Box::new(PanickyChild))
+    }
+}
+
+struct PanickyChild;
+
+impl gt_login::PtyChild for PanickyChild {
+    fn read_chunk(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+        panic!("synthetic PTY read panic")
+    }
+    fn write_all(&mut self, _bytes: &[u8]) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn wait(&mut self) -> std::io::Result<i32> {
+        Ok(0)
+    }
+    fn kill(&mut self) {}
+}
+
+#[tokio::test]
+async fn driver_panic_emits_failed_io_and_clears_slot() {
+    let pty = Arc::new(PanickyPty) as Arc<dyn gt_login::Pty>;
+    let cfg = LoginConfig {
+        program: "claude".into(),
+        args: vec!["/login".into()],
+        url_timeout_secs: 0,
+        token_timeout_secs: 0,
+    };
+    let (base, root, mut events, _srv) = boot_with_pty_and_config(pty, cfg).await;
+
+    // Suppress the panic spew on stderr during this test — we expect it.
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/quota/accounts/acct-pn/login"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 202);
+
+    // Wait for the synthetic `Failed{Io}` frame.
+    let mut got_failed = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline {
+        match events.try_recv() {
+            Ok(rec) if rec.kind == "quota.login_failed" => {
+                got_failed = Some(rec);
+                break;
+            }
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => tokio::time::sleep(Duration::from_millis(20)).await,
+            Err(_) => break,
+        }
+    }
+    std::panic::set_hook(prev);
+
+    let rec = got_failed.expect("panic guard emitted Failed{Io} frame");
+    assert_eq!(rec.payload["reason"]["kind"], "io");
+    assert!(rec.payload["reason"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("panicked"));
+
+    // Slot must be cleared so a follow-up start succeeds.
+    let resp2 = reqwest::Client::new()
+        .post(format!("{base}/api/quota/accounts/acct-pn/login"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp2.status(), 202, "panic guard cleared the registry slot");
+    let _ = reqwest::Client::new()
+        .post(format!("{base}/api/quota/accounts/acct-pn/login/cancel"))
+        .send()
+        .await;
     root.shutdown();
 }

@@ -9,13 +9,18 @@
 // demuxes concurrent flows; the UI keeps state keyed by `(account, flow_id)`.
 
 /** Typed wire shape of `LoginFailure` (gt_login::events::LoginFailure). The CLI driver
- *  surfaces exactly these variants; each maps to a distinct rollback path in the UI. */
+ *  surfaces exactly these variants; each maps to a distinct rollback path in the UI.
+ *  `timeout` (hq-fe-auth.4) carries the phase the watchdog tripped on:
+ *  - `phase: 'url'` — CLI never printed the OAuth URL inside `GT_LOGIN_URL_TIMEOUT_SECS`.
+ *  - `phase: 'token'` — operator never posted `/login/token` inside
+ *    `GT_LOGIN_TOKEN_TIMEOUT_SECS`. */
 export type LoginFailure =
   | { kind: 'spawn'; message: string }
   | { kind: 'url_missing' }
   | { kind: 'token_rejected'; status: number }
   | { kind: 'cancelled' }
-  | { kind: 'io'; message: string };
+  | { kind: 'io'; message: string }
+  | { kind: 'timeout'; phase: 'url' | 'token' };
 
 /** `EventRecord.payload` for `EventRecord.type === 'quota.login_started'`. */
 export interface QuotaLoginStarted {
