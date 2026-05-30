@@ -4,10 +4,17 @@
   // the dirty file list. Polls every 2s so an agent's commit/dirty-file change shows up
   // without a manual reload — same cadence VSCode's SCM view uses (cheap GET on local git).
   //
-  // hq-fe-view.15 — cross-link with /api/beads?status=working: the bead-id parsed from the
-  // claim branch is joined against the live bead snapshot so each row surfaces the bead
-  // title + assignee (the agent actively on that worktree). Beads fetch is fire-and-forget
-  // — failures leave `beadsById` empty and the badge falls back to the id-only render.
+  // hq-fe-view.15 — cross-link with /api/issues?status=open,working: the bead-id parsed
+  // from the claim branch is joined against the live issues snapshot so each row surfaces
+  // the bead title + assignee (the agent actively on that worktree). Issues fetch is
+  // fire-and-forget — failures leave `issuesById` empty and the badge falls back to the
+  // id-only render.
+  //
+  // hq-fe-view.16 — idle worktrees are hidden by default: panel surfaces "what agent is
+  // doing what", not git inventory. An "idle" wt is non-main + non-claim/ + clean (zero
+  // dirty files); typically abandoned WIP branches operators forgot to `worktree remove`.
+  // The counter in the header makes the hide non-silent so the operator knows when to
+  // sweep them (`X active · Y idle hidden`).
   //
   // Layout is intentionally bare: full Shell/Sidebar/Topbar arrive with hq-fe-view.1 and
   // wrap this route via +layout.svelte once that bead lands.
@@ -18,6 +25,7 @@
   import type { Worktree } from '$lib/types/worktree';
   import type { Issue } from '$lib/types/issue';
   import { beadIdFromBranch } from '$lib/claim-branch';
+  import { isActive } from '$lib/worktree-filter';
 
   let { data } = $props<{
     data: { initial: Worktree[]; issues: Issue[]; error: string | null };
@@ -36,6 +44,10 @@
   // Derived index for O(1) badge enrichment per row. Rebuilds whenever the polled `issues`
   // array swaps; Svelte 5 `$derived` keeps the map identity stable across re-renders.
   let issuesById = $derived(new Map(issues.map((i) => [i.id, i])));
+  // Active = main, or a `claim/` branch (an agent owns it), or has dirty files.
+  // Anything else is "idle" — abandoned WIP not currently part of any agent flow.
+  let activeRows = $derived(rows.filter(isActive));
+  let idleCount = $derived(rows.length - activeRows.length);
   let expanded = $state<Record<string, boolean>>({});
   let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -92,7 +104,9 @@
   <header class="mb-6 flex items-baseline justify-between">
     <h1 class="font-sketch text-3xl" style="color: var(--accent)">Worktrees</h1>
     <span class="text-xs" style="color: var(--ink-faint)">
-      polling every 2s · {rows.length} repo{rows.length === 1 ? '' : 's'}
+      polling every 2s · {activeRows.length} active{idleCount > 0
+        ? ` · ${idleCount} idle hidden`
+        : ''}
     </span>
   </header>
 
@@ -109,7 +123,7 @@
   {/if}
 
   <ul class="divide-y divide-white/5">
-    {#each rows as wt (wt.path)}
+    {#each activeRows as wt (wt.path)}
       {@const open = expanded[wt.path] ?? false}
       {@const beadId = beadIdFromBranch(wt.branch)}
       {@const liveBead = beadId ? (issuesById.get(beadId) ?? null) : null}
