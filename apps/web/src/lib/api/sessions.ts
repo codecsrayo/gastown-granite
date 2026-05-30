@@ -7,7 +7,7 @@ import type { Session } from '$lib/types/session';
 
 export async function fetchSessions(
   role?: string,
-  fetchFn: typeof fetch = fetch,
+  fetchFn: typeof fetch = fetch
 ): Promise<Session[]> {
   const url = role ? `/api/sessions?role=${encodeURIComponent(role)}` : '/api/sessions';
   const res = await fetchFn(url, { headers: { accept: 'application/json' } });

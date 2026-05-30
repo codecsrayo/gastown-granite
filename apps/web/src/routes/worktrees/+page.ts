@@ -15,13 +15,12 @@ import type { Issue } from '$lib/types/issue';
 export const load: PageLoad = async ({ fetch }) => {
   const [wtResult, issuesResult] = await Promise.allSettled([
     fetchWorktrees(fetch),
-    fetchIssues('open,working', fetch),
+    fetchIssues('open,working', fetch)
   ]);
 
   const worktrees: Worktree[] = wtResult.status === 'fulfilled' ? wtResult.value : [];
   const issues: Issue[] = issuesResult.status === 'fulfilled' ? issuesResult.value : [];
-  const error: string | null =
-    wtResult.status === 'rejected' ? String(wtResult.reason) : null;
+  const error: string | null = wtResult.status === 'rejected' ? String(wtResult.reason) : null;
 
   return { initial: worktrees, issues, error };
 };

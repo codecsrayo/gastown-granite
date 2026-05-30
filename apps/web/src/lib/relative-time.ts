@@ -7,7 +7,7 @@
 // guarding on the timestamp at the call site.
 export function relativeAge(
   thenSecs: number | null,
-  nowSecs: number = Math.floor(Date.now() / 1000),
+  nowSecs: number = Math.floor(Date.now() / 1000)
 ): string {
   if (thenSecs === null || thenSecs <= 0) return '';
   const delta = nowSecs - thenSecs;

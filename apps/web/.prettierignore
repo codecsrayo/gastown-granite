@@ -1,0 +1,10 @@
+# Build artefacts + lockfiles + vendored / generated paths.
+.svelte-kit
+build
+node_modules
+pnpm-lock.yaml
+
+# Docs are markdown + vendored HTML wireframe; prettier mangles tables and the
+# HTML export, so format them by hand instead of through the CI gate (hq-fe-build.8).
+docs
+README.md

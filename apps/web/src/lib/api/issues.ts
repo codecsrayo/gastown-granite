@@ -9,7 +9,7 @@ import type { Issue } from '$lib/types/issue';
 
 export async function fetchIssues(
   status: string = 'open,working',
-  fetchFn: typeof fetch = fetch,
+  fetchFn: typeof fetch = fetch
 ): Promise<Issue[]> {
   const url = `/api/issues?status=${encodeURIComponent(status)}`;
   const res = await fetchFn(url, { headers: { accept: 'application/json' } });

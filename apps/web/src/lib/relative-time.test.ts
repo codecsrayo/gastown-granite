@@ -16,7 +16,7 @@ function wt(overrides: Partial<Worktree>): Worktree {
     head_subject: null,
     head_author: null,
     head_time: null,
-    ...overrides,
+    ...overrides
   };
 }
 
@@ -48,10 +48,7 @@ describe('byRecency', () => {
   it('pins main to the top regardless of head_time', () => {
     const main = wt({ is_main: true, branch: 'main', head_time: 100 });
     const newer = wt({ branch: 'feat/x', head_time: 999 });
-    expect([newer, main].sort(byRecency).map((w) => w.branch)).toEqual([
-      'main',
-      'feat/x',
-    ]);
+    expect([newer, main].sort(byRecency).map((w) => w.branch)).toEqual(['main', 'feat/x']);
   });
 
   it('orders non-main rows by head_time desc', () => {
@@ -61,16 +58,13 @@ describe('byRecency', () => {
     expect([old, mid, fresh].sort(byRecency).map((w) => w.branch)).toEqual([
       'feat/c',
       'feat/b',
-      'feat/a',
+      'feat/a'
     ]);
   });
 
   it('parks rows with null head_time at the bottom', () => {
     const unknown = wt({ branch: 'feat/x', head_time: null });
     const known = wt({ branch: 'feat/y', head_time: 5 });
-    expect([unknown, known].sort(byRecency).map((w) => w.branch)).toEqual([
-      'feat/y',
-      'feat/x',
-    ]);
+    expect([unknown, known].sort(byRecency).map((w) => w.branch)).toEqual(['feat/y', 'feat/x']);
   });
 });

@@ -16,7 +16,7 @@ function mk(overrides: Partial<Worktree>): Worktree {
     head_subject: null,
     head_author: null,
     head_time: null,
-    ...overrides,
+    ...overrides
   };
 }
 
@@ -30,11 +30,9 @@ describe('isActive', () => {
   });
 
   it('dirty worktrees are active even on non-claim branches', () => {
-    expect(
-      isActive(
-        mk({ branch: 'feat/idempotency', dirty: [{ path: 'a', xy: '.M' }] }),
-      ),
-    ).toBe(true);
+    expect(isActive(mk({ branch: 'feat/idempotency', dirty: [{ path: 'a', xy: '.M' }] }))).toBe(
+      true
+    );
   });
 
   it('clean non-claim non-main worktrees are idle', () => {
