@@ -1,0 +1,19 @@
+[package]
+name = "gt-login"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+gt-events = { path = "../../../kernel/gt-events" }
+serde.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+regex = "1"
+
+# Only the real PTY adapter pulls portable-pty. The domain state machine + Pty trait stay
+# platform-neutral so the FakePty driver test runs on every target.
+portable-pty = "0.8"
+
+[dev-dependencies]
+serde_json.workspace = true

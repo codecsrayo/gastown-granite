@@ -196,7 +196,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | Bead | Título | Pri | Estado | Agente | Notas |
 |---|---|---|---|---|---|
 | hq-fe-auth.0 | Research Anthropic OAuth client_id + redirect | P2 | open | — | descartar/perseguir opción A |
-| hq-fe-auth.1 | PTY driver: spawn `claude /login` + URL regex | P1 | open | — | portable-pty crate |
+| hq-fe-auth.1 | PTY driver: spawn `claude /login` + URL regex | P1 | closed | claude-host | nuevo crate `gt-login` en `domain/orchestration/`: `Pty` port + `PortablePty` (portable-pty 0.8) + `FakePty` scripted; `LoginDriver::run` síncrono (3 fases: read-until-URL, request token, write+wait); `extract_url` regex anclada a `console.anthropic.com`/`claude.ai` con trim de `.,)]>"'`; `LoginEvent {Started, UrlReady{url}, Complete{account}, Failed{reason}}` + `LoginFailure {Spawn, UrlMissing, TokenRejected{status}, Cancelled, Io}` listos para SSE `quota.login_*` en `hq-fe-auth.3`; 11 tests (5 regex + 1 state + 5 driver vía FakePty cubriendo happy/url-split/eof/cancel/exit-nonzero) |
 | hq-fe-auth.2 | `POST /api/quota/accounts/:n/login` + token + cancel | P1 | open | — | depende auth.1 |
 | hq-fe-auth.3 | SSE kinds `quota.login_*` | P1 | open | — | started · url_ready · complete · failed |
 | hq-fe-auth.4 | Timeout + cleanup pty zombis + lock per account | P2 | open | — | mitigación |

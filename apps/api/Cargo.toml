@@ -22,6 +22,8 @@ members = [
     "crates/domain/orchestration/gt-patrol",
     "crates/domain/orchestration/gt-merge",
     "crates/domain/orchestration/gt-quota",
+    # hq-fe-auth.1 — PTY driver for `claude /login` (account login flow).
+    "crates/domain/orchestration/gt-login",
     "crates/domain/orchestration/gt-orchestration",
     "crates/domain/platform/gt-feed",
     # hq-t9vt Paso 9.C — ephemeral wisp domain + reaper compaction.
