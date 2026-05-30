@@ -24,8 +24,9 @@ use crate::dto::{
     ConvoyCreateRequest, ConvoyCreateResponse, ConvoyDto, ConvoyMemberDto, ConvoysQuery,
     DirtyFileDto, FeedQuery, IssueDto, IssuesQuery,
     MayorStatusDto, MemberFailRequest, MergeSlotDto, NudgeRequest, NudgeResponse,
-    QuotaRetireResponse, QuotaRotateRequest, QuotaRotationDto, QuotaRotationEntryDto,
-    QuotaRotationQuery, QuotaWaitingUnlockDto, SessionDto, SessionsQuery, WhoamiDto, WorktreeDto,
+    QuotaAccountDto, QuotaRetireResponse, QuotaRotateRequest, QuotaRotationDto,
+    QuotaRotationEntryDto, QuotaRotationQuery, QuotaWaitingUnlockDto, SessionDto, SessionsQuery,
+    WhoamiDto, WorktreeDto,
 };
 use crate::state::AppState;
 use crate::stream::{sse_from_json_receiver, sse_from_receiver};
@@ -691,6 +692,57 @@ where
         "member": member,
         "reason": req.reason,
     })))
+}
+
+/// `GET /api/quota/accounts` — flat snapshot of every account the quota actor knows about
+/// (hq-fe-api-r.1). Powers the dashboard sidebar (hq-fe-view.10): AccountCard + QuotaMeter +
+/// RotationChips. Mirrors the `accounts()` view the rotation route already reads, just
+/// collapsed to the wire shape (state bucketed to `active`/`inactive`/`blocked`, the live
+/// window flattened to `tokens_used`/`tokens_cap`/`reset_at`). Returns an empty array — never
+/// 404 — when the bus is unwired, matching `/api/quota/rotation`. `sessions` is reserved for
+/// the per-account pin list the registry does not yet expose.
+pub async fn quota_accounts<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
+) -> Result<Json<Vec<QuotaAccountDto>>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
+{
+    let accounts = match state.bus.as_ref() {
+        Some(bus) => bus
+            .quota()
+            .accounts()
+            .await
+            .into_iter()
+            .map(|a| {
+                let state_str = match a.status {
+                    gt_quota::AccountQuotaStatus::Healthy => "active",
+                    gt_quota::AccountQuotaStatus::Cooldown => "inactive",
+                    gt_quota::AccountQuotaStatus::Limited
+                    | gt_quota::AccountQuotaStatus::Blocked => "blocked",
+                };
+                let (tokens_used, tokens_cap, reset_at) = match a.window.as_ref() {
+                    Some(w) => (
+                        Some(w.consumed.ceil() as u64),
+                        Some(w.limit),
+                        Some(w.resets_at_secs),
+                    ),
+                    None => (None, None, None),
+                };
+                QuotaAccountDto {
+                    id: a.id,
+                    state: state_str.to_string(),
+                    tokens_used,
+                    tokens_cap,
+                    reset_at,
+                    sessions: Vec::new(),
+                }
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    Ok(Json(accounts))
 }
 
 /// `POST /api/quota/accounts/:id/rotate` — promote `quota.rotate` from MCP-only to an

@@ -237,6 +237,12 @@ where
             "/api/convoys/:convoy/members/:member/fail",
             post(routes::fail_convoy_member::<R, SQ, M>).route_layer(req("convoys.write")),
         )
+        // hq-fe-api-r.1 — flat snapshot of every account in the quota registry. Powers
+        // the dashboard sidebar (hq-fe-view.10) AccountCard + QuotaMeter + RotationChips.
+        .route(
+            "/api/quota/accounts",
+            get(routes::quota_accounts::<R, SQ, M>).route_layer(req("quota.read")),
+        )
         // hq-fe-api-w.10 — promote quota.rotate / quota.retire from MCP-only to HTTP.
         .route(
             "/api/quota/accounts/:id/rotate",

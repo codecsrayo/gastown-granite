@@ -1,5 +1,6 @@
 <script lang="ts">
   import { page } from '$app/stores';
+  import QuotaPanel from '$lib/components/quota/QuotaPanel.svelte';
 
   type NavItem = { href: string; label: string; hint?: string };
 
@@ -22,7 +23,7 @@
 </script>
 
 <aside
-  class="flex w-48 shrink-0 flex-col border-r"
+  class="flex w-56 shrink-0 flex-col overflow-y-auto border-r"
   style="border-color: var(--border); background: var(--paper)"
 >
   <div class="px-4 pb-3 pt-5">
@@ -54,7 +55,7 @@
     {/each}
   </nav>
 
-  <div class="mt-auto px-4 py-3 font-mono text-[10px]" style="color: var(--ink-faint)">
-    quota · hq-fe-view.10
+  <div class="mt-auto">
+    <QuotaPanel />
   </div>
 </aside>

@@ -1,9 +1,18 @@
-// Thin client for `GET /api/quota/rotation?since=&limit=` (hq-fe-api-r.2). Composite
-// snapshot for the rotation panel: live `Cooldown` accounts joined with the tail of
-// `quota.rotated` records pulled from `events.jsonl`.
+// Thin clients for the quota read-side: snapshot of every account (hq-fe-api-r.1) +
+// composite rotation panel (hq-fe-api-r.2). Both endpoints return empty arrays — never
+// 404 — when the bus is unwired, so the sidebar renders a stable shell without conditional
+// rendering on the wire shape.
 
-import type { QuotaRotation } from '$lib/types/quota';
+import type { QuotaAccount, QuotaRotation } from '$lib/types/quota';
 import { apiGet, type ApiRequestOpts } from './client';
+
+export type FetchQuotaAccountsOpts = Omit<ApiRequestOpts, 'method' | 'body'>;
+
+export function fetchQuotaAccounts(
+  opts: FetchQuotaAccountsOpts = {}
+): Promise<QuotaAccount[]> {
+  return apiGet<QuotaAccount[]>('/api/quota/accounts', opts);
+}
 
 export interface FetchQuotaRotationOpts extends Omit<ApiRequestOpts, 'method' | 'body'> {
   /** RFC3339 timestamp; only `recent_rotations` strictly newer than this are returned. */

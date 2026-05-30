@@ -152,7 +152,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 
 | Bead | Título | Pri | Estado | Agente | Notas |
 |---|---|---|---|---|---|
-| hq-fe-api-r.1 | `GET /api/quota/accounts` snapshot completo | P1 | open | — | tags por sesión, /upgrade pending |
+| hq-fe-api-r.1 | `GET /api/quota/accounts` snapshot completo | P1 | closed | claude-host | `QuotaAccountDto {id, state, tokens_used, tokens_cap, reset_at, sessions}`; status collapsed a `active`/`inactive`/`blocked`; window flattened (`consumed.ceil() as u64`); `sessions:[]` reservado hasta que `AccountRegistry` exponga índice; 2 cargo tests (empty + 3-status bucketing) sumados al `quota_http` suite |
 | hq-fe-api-r.2 | `GET /api/quota/rotation` waiting_unlock + recent | P1 | closed | claude-host | snapshot 7fb78241 (commit en main); derivado de SSE quota.* + estado |
 | hq-fe-api-r.3 | `GET /api/convoys` snapshot por estado | P2 | closed | claude-host | `ConvoyDto`+`ConvoyMemberDto`; `bus.orch().snapshot()`; `?state=` filter permissive; 10 cargo test; FE `lib/{types,api}/convoy*` |
 | hq-fe-api-r.4 | `GET /api/merges` slots snapshot | P2 | closed | claude-host | `AppState<R,SQ,M>` add `M: MergeRepository` (14 fixtures patched); `MergeSlotDto {bead,branch,state}` flat strings; `routes::list_merges`; tests `merges_http` 2/2 (sorted seeded + empty). 12 fixtures gain `merges` field |
@@ -246,7 +246,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-view.7 | Merge Q view | P2 | open | — | |
 | hq-fe-view.8 | Crew view (RoleList + RolePanel + SkillToggle + ScopeMatrix) | P2 | open | — | depende hq-fe-skills |
 | hq-fe-view.9 | Rigs view | P3 | open | — | |
-| hq-fe-view.10 | Quota sidebar (AccountCard + Meter + RotationChips + LoginBtn) | P1 | open | — | sidebar fija |
+| hq-fe-view.10 | Quota sidebar (AccountCard + Meter + RotationChips + LoginBtn) | P1 | closed | claude-host | `lib/components/quota/{QuotaPanel,AccountCard,QuotaMeter,RotationChips,LoginBtn}.svelte` + `lib/quota-meter.ts` (tone/ratio/countdown/group); hidrata `GET /api/quota/accounts` (hq-fe-api-r.1) + `GET /api/quota/rotation` y refetch ambos por `quota.*` SSE; sidebar w-48→w-56 + overflow-auto; LoginBtn disabled hasta hq-fe-auth.1; 22 vitest (meter 11 + api 4 + store 7 ya existían) |
 | hq-fe-view.11 | Dock terminal shell (mount + tabs + xterm lazy) | P2 | open | — | bloqueada por hq-fe-term decision |
 | hq-fe-view.12 | `<Guard>`, `<DangerButton>`, `<DangerZone>` components | P1 | closed | claude-host | `lib/stores/auth.svelte.ts` (dev permissive · live hydrate · readOnly) + `lib/components/auth/{Guard,DangerButton,DangerZone}.svelte` + extracted `danger-button.ts` state machine (12 vitest); `/design` playground route |
 | hq-fe-view.13 | Profile menu topbar (whoami + read-only toggle + logout) | P1 | closed | claude-host | `lib/components/auth/{ProfileBadge,ProfileMenu}.svelte` + `lib/bearer.ts` (3 vitest); dropdown click-outside + esc; wired into Topbar replacing placeholder |

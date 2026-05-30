@@ -289,6 +289,25 @@ pub struct QuotaRetireResponse {
     pub removed: bool,
 }
 
+/// One row of `GET /api/quota/accounts` (hq-fe-api-r.1). Snapshot of every account the
+/// quota actor knows about, flattened so the dashboard sidebar (hq-fe-view.10) can render
+/// AccountCard + QuotaMeter without joining against the domain types. `tokens_used` /
+/// `tokens_cap` / `reset_at` collapse `Account.window` into the three fields the meter
+/// needs; `None` when the account has no live window yet (`upsert_account` happened but
+/// `WindowReset` did not). `sessions` is reserved for the per-account pin list the actor
+/// does not yet expose — wire it once `AccountRegistry` carries a session index.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QuotaAccountDto {
+    pub id: String,
+    /// Operational state collapsed to the three buckets the sidebar groups by:
+    /// `active` (Healthy), `inactive` (Cooldown), `blocked` (Limited / Blocked).
+    pub state: String,
+    pub tokens_used: Option<u64>,
+    pub tokens_cap: Option<u64>,
+    pub reset_at: Option<u64>,
+    pub sessions: Vec<String>,
+}
+
 /// One row of `waiting_unlock` on `GET /api/quota/rotation` (hq-fe-api-r.2). An account
 /// currently parked in [`gt_quota::AccountQuotaStatus::Cooldown`] (typically the source
 /// of a recent rotation) plus the best-effort wall time the dashboard can use to render

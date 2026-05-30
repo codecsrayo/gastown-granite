@@ -217,7 +217,7 @@ to the old API; pick the cleanest contract per feature.
 
 | Need | Status | Bead anchor |
 |---|---|---|
-| `GET /api/quota/accounts` — snapshot (live/limited, slots, reset_at, tags por sesión, /upgrade pending) | **gap** | hq-fe-api-r.1 |
+| `GET /api/quota/accounts` — snapshot (state bucket, tokens_used/cap, reset_at, sessions[]) | **live** | hq-fe-api-r.1 |
 | `GET /api/quota/rotation` — `waiting_unlock[]` + `recent_rotations[since=]` | **live** | hq-fe-api-r.2 |
 | `GET /api/convoys` — snapshot por estado | **gap** (solo SSE `orch.*`) | hq-fe-api-r.3 |
 | `GET /api/merges` — slots snapshot | **live** | hq-fe-api-r.4 |

@@ -196,6 +196,68 @@ async fn get_on_post_only_route_returns_405() {
     root.shutdown();
 }
 
+// ---------------- hq-fe-api-r.1 — GET /api/quota/accounts ----------------
+
+#[tokio::test]
+async fn accounts_returns_empty_when_registry_empty() {
+    let (base, root, _srv) = boot().await;
+    let body: serde_json::Value = reqwest::get(format!("{base}/api/quota/accounts"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(body.as_array().unwrap().is_empty());
+    root.shutdown();
+}
+
+#[tokio::test]
+async fn accounts_collapses_status_and_window_for_sidebar() {
+    let (base, root, _srv) = boot().await;
+    root.quota.upsert_account(live_account("acc-active")).await;
+    root.quota
+        .upsert_account(cooldown_account("acc-parked", 9_000))
+        .await;
+    root.quota
+        .upsert_account(Account {
+            id: "acc-blocked".into(),
+            status: AccountQuotaStatus::Limited,
+            window: None,
+        })
+        .await;
+
+    let body: serde_json::Value = reqwest::get(format!("{base}/api/quota/accounts"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let arr = body.as_array().unwrap();
+    assert_eq!(arr.len(), 3);
+
+    let by_id: std::collections::HashMap<&str, &serde_json::Value> =
+        arr.iter().map(|r| (r["id"].as_str().unwrap(), r)).collect();
+
+    let active = by_id["acc-active"];
+    assert_eq!(active["state"], "active");
+    assert_eq!(active["tokens_used"], 0);
+    assert_eq!(active["tokens_cap"], 1_000_000);
+    assert_eq!(active["reset_at"], 18_000);
+    assert!(active["sessions"].as_array().unwrap().is_empty());
+
+    let parked = by_id["acc-parked"];
+    assert_eq!(parked["state"], "inactive");
+    assert_eq!(parked["reset_at"], 9_000);
+
+    let blocked = by_id["acc-blocked"];
+    assert_eq!(blocked["state"], "blocked");
+    assert!(blocked["tokens_used"].is_null());
+    assert!(blocked["tokens_cap"].is_null());
+    assert!(blocked["reset_at"].is_null());
+
+    root.shutdown();
+}
+
 // ---------------- hq-fe-api-r.2 — GET /api/quota/rotation ----------------
 
 /// Variant of `boot()` that wires an `event_log` path so `recent_rotations` can read it.
