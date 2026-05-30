@@ -22,4 +22,7 @@ export interface Worktree {
   // populated from the same `git log -1 --format=%s%n%an` call; null when HEAD is unreadable.
   head_subject: string | null;
   head_author: string | null;
+  // hq-fe-api-r.11: HEAD commit time (Unix seconds). Powers the panel sort + the "X ago"
+  // relative-time chip. Null when HEAD is unreadable; rows fall back to insertion order.
+  head_time: number | null;
 }

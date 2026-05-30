@@ -15,6 +15,7 @@ function mk(overrides: Partial<Worktree>): Worktree {
     dirty: [],
     head_subject: null,
     head_author: null,
+    head_time: null,
     ...overrides,
   };
 }

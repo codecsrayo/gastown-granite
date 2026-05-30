@@ -26,6 +26,7 @@
   import type { Issue } from '$lib/types/issue';
   import { beadIdFromBranch } from '$lib/claim-branch';
   import { isActive } from '$lib/worktree-filter';
+  import { byRecency, relativeAge } from '$lib/relative-time';
 
   let { data } = $props<{
     data: { initial: Worktree[]; issues: Issue[]; error: string | null };
@@ -46,7 +47,9 @@
   let issuesById = $derived(new Map(issues.map((i) => [i.id, i])));
   // Active = main, or a `claim/` branch (an agent owns it), or has dirty files.
   // Anything else is "idle" — abandoned WIP not currently part of any agent flow.
-  let activeRows = $derived(rows.filter(isActive));
+  // hq-fe-view.18: after filtering, sort by HEAD commit time desc so the most-recently
+  // touched worktree rises to the top (main always pinned first by the comparator).
+  let activeRows = $derived(rows.filter(isActive).toSorted(byRecency));
   let idleCount = $derived(rows.length - activeRows.length);
   let expanded = $state<Record<string, boolean>>({});
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -171,6 +174,14 @@
             </span>
           </span>
           <span class="flex shrink-0 items-center gap-3 text-xs">
+            {#if wt.head_time}
+              <span
+                title={new Date(wt.head_time * 1000).toISOString()}
+                style="color: var(--ink-faint)"
+              >
+                {relativeAge(wt.head_time)}
+              </span>
+            {/if}
             <span title="HEAD sha" style="color: var(--ink-soft)">{shortSha(wt.head)}</span>
             <span title="behind / ahead" style="color: var(--ink-soft)">
               ↓{wt.behind} ↑{wt.ahead}

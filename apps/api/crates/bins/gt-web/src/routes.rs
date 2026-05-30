@@ -346,7 +346,7 @@ async fn collect_worktrees(root: &std::path::Path) -> Result<Vec<WorktreeDto>, A
         let wt_path = std::path::Path::new(&entry.path);
         let dirty = collect_dirty(wt_path).await?;
         let (ahead, behind) = ahead_behind(wt_path).await?;
-        let (head_subject, head_author) = head_commit_meta(wt_path).await;
+        let (head_subject, head_author, head_time) = head_commit_meta(wt_path).await;
 
         out.push(WorktreeDto {
             path: entry.path,
@@ -358,24 +358,28 @@ async fn collect_worktrees(root: &std::path::Path) -> Result<Vec<WorktreeDto>, A
             dirty,
             head_subject,
             head_author,
+            head_time,
         });
     }
     Ok(out)
 }
 
-/// HEAD commit subject + author name in a single `git log` call (hq-fe-api-r.10). Uses
-/// `--format=%s%n%an` so the first line is the subject (no body, no trailing newline issues)
-/// and the second is the author; any worktree without commits or an unreadable HEAD returns
-/// `(None, None)` so the panel still renders the row without inventing data.
-async fn head_commit_meta(wt: &std::path::Path) -> (Option<String>, Option<String>) {
-    let out = match run_git(wt, &["log", "-1", "--format=%s%n%an", "HEAD"]).await {
+/// HEAD commit subject + author + Unix commit time in a single `git log` call
+/// (hq-fe-api-r.10 + .11). `--format=%s%n%an%n%ct` yields one record per line so partial
+/// parses degrade gracefully: a worktree with no commits or an unreadable HEAD returns
+/// `(None, None, None)` and the panel still renders the row without inventing data.
+async fn head_commit_meta(
+    wt: &std::path::Path,
+) -> (Option<String>, Option<String>, Option<u64>) {
+    let out = match run_git(wt, &["log", "-1", "--format=%s%n%an%n%ct", "HEAD"]).await {
         Ok(s) => s,
-        Err(_) => return (None, None),
+        Err(_) => return (None, None, None),
     };
     let mut lines = out.lines();
     let subject = lines.next().map(str::to_string).filter(|s| !s.is_empty());
     let author = lines.next().map(str::to_string).filter(|s| !s.is_empty());
-    (subject, author)
+    let time = lines.next().and_then(|s| s.parse().ok());
+    (subject, author, time)
 }
 
 async fn collect_dirty(wt: &std::path::Path) -> Result<Vec<DirtyFileDto>, AppError> {

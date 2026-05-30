@@ -180,6 +180,10 @@ pub struct WorktreeDto {
     /// `head_subject`; the two are populated by the same `git log` call so they're either
     /// both present or both absent.
     pub head_author: Option<String>,
+    /// Commit time of HEAD as Unix seconds (`git log -1 --format=%ct`). `None` when the
+    /// worktree has no commits or the lookup failed. hq-fe-api-r.11 — the frontend sorts
+    /// active rows by this so the most recently touched worktree rises to the top.
+    pub head_time: Option<u64>,
 }
 
 /// One dirty path inside a worktree. Mirrors `git status --porcelain=v2` shape — the `xy`

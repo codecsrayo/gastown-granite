@@ -210,4 +210,14 @@ async fn lists_main_and_worktree_with_dirty_and_divergence() {
     assert_eq!(branch_row.head_author.as_deref(), Some("test"));
     assert_eq!(main_row.head_subject.as_deref(), Some("init"));
     assert_eq!(main_row.head_author.as_deref(), Some("test"));
+
+    // hq-fe-api-r.11: head_time (Unix seconds) present on both rows, and the branch commit
+    // (created after init) is at least as new as main's. `>=` not `>` because both commits
+    // can land within the same second on a fast test run.
+    let main_time = main_row.head_time.expect("main head_time missing");
+    let branch_time = branch_row.head_time.expect("branch head_time missing");
+    assert!(
+        branch_time >= main_time,
+        "branch commit must not pre-date init: branch={branch_time} main={main_time}"
+    );
 }
