@@ -12,6 +12,7 @@ Lee en este orden, 5 min cada uno:
 2. **[frontend-api-surface.md](frontend-api-surface.md)** — qué expone hoy `gt-api`/`gt-mcp`, qué falta (gap table con bead anchor).
 3. **[frontend-architecture.md](frontend-architecture.md)** — estructura SvelteKit, stores, SSE, RBAC, patrones núcleo.
 4. **[frontend-features.md](frontend-features.md)** — catálogo navegable de features (qué hace cada vista, qué endpoints, qué scope).
+5. **[dev-workflow.md](dev-workflow.md)** — comandos diarios (dev/build/test), vite proxy, gt-web host-side vs container, troubleshooting (hq-fe-build.6).
 
 Visual:
 

@@ -4,8 +4,9 @@ SvelteKit 5 + Tailwind + adapter-static. Talks to the Rust API
 (`gt-web` + `gt-mcp`). Replaces the retired Go dashboard
 (`internal/web/`).
 
-**Read first:** [`../docs/README.md`](./docs/README.md) — rules,
-canonical decisions, links to architecture / API / features docs.
+**Read first:** [`./docs/README.md`](./docs/README.md) — rules, canonical
+decisions, links to architecture / API / features docs. Daily-loop commands
++ proxy targets + troubleshooting live in [`./docs/dev-workflow.md`](./docs/dev-workflow.md).
 
 ## Quick start
 
