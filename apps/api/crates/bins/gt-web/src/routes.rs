@@ -61,6 +61,49 @@ where
     Ok(Json(rows.into_iter().map(Into::into).collect()))
 }
 
+/// `DELETE /api/sessions/:id` — operator e-stop on a runaway polecat (hq-fe-api-w.6).
+/// The route is the dashboard's "kill" button: it (a) confirms the session is still in
+/// the active registry, (b) calls the [`crate::PolecatKiller`] port to terminate the
+/// underlying tmux session, and (c) emits `AgentEvent::Killed` on the agent relay so the
+/// projector flips the row to `Killed` and SSE subscribers see the lifecycle close.
+///
+/// Order matters: tmux kill goes *before* the event so a fatal edge error (missing
+/// `tmux` binary, server unreachable) surfaces as 500 without leaving a half-closed
+/// session row in the registry. A successful tmux kill followed by a relay drop is
+/// recoverable — the session lingers as `Killed` in tmux but the registry will resync on
+/// the next replay/restart (mirrors how `AgentEvent::SessionEnd` is handled today).
+pub async fn delete_session<R, SQ>(
+    State(state): State<AppState<R, SQ>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
+    if id.is_empty() {
+        return Err(AppError::bad_request("session id is empty"));
+    }
+    let active = state.sessions.active_sessions().await.map_err(AppError::from)?;
+    if !active.iter().any(|s| s.id == id) {
+        return Err(AppError::not_found(format!("session {id}")));
+    }
+    let killer = state
+        .killer
+        .as_ref()
+        .ok_or_else(|| AppError::internal("polecat killer not wired"))?;
+    killer.kill(&id)?;
+    let env = Envelope::root(AgentEvent::Killed {
+        session: id.clone(),
+        reason: "operator: DELETE /api/sessions/:id".to_string(),
+    });
+    state
+        .agent_events
+        .send(env)
+        .await
+        .map_err(|_| AppError::internal("agent relay closed"))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// `POST /api/nudge` — write-side: emits an `AgentEvent::Heartbeat` to the agent relay. The
 /// reactor records it in the audit log; SSE subscribers see it as `agent.heartbeat`.
 pub async fn nudge<R, SQ>(

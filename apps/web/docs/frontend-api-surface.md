@@ -217,7 +217,7 @@ to the old API; pick the cleanest contract per feature.
 | `POST /api/beads` (create) · `PATCH /api/beads/:id` (update) | **gap** (solo gt-mcp tools) | hq-fe-api-w.3 |
 | `POST /api/beads/:id/transition` (state machine) | **done** (gt-web) | hq-fe-api-w.4 |
 | `POST /api/beads/:id/comments` | **gap** | hq-fe-api-w.5 |
-| `DELETE /api/sessions/:id` (kill via gt-polecat SIGTERM) | **gap** | hq-fe-api-w.6 |
+| `DELETE /api/sessions/:id` (kill via gt-polecat SIGTERM) | **done** (gt-web) | hq-fe-api-w.6 |
 | `POST /api/sessions/:id/restart` | **gap** | hq-fe-api-w.7 |
 | `POST /api/sessions/:id/interrupt` (tmux send-keys ESC) | **gap** | hq-fe-api-w.8 |
 | `POST /api/convoys` · `pause` · `resume` · `members/:m/fail` (e-stop) | **gap parcial** | hq-fe-api-w.9 |

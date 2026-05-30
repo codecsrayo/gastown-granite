@@ -28,6 +28,8 @@ gt-agent = { path = "../../domain/lifecycle/gt-agent" }
 gt-merge = { path = "../../domain/orchestration/gt-merge" }
 gt-patrol = { path = "../../domain/orchestration/gt-patrol" }
 gt-orchestration = { path = "../../domain/orchestration/gt-orchestration" }
+# hq-fe-api-w.6: DELETE /api/sessions/:id wraps `gt_polecat::Tmux` for the tmux kill.
+gt-polecat = { path = "../../domain/lifecycle/gt-polecat" }
 # hq-fe-api-w.10: POST /api/quota/accounts/:n/{rotate,retire} dispatches QuotaCommand.
 gt-quota = { path = "../../domain/orchestration/gt-quota" }
 # Real persistence adapters: opt-in via env (GT_DOLT_URL / GT_PG_AUDIT_URL).

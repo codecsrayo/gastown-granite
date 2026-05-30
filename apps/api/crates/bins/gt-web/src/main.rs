@@ -48,7 +48,8 @@ use gt_store_dolt::{DoltBeads, DoltIssues, DoltMerge, DoltOrch, DoltPatrol, Dolt
 use gt_store_pg::PgAudit;
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 use gt_web::{
-    AppState, AuthConfig, JsonlWebAudit, ReadinessGate, ReadinessGateBuilder, WebAuditSink,
+    AppState, AuthConfig, JsonlWebAudit, PolecatKiller, ReadinessGate, ReadinessGateBuilder,
+    TmuxPolecatKiller, WebAuditSink,
 };
 
 
@@ -292,6 +293,13 @@ async fn serve<R, SQ, MR, PR, OR>(
         tx
     });
 
+    // hq-fe-api-w.6: production polecat killer. A single shared `TmuxCli` matches the
+    // supervisor/lifecycle convention (same default tmux server, no socket drift), so a
+    // `DELETE /api/sessions/:id` lands on the same session the spawner created.
+    let killer: Arc<dyn PolecatKiller> = Arc::new(TmuxPolecatKiller::new(Arc::new(
+        gt_polecat::TmuxCli::new(),
+    )));
+
     let state = AppState {
         beads,
         sessions,
@@ -303,6 +311,7 @@ async fn serve<R, SQ, MR, PR, OR>(
         // dispatch through the same actors gt-mcp drives.
         bus: Some(root.commands()),
         worktrees_stream,
+        killer: Some(killer),
     };
 
     // Idempotency-Key cache (hq-fe-api-w.2). TTL overridable via

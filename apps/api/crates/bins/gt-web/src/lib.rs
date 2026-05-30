@@ -17,13 +17,14 @@ pub mod auth;
 pub mod dto;
 pub mod health;
 pub mod idempotency;
+pub mod killer;
 pub mod routes;
 pub mod state;
 pub mod stream;
 
 use std::sync::Arc;
 
-use axum::routing::{get, patch, post};
+use axum::routing::{delete, get, patch, post};
 use axum::Router;
 
 use gt_agent::SessionQueries;
@@ -33,6 +34,7 @@ pub use audit::{InMemoryWebAudit, JsonlWebAudit, WebAuditEvent, WebAuditSink};
 pub use auth::{AuthConfig, AuthLayer};
 pub use health::{HydrationHandle, ReadinessGate, ReadinessGateBuilder};
 pub use idempotency::{idempotency_middleware, IdempotencyStore};
+pub use killer::{InMemoryPolecatKiller, PolecatKiller, TmuxPolecatKiller};
 pub use routes::collect_worktrees;
 pub use state::AppState;
 
@@ -77,6 +79,14 @@ where
     let layer = AuthLayer { config: auth, audit };
     let api = Router::new()
         .route("/api/sessions", get(routes::list_sessions::<R, SQ>))
+        // hq-fe-api-w.6 — operator e-stop on a runaway polecat. Tmux-side kill goes
+        // through `AppState.killer` (a thin port over `gt_polecat::Tmux`); the registry
+        // close happens via the existing `AgentEvent::Killed` projector path so SSE
+        // subscribers see the same `agent.killed` record the in-process reactor produces.
+        .route(
+            "/api/sessions/:id",
+            delete(routes::delete_session::<R, SQ>),
+        )
         // hq-fe-api-w.3: write surface on the dispatcher's bead table — POST mints a
         // `pending` row (wrapping scheduling.create_bead), PATCH partially updates
         // title/priority/assignee. Status transitions stay on the reactor.
