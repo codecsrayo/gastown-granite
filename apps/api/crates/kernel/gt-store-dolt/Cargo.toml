@@ -18,3 +18,4 @@ time.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true }
+ulid.workspace = true

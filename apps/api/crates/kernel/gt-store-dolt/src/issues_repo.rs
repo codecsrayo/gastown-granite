@@ -48,6 +48,39 @@ pub struct IssueRow {
     pub spec_id: Option<String>,
 }
 
+/// Insert payload for [`DoltIssues::insert`] (hq-mcp-issues.2). Mirrors the
+/// required columns of `hq.issues`; the optional fields fall back to schema
+/// defaults so callers only have to supply what the bead's design lists as
+/// required (`id`, `title`, `priority`, `issue_type`, `created_by`).
+#[derive(Debug, Clone, Default)]
+pub struct NewIssue {
+    /// Stable bead id. Must be unique; non-empty.
+    pub id: String,
+    /// Display title.
+    pub title: String,
+    /// Free-text body. Empty string is allowed and stored verbatim — the
+    /// schema marks the column `NOT NULL` so `None` here defaults to `""`.
+    pub description: String,
+    /// Design notes. `NOT NULL` in schema; empty allowed.
+    pub design: String,
+    /// Acceptance criteria. `NOT NULL` in schema; empty allowed.
+    pub acceptance_criteria: String,
+    /// Free-form notes. `NOT NULL` in schema; empty allowed.
+    pub notes: String,
+    /// Priority `0..=2` (0 = P0). Schema default is `2`.
+    pub priority: u8,
+    /// `epic`/`task`/`spike`/... — domain string.
+    pub issue_type: String,
+    /// Bead creator. Maps to `created_by`.
+    pub created_by: String,
+    /// Optional epic linkage. `None` stores `NULL`.
+    pub external_ref: Option<String>,
+    /// Optional assignee. `None` stores `NULL`.
+    pub assignee: Option<String>,
+    /// Optional initial owner. `None` stores schema default `''`.
+    pub owner: Option<String>,
+}
+
 /// Read-only Dolt adapter for the `issues` table. The canonical bead table is
 /// `issues` (~25 cols), distinct from `beads` (5 cols, dispatcher-facing). The
 /// MCP `gt://issues` resource (hq-mcp-issues.1) snapshots it; the write-side
@@ -86,6 +119,64 @@ impl DoltIssues {
                 "issues table missing in current Dolt database".into(),
             ));
         }
+        Ok(())
+    }
+
+    /// Insert a new row into `hq.issues` and stamp it as a Dolt commit so the
+    /// write is visible to downstream readers (`bd`, the dashboard, replication)
+    /// without waiting for an external commit (hq-mcp-issues.2).
+    ///
+    /// Atomicity: the `INSERT` and the `CALL DOLT_COMMIT` run on the same
+    /// connection; a failure on the `INSERT` aborts before any commit. The
+    /// `DOLT_COMMIT('-A', '-m', ...)` includes every uncommitted change on the
+    /// working set — mirroring the `docker exec dolt sql -q "...; CALL
+    /// DOLT_COMMIT(...)"` recipe operators ran by hand pre-MCP.
+    ///
+    /// Returns the duplicate-key error path verbatim so the frontier can
+    /// translate it to a `Validation` outcome (the caller already validated
+    /// non-empty fields; only DB-level uniqueness can race here).
+    pub async fn insert(&self, row: &NewIssue) -> Result<(), AppError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        conn.exec_drop(
+            "INSERT INTO issues
+                (id, title, description, design, acceptance_criteria, notes,
+                 status, priority, issue_type, assignee, owner, created_by, external_ref)
+             VALUES
+                (:id, :title, :description, :design, :acceptance_criteria, :notes,
+                 'open', :priority, :issue_type, :assignee, :owner, :created_by, :external_ref)",
+            mysql_async::params! {
+                "id" => &row.id,
+                "title" => &row.title,
+                "description" => &row.description,
+                "design" => &row.design,
+                "acceptance_criteria" => &row.acceptance_criteria,
+                "notes" => &row.notes,
+                "priority" => row.priority as i32,
+                "issue_type" => &row.issue_type,
+                "assignee" => row.assignee.clone(),
+                "owner" => row.owner.clone().unwrap_or_default(),
+                "created_by" => &row.created_by,
+                "external_ref" => row.external_ref.clone(),
+            },
+        )
+        .await
+        .map_err(map_err)?;
+
+        // Atomic Dolt commit so the row lands in history immediately. Message
+        // mirrors the operator's pre-MCP recipe (`docker exec dolt sql -q
+        // "INSERT ...; CALL DOLT_COMMIT('-A','-m','create <id>')"`). Failure
+        // here is fatal — the INSERT already landed in the working set and
+        // would be picked up by the next commit silently.
+        let commit_msg = format!("create {}", row.id);
+        conn.exec_drop(
+            "CALL DOLT_COMMIT('-A', '-m', :msg)",
+            mysql_async::params! {
+                "msg" => commit_msg,
+            },
+        )
+        .await
+        .map_err(map_err)?;
+
         Ok(())
     }
 

@@ -36,7 +36,7 @@ use gt_agent::{
     TransitionSession,
 };
 use gt_beads::{Bead, BeadStatus};
-use gt_store_dolt::{DoltIssues, DoltSessions, IssueFilter};
+use gt_store_dolt::{DoltIssues, DoltSessions, IssueFilter, NewIssue};
 use gt_merge::{CompleteMerge, FailMerge, MergeCommand, SubmitMerge};
 use gt_orchestration::{CompleteMember, FailMember, LaunchConvoy, OrchCommand};
 use gt_patrol::{CloseLease, Heartbeat, PatrolCommand, RegisterLease, Tick};
@@ -110,6 +110,17 @@ impl IssuesRead {
                     .map_err(|e| AppError::Other(format!("encode issues: {e}")))
             }
             None => Ok(serde_json::Value::Array(Vec::new())),
+        }
+    }
+
+    /// Write through to the underlying `DoltIssues` adapter (hq-mcp-issues.2).
+    /// Returns `AppError::Other("issues backend not wired")` when the gt-mcp
+    /// composition root was built without `GT_DOLT_URL` — the same shape as the
+    /// `gt://rigs` empty-snapshot fallback.
+    pub async fn insert(&self, row: &NewIssue) -> Result<(), AppError> {
+        match &self.inner {
+            Some(d) => d.insert(row).await,
+            None => Err(AppError::Other("issues backend not wired".into())),
         }
     }
 }
@@ -280,6 +291,101 @@ impl ReportGap {
             id: self.to_bead_id(),
             title: self.to_title(),
             priority: self.effective_priority(),
+        }
+    }
+}
+
+/// Input for the `issues.create` tool (hq-mcp-issues.2). Inserts a row into the
+/// canonical `hq.issues` table with an atomic Dolt commit so the new bead is
+/// visible to `bd`, the dashboard, and other agents on the next read. Closes
+/// the operator-only `docker exec dolt sql` escape hatch the policy memory
+/// flagged for MCP-canonical agents.
+///
+/// The body fields (`description`/`design`/`acceptance_criteria`/`notes`) are
+/// `NOT NULL` in the schema and default to empty strings here so callers can
+/// skip them — matching what `bd new` accepts. `external_ref` is the standard
+/// epic-linkage column (`hq-mcp-issues.X` joins via `external_ref =
+/// 'hq-mcp-issues'`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct CreateIssue {
+    /// Bead id. Must be unique in `hq.issues`; non-empty.
+    pub id: String,
+    /// Human-readable title. Required.
+    pub title: String,
+    /// Free-text description. Default empty.
+    #[serde(default)]
+    pub description: String,
+    /// Design notes. Default empty.
+    #[serde(default)]
+    pub design: String,
+    /// Acceptance criteria. Default empty.
+    #[serde(default)]
+    pub acceptance_criteria: String,
+    /// Free-form notes. Default empty.
+    #[serde(default)]
+    pub notes: String,
+    /// Priority `0..=2` (0 = P0). Defaults to `2`.
+    #[serde(default = "default_priority")]
+    pub priority: u8,
+    /// `epic`/`task`/`spike`/... — required.
+    pub issue_type: String,
+    /// Bead creator (the agent or operator). Required.
+    pub created_by: String,
+    /// Optional epic linkage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_ref: Option<String>,
+    /// Optional assignee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+    /// Optional initial owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+}
+
+fn default_priority() -> u8 {
+    2
+}
+
+impl CreateIssue {
+    /// Shape-only validation. Uniqueness on `id` is enforced by the DB layer at
+    /// `execute` time — the bus revalidates anyway, and a stale `validate` over
+    /// the empty key namespace would force a race window.
+    fn validate(&self) -> Result<(), AppError> {
+        if self.id.is_empty() {
+            return Err(AppError::Validation("issue id is empty".into()));
+        }
+        if self.title.is_empty() {
+            return Err(AppError::Validation("issue title is empty".into()));
+        }
+        if self.issue_type.is_empty() {
+            return Err(AppError::Validation("issue_type is empty".into()));
+        }
+        if self.created_by.is_empty() {
+            return Err(AppError::Validation("created_by is empty".into()));
+        }
+        if self.priority > 2 {
+            return Err(AppError::Validation(format!(
+                "priority must be 0..=2, got {}",
+                self.priority
+            )));
+        }
+        Ok(())
+    }
+
+    fn to_new(&self) -> NewIssue {
+        NewIssue {
+            id: self.id.clone(),
+            title: self.title.clone(),
+            description: self.description.clone(),
+            design: self.design.clone(),
+            acceptance_criteria: self.acceptance_criteria.clone(),
+            notes: self.notes.clone(),
+            priority: self.priority,
+            issue_type: self.issue_type.clone(),
+            created_by: self.created_by.clone(),
+            external_ref: self.external_ref.clone(),
+            assignee: self.assignee.clone(),
+            owner: self.owner.clone(),
         }
     }
 }
@@ -803,6 +909,76 @@ impl McpService {
         Parameters(args): Parameters<CreateBead>,
     ) -> Result<CallToolResult, McpError> {
         self.run_create_bead("scheduling.create_bead.execute", args, false).await
+    }
+
+    /// Scope check + (validate | INSERT + DOLT_COMMIT) + audit for `issues.create`
+    /// (hq-mcp-issues.2). The canonical `hq.issues` table is a repo write, not a domain
+    /// command, so it bypasses the bus the same way `scheduling.create_bead` does.
+    /// Validation is shape-only at the frontier; uniqueness on `id` is enforced by Dolt
+    /// at `execute` time. Closes the operator-only `docker exec dolt sql` bypass that
+    /// [[feedback_dolt_sql_for_hq_beads]] flagged.
+    pub async fn run_create_issue(
+        &self,
+        tool: &str,
+        args: CreateIssue,
+        validate_only: bool,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let json = serde_json::to_value(&args).expect("CreateIssue is Serialize");
+        let domain_result = if validate_only {
+            args.validate()
+        } else {
+            match args.validate() {
+                Ok(()) => self.inner.issues.insert(&args.to_new()).await,
+                Err(e) => Err(e),
+            }
+        };
+
+        let outcome = match &domain_result {
+            Ok(()) => Outcome::Ok,
+            Err(e) => Outcome::Failed { error: e.to_string() },
+        };
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments: json,
+            outcome,
+        });
+
+        match domain_result {
+            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
+            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "issues.create.validate",
+        description = "Check whether creating an issue in hq.issues would be accepted (shape-only; uniqueness enforced at execute). No state change."
+    )]
+    async fn issues_create_validate(
+        &self,
+        Parameters(args): Parameters<CreateIssue>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_create_issue("issues.create.validate", args, true).await
+    }
+
+    #[tool(
+        name = "issues.create.execute",
+        description = "Insert a new row in hq.issues + atomic Dolt commit. Closes the docker-exec bypass for agent-created beads."
+    )]
+    async fn issues_create_execute(
+        &self,
+        Parameters(args): Parameters<CreateIssue>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_create_issue("issues.create.execute", args, false).await
     }
 
     /// Patrol-domain shim around [`Self::run_command`] (hq-fe-api-w.1). The lease tracker

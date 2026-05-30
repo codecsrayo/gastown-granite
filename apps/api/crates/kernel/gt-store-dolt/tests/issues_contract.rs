@@ -8,7 +8,7 @@
 
 use mysql_async::prelude::Queryable;
 
-use gt_store_dolt::{DoltIssues, IssueFilter};
+use gt_store_dolt::{DoltIssues, IssueFilter, NewIssue};
 
 const TEST_DB: &str = "gt_rs_issues_test";
 
@@ -141,4 +141,52 @@ async fn list_filters_combine() {
         .await
         .expect("list combined");
     assert_eq!(combined.len(), 2);
+}
+
+#[tokio::test]
+async fn insert_commits_atomic() {
+    let Ok(base) = std::env::var("GT_DOLT_URL") else {
+        eprintln!("GT_DOLT_URL unset — skipping DoltIssues.insert contract");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    seed(&base).await.expect("seed");
+
+    let repo = DoltIssues::connect(&format!("{base}/{TEST_DB}")).expect("connect");
+
+    let id = format!("hq-insert-{}", ulid::Ulid::new());
+    let row = NewIssue {
+        id: id.clone(),
+        title: "insert gate".into(),
+        description: "desc".into(),
+        design: "design".into(),
+        acceptance_criteria: "ac".into(),
+        notes: "notes".into(),
+        priority: 1,
+        issue_type: "task".into(),
+        created_by: "test".into(),
+        external_ref: Some("hq-root".into()),
+        assignee: Some("alice".into()),
+        owner: Some("alice".into()),
+    };
+    repo.insert(&row).await.expect("insert");
+
+    // Visible to a follow-up list (proves the row landed).
+    let by_ref = repo
+        .list(&IssueFilter {
+            external_ref: Some("hq-root".into()),
+            ..Default::default()
+        })
+        .await
+        .expect("list");
+    let ids: Vec<&str> = by_ref.iter().map(|r| r.id.as_str()).collect();
+    assert!(ids.contains(&id.as_str()), "{id} should be visible: ids={ids:?}");
+
+    // Duplicate insert errors with the underlying primary-key violation.
+    let err = repo.insert(&row).await.expect_err("dup must reject");
+    assert!(
+        err.to_string().to_lowercase().contains("duplicate")
+            || err.to_string().to_lowercase().contains("primary"),
+        "expected duplicate-key error, got `{err}`",
+    );
 }

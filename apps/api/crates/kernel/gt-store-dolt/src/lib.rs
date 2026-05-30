@@ -19,7 +19,7 @@ mod wisp_repo;
 pub use beads_repo::DoltBeads;
 pub use commit::{commit, diff_summary, rollback};
 pub use conn::connect;
-pub use issues_repo::{DoltIssues, IssueFilter, IssueRow};
+pub use issues_repo::{DoltIssues, IssueFilter, IssueRow, NewIssue};
 pub use merge_repo::DoltMerge;
 pub use orch_repo::DoltOrch;
 pub use patrol_repo::DoltPatrol;

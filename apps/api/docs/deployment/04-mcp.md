@@ -13,8 +13,11 @@ el protocolo MCP (rmcp) en vez de HTTP-REST.
 ## Superficie
 
 - **Tools** — pares `validate` / `execute` por dominio:
-  `agent.*`, `merge.*`, `orch.launch_convoy.*`, `patrol.*`, `quota.probe.*`, `rig.*`.
-  `*.validate` = dry-run (sin cambio de estado); `*.execute` = muta vía el actor.
+  `agent.*`, `merge.*`, `orch.launch_convoy.*`, `patrol.*`, `quota.probe.*`, `rig.*`,
+  `issues.create.*` (hq-mcp-issues.2: agent inserta bead en `hq.issues` + atomic
+  `CALL DOLT_COMMIT`; cierra el bypass `docker exec dolt sql`).
+  `*.validate` = dry-run (sin cambio de estado); `*.execute` = muta vía el actor o
+  (issues / scheduling.create_bead) via el repo Dolt.
 - **Resources** — snapshots `gt://*`: `agent/sessions`, `scheduling/queue`, `patrol/leases`,
   `merge/slots`, `orch/convoys`, `quota/accounts`, `rigs`, `issues`.
 - **`gt://issues`** (hq-mcp-issues.1) acepta filtros via querystring:
