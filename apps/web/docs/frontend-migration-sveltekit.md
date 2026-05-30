@@ -238,7 +238,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | Bead | Título | Pri | Estado | Agente | Notas |
 |---|---|---|---|---|---|
 | hq-fe-view.1 | Layout raíz: Shell + Sidebar + Topbar + Dock + theme toggle | P1 | closed | claude-host | `lib/stores/theme.svelte.ts` + `lib/components/{layout/{Shell,Sidebar,Topbar,Dock,TabStrip,StubView},theme/ThemeToggle}.svelte`; 7 placeholder routes + landing hub |
-| hq-fe-view.2 | `/login` route + bearer guard en `+layout.ts` | P1 | open | — | |
+| hq-fe-view.2 | `/login` route + bearer guard en `+layout.ts` | P1 | closed | claude-host | `routes/login/+page.svelte` paste + dev sentinel; `+layout.ts` LayoutLoad redirige 307 a `/login` si falta bearer; ProfileMenu logout ahora `goto('/login')` |
 | hq-fe-view.3 | Activity view (feed + cat filter + rig filter + recent peek) | P1 | open | — | canon hero (imagen) |
 | hq-fe-view.4 | Sessions view (table + filters + kill DangerButton) | P1 | open | — | |
 | hq-fe-view.5 | Work view (kanban 5 cols + drag-drop + DangerZone close) | P1 | open | — | svelte-dnd-action |

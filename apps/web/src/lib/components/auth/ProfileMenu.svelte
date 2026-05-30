@@ -43,9 +43,7 @@
     clearBearer();
     auth.reset();
     close();
-    // /login lands with hq-fe-view.2. Until then we land on /, which is
-    // safe in dev mode (permissive) and a no-op for live (caller can re-auth).
-    goto('/');
+    goto('/login');
   }
 </script>
 
