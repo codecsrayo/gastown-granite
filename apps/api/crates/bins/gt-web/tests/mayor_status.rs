@@ -22,9 +22,10 @@ async fn boot(sessions: Vec<Session>) -> (String, RootHandle<Arc<InMemoryBeads>>
     let beads = Arc::new(InMemoryBeads::default());
     let sessions = Arc::new(InMemorySessions::new(sessions));
     let log = std::env::temp_dir().join(format!("gt-web-mayor-{}.jsonl", ulid::Ulid::new()));
+    let merges = Arc::new(gt_merge::InMemoryMergeRepo::default());
     let root = spawn(
         beads.clone(),
-        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        merges.clone(),
         Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
         Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
         NoopEffects,
@@ -35,6 +36,7 @@ async fn boot(sessions: Vec<Session>) -> (String, RootHandle<Arc<InMemoryBeads>>
     let state = AppState {
         beads,
         sessions,
+        merges: merges.clone(),
         agent_events: root.agent_events.clone(),
         events: root.events_sender(),
         town_root: None,

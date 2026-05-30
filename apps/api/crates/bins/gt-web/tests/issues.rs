@@ -29,9 +29,10 @@ async fn empty_when_issues_unset() {
         p.push(format!("gt-web-issues-test-{}.jsonl", ulid::Ulid::new()));
         p
     };
+    let merges = Arc::new(gt_merge::InMemoryMergeRepo::default());
     let root = spawn(
         beads.clone(),
-        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        merges.clone(),
         Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
         Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
         NoopEffects,
@@ -42,6 +43,7 @@ async fn empty_when_issues_unset() {
     let state = AppState {
         beads,
         sessions,
+        merges: merges.clone(),
         agent_events: root.agent_events.clone(),
         events: root.events_sender(),
         town_root: None,

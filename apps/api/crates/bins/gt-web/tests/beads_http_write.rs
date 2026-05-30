@@ -34,9 +34,10 @@ async fn boot() -> (
         p.push(format!("gt-web-beadhttp-{}.jsonl", ulid::Ulid::new()));
         p
     };
+    let merges = Arc::new(gt_merge::InMemoryMergeRepo::default());
     let root = spawn(
         beads.clone(),
-        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        merges.clone(),
         Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
         Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
         NoopEffects,
@@ -47,6 +48,7 @@ async fn boot() -> (
     let state = AppState {
         beads: beads.clone(),
         sessions,
+        merges: merges.clone(),
         agent_events: root.agent_events.clone(),
         events: root.events_sender(),
         town_root: None,

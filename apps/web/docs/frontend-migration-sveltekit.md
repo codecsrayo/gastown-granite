@@ -155,7 +155,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-api-r.1 | `GET /api/quota/accounts` snapshot completo | P1 | open | — | tags por sesión, /upgrade pending |
 | hq-fe-api-r.2 | `GET /api/quota/rotation` waiting_unlock + recent | P1 | open | — | derivado de SSE quota.* + estado |
 | hq-fe-api-r.3 | `GET /api/convoys` snapshot por estado | P2 | open | — | mirror de gt://orch/convoys |
-| hq-fe-api-r.4 | `GET /api/merges` slots snapshot | P2 | open | — | mirror de gt://merge/slots |
+| hq-fe-api-r.4 | `GET /api/merges` slots snapshot | P2 | closed | claude-host | `AppState<R,SQ,M>` add `M: MergeRepository` (14 fixtures patched); `MergeSlotDto {bead,branch,state}` flat strings; `routes::list_merges`; tests `merges_http` 2/2 (sorted seeded + empty). 12 fixtures gain `merges` field |
 | hq-fe-api-r.5 | `GET /api/feed?since=` activity histórico | P2 | open | — | PG projection |
 | hq-fe-api-r.6 | `?rig=` filter en `/api/sessions` | P2 | closed | claude-host | `SessionsQuery.rig: Option<String>` AND con `role`; mismatch yields empty (view, not error); `fetchSessions({rig, role})` con back-compat string; tests sessions_role 2/2 cubren rig solo + combo + miss |
 | hq-fe-api-r.7 | `GET /api/mayor/status` ATTACHED/DETACHED | P3 | closed | claude-host | `MayorStatusDto {attached, session_id?, rig?, state?}` derived del session registry (first row role=mayor); 3 cargo tests (attached/dogs-only/empty); `lib/{types,api}/mayor.ts` cliente. Heartbeat freshness deferred (agent relay aún no stamps per-role ts) |

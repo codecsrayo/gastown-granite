@@ -293,6 +293,27 @@ pub struct IssueDto {
     pub closed_at: Option<String>,
 }
 
+/// One row of `GET /api/merges` (hq-fe-api-r.4). Mirrors `gt_merge::MergeSlot` with the
+/// state enum flattened to the canonical string the SSE stream already emits
+/// (`ready|merging|merged|failed`). The dashboard joins this against the SSE
+/// `merge.*` events to project deltas without re-fetching the snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MergeSlotDto {
+    pub bead: String,
+    pub branch: String,
+    pub state: String,
+}
+
+impl From<gt_merge::MergeSlot> for MergeSlotDto {
+    fn from(s: gt_merge::MergeSlot) -> Self {
+        Self {
+            bead: s.bead,
+            branch: s.branch,
+            state: s.state.as_str().to_string(),
+        }
+    }
+}
+
 /// Snapshot of `GET /api/mayor/status` (hq-fe-api-r.7). The dashboard's mayor strip
 /// answers a single question: is the mayor session attached? `attached` reflects whether
 /// the active-session registry currently holds a row with role=mayor; `session_id` + `rig`

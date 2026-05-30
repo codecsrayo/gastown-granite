@@ -10,6 +10,7 @@ use gt_agent::{AgentEvent, SessionQueries};
 use gt_audit::EventRecord;
 use gt_beads::BeadRepository;
 use gt_events::Envelope;
+use gt_merge::MergeRepository;
 use gt_root::CommandBus;
 use gt_store_dolt::DoltIssues;
 
@@ -17,14 +18,19 @@ use crate::control::{PolecatControl, PolecatRespawner};
 use crate::dto::WorktreeDto;
 
 /// Read-side composition root. Keep it `Clone` (Arc-backed) so axum can hand a fresh handle
-/// to each request without locks. `R`/`SQ` are the bead / session ports.
-pub struct AppState<R, SQ>
+/// to each request without locks. `R`/`SQ`/`M` are the bead / session / merge ports.
+pub struct AppState<R, SQ, M>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     pub beads: Arc<R>,
     pub sessions: Arc<SQ>,
+    /// `gt_merge::MergeRepository` reader. Powers `GET /api/merges` (hq-fe-api-r.4):
+    /// snapshot of the merge slot board (one row per bead in the queue, with its
+    /// current state). Production cables Dolt; tests use `InMemoryMergeRepo`.
+    pub merges: Arc<M>,
     pub agent_events: mpsc::Sender<Envelope<AgentEvent>>,
     pub events: broadcast::Sender<EventRecord>,
     /// Town root absolute path. `GET /api/worktrees` shells `git -C <root>` to enumerate
@@ -66,15 +72,17 @@ where
     pub respawner: Option<Arc<dyn PolecatRespawner>>,
 }
 
-impl<R, SQ> Clone for AppState<R, SQ>
+impl<R, SQ, M> Clone for AppState<R, SQ, M>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     fn clone(&self) -> Self {
         Self {
             beads: self.beads.clone(),
             sessions: self.sessions.clone(),
+            merges: self.merges.clone(),
             agent_events: self.agent_events.clone(),
             events: self.events.clone(),
             town_root: self.town_root.clone(),

@@ -44,9 +44,10 @@ async fn boot(with_killer: bool) -> Setup {
         p.push(format!("gt-web-sesskill-{}.jsonl", ulid::Ulid::new()));
         p
     };
+    let merges = Arc::new(gt_merge::InMemoryMergeRepo::default());
     let root = spawn(
         beads.clone(),
-        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        merges.clone(),
         Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
         Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
         NoopEffects,
@@ -59,6 +60,7 @@ async fn boot(with_killer: bool) -> Setup {
     let state = AppState {
         beads: beads.clone(),
         sessions: sessions.clone(),
+        merges: merges.clone(),
         agent_events: agent_tx.clone(),
         events: root.events_sender(),
         town_root: None,

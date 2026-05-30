@@ -44,9 +44,10 @@ async fn boot_with_auth(
         .unwrap();
 
     let sessions = Arc::new(InMemorySessions::default());
+    let merges = Arc::new(gt_merge::InMemoryMergeRepo::default());
     let root = spawn(
         beads.clone(),
-        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        merges.clone(),
         Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
         Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
         NoopEffects,
@@ -58,6 +59,7 @@ async fn boot_with_auth(
     let state = AppState {
         beads,
         sessions,
+        merges: merges.clone(),
         agent_events: root.agent_events.clone(),
         events: root.events_sender(),
         town_root: None,

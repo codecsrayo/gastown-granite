@@ -39,9 +39,10 @@ async fn boot(canned: RespawnInfo, with_respawner: bool) -> Setup {
         p.push(format!("gt-web-restart-{}.jsonl", ulid::Ulid::new()));
         p
     };
+    let merges = Arc::new(gt_merge::InMemoryMergeRepo::default());
     let root = spawn(
         beads.clone(),
-        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        merges.clone(),
         Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
         Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
         NoopEffects,
@@ -54,6 +55,7 @@ async fn boot(canned: RespawnInfo, with_respawner: bool) -> Setup {
     let state = AppState {
         beads: beads.clone(),
         sessions: sessions.clone(),
+        merges: merges.clone(),
         agent_events: agent_tx.clone(),
         events: root.events_sender(),
         town_root: None,

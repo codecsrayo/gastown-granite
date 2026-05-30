@@ -56,9 +56,10 @@ async fn boot(town_root: std::path::PathBuf) -> String {
         p.push(format!("gt-web-worktrees-log-{}.jsonl", ulid::Ulid::new()));
         p
     };
+    let merges = Arc::new(gt_merge::InMemoryMergeRepo::default());
     let root = spawn(
         beads.clone(),
-        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        merges.clone(),
         Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
         Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
         NoopEffects,
@@ -69,6 +70,7 @@ async fn boot(town_root: std::path::PathBuf) -> String {
     let state = AppState {
         beads,
         sessions,
+        merges: merges.clone(),
         agent_events: root.agent_events.clone(),
         events: root.events_sender(),
         town_root: Some(Arc::new(town_root)),
@@ -98,9 +100,10 @@ async fn empty_when_town_root_unset() {
         p.push(format!("gt-web-worktrees-log-{}.jsonl", ulid::Ulid::new()));
         p
     };
+    let merges = Arc::new(gt_merge::InMemoryMergeRepo::default());
     let root = spawn(
         beads.clone(),
-        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        merges.clone(),
         Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
         Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
         NoopEffects,
@@ -111,6 +114,7 @@ async fn empty_when_town_root_unset() {
     let state = AppState {
         beads,
         sessions,
+        merges: merges.clone(),
         agent_events: root.agent_events.clone(),
         events: root.events_sender(),
         town_root: None,
@@ -240,9 +244,10 @@ async fn worktrees_stream_503_when_unwired() {
         p.push(format!("gt-web-worktrees-log-{}.jsonl", ulid::Ulid::new()));
         p
     };
+    let merges = Arc::new(gt_merge::InMemoryMergeRepo::default());
     let root = spawn(
         beads.clone(),
-        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        merges.clone(),
         Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
         Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
         NoopEffects,
@@ -253,6 +258,7 @@ async fn worktrees_stream_503_when_unwired() {
     let state = AppState {
         beads,
         sessions,
+        merges: merges.clone(),
         agent_events: root.agent_events.clone(),
         events: root.events_sender(),
         town_root: None,
@@ -297,9 +303,10 @@ async fn worktrees_stream_delivers_snapshot() {
         p.push(format!("gt-web-worktrees-log-{}.jsonl", ulid::Ulid::new()));
         p
     };
+    let merges = Arc::new(gt_merge::InMemoryMergeRepo::default());
     let root = spawn(
         beads.clone(),
-        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        merges.clone(),
         Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
         Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
         NoopEffects,
@@ -311,6 +318,7 @@ async fn worktrees_stream_delivers_snapshot() {
     let state = AppState {
         beads,
         sessions,
+        merges: merges.clone(),
         agent_events: root.agent_events.clone(),
         events: root.events_sender(),
         town_root: Some(Arc::new(repo.clone())),

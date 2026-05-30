@@ -12,6 +12,7 @@ use axum::response::{IntoResponse, Json};
 use gt_agent::{AgentEvent, SessionQueries, SessionRole};
 use gt_beads::{Bead, BeadRepository, BeadStatus};
 use gt_events::Envelope;
+use gt_merge::MergeRepository;
 use gt_orchestration::{FailMember, LaunchConvoy, OrchCommand};
 use gt_quota::{QuotaCommand, RotateAccount};
 use gt_root::RootCommand;
@@ -20,9 +21,9 @@ use gt_store_dolt::{IssueFilter, IssueRow};
 use crate::dto::{
     BeadCreateRequest, BeadDto, BeadTransitionRequest, BeadUpdateRequest, BeadsQuery,
     BulkBeadCreateRequest, BulkBeadCreateResponse, ConvoyCreateRequest, ConvoyCreateResponse,
-    DirtyFileDto, IssueDto, IssuesQuery, MayorStatusDto, MemberFailRequest, NudgeRequest,
-    NudgeResponse, QuotaRetireResponse, QuotaRotateRequest, SessionDto, SessionsQuery,
-    WorktreeDto,
+    DirtyFileDto, IssueDto, IssuesQuery, MayorStatusDto, MemberFailRequest, MergeSlotDto,
+    NudgeRequest, NudgeResponse, QuotaRetireResponse, QuotaRotateRequest, SessionDto,
+    SessionsQuery, WorktreeDto,
 };
 use crate::state::AppState;
 use crate::stream::{sse_from_json_receiver, sse_from_receiver};
@@ -31,13 +32,14 @@ use crate::stream::{sse_from_json_receiver, sse_from_receiver};
 /// role (hq-8iur.7). The reader port lives in `gt-agent`; the dashboard fetches this once and
 /// then patches rows via the SSE stream. An unknown `role` value yields an empty result (it
 /// matches no session) rather than an error — the filter is a view, not a command.
-pub async fn list_sessions<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn list_sessions<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
     Query(q): Query<SessionsQuery>,
 ) -> Result<Json<Vec<SessionDto>>, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     let rows = state.sessions.active_sessions().await.map_err(AppError::from)?;
     let filtered: Vec<SessionDto> = rows
@@ -50,13 +52,14 @@ where
 }
 
 /// `GET /api/beads?status=pending` — snapshot of beads in one status.
-pub async fn list_beads<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn list_beads<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
     Query(q): Query<BeadsQuery>,
 ) -> Result<Json<Vec<BeadDto>>, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     let status: BeadStatus = q
         .parsed()
@@ -76,13 +79,14 @@ where
 /// session row in the registry. A successful tmux kill followed by a relay drop is
 /// recoverable — the session lingers as `Killed` in tmux but the registry will resync on
 /// the next replay/restart (mirrors how `AgentEvent::SessionEnd` is handled today).
-pub async fn delete_session<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn delete_session<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     if id.is_empty() {
         return Err(AppError::bad_request("session id is empty"));
@@ -122,13 +126,14 @@ where
 /// old one (`SpawnTemplate::spec_for` derives the session name from the member, which
 /// the respawner reads back from `GT_HOOK_BEAD`); a mismatch surfaces in the response
 /// body so the dashboard can re-subscribe to the new tmux session if needed.
-pub async fn restart_session<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn restart_session<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     if id.is_empty() {
         return Err(AppError::bad_request("session id is empty"));
@@ -182,13 +187,14 @@ where
 /// polecat is still alive — only the agent's current message is cancelled. Returns 204
 /// on success; idempotent at the route layer since the registry check absorbs repeats
 /// against an already-dead session.
-pub async fn interrupt_session<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn interrupt_session<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     if id.is_empty() {
         return Err(AppError::bad_request("session id is empty"));
@@ -207,13 +213,14 @@ where
 
 /// `POST /api/nudge` — write-side: emits an `AgentEvent::Heartbeat` to the agent relay. The
 /// reactor records it in the audit log; SSE subscribers see it as `agent.heartbeat`.
-pub async fn nudge<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn nudge<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
     Json(req): Json<NudgeRequest>,
 ) -> Result<Json<NudgeResponse>, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     let env = Envelope::root(AgentEvent::Heartbeat { session: req.session });
     state
@@ -228,13 +235,14 @@ where
 /// Thin HTTP wrapper around `scheduling.create_bead`: same edge op the MCP tool drives,
 /// so audit and idempotency-key replay flow uniformly. Returns the persisted row so the
 /// dashboard can append it to the kanban without a follow-up `GET /api/beads`.
-pub async fn create_bead<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn create_bead<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
     Json(req): Json<BeadCreateRequest>,
 ) -> Result<(StatusCode, Json<BeadDto>), AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     if req.id.is_empty() {
         return Err(AppError::bad_request("bead id is empty"));
@@ -277,13 +285,14 @@ pub const BULK_BEADS_MAX_ITEMS: usize = 100;
 /// request. Items are dispatched sequentially through the same `scheduling.create_bead`
 /// edge the single-row route uses — audit, idempotency, and the rate-limit middleware
 /// all behave per-request, not per-item.
-pub async fn create_beads_bulk<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn create_beads_bulk<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
     Json(req): Json<BulkBeadCreateRequest>,
 ) -> Result<(StatusCode, Json<BulkBeadCreateResponse>), AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     if req.beads.is_empty() {
         return Err(AppError::bad_request("bulk request has no beads"));
@@ -351,14 +360,15 @@ where
 /// because `BeadRepository` does not ship a `Patch` method; the write races a concurrent
 /// CAS claim, in which case the next claim's reducer wins (the field changes are visible
 /// on the next snapshot read).
-pub async fn update_bead<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn update_bead<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
     Path(id): Path<String>,
     Json(req): Json<BeadUpdateRequest>,
 ) -> Result<Json<BeadDto>, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     if id.is_empty() {
         return Err(AppError::bad_request("bead id is empty"));
@@ -413,14 +423,15 @@ where
 /// Forbidden: self-transitions, `pending → dispatched` (scheduler-owned), and crossing
 /// `done` ↔ `failed` directly (must round-trip through `pending` so the re-open is
 /// explicit in the audit log).
-pub async fn transition_bead<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn transition_bead<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
     Path(id): Path<String>,
     Json(req): Json<BeadTransitionRequest>,
 ) -> Result<Json<BeadDto>, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     if id.is_empty() {
         return Err(AppError::bad_request("bead id is empty"));
@@ -472,13 +483,14 @@ fn is_operator_transition_allowed(from: BeadStatus, to: BeadStatus) -> bool {
 /// `pause` / `resume` are deliberately absent: the orchestration domain has no Pause /
 /// Resume commands today (`gap parcial` in the migration plan). `members/:m/fail` ships
 /// on [`fail_convoy_member`] in the same epic.
-pub async fn create_convoy<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn create_convoy<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
     Json(req): Json<ConvoyCreateRequest>,
 ) -> Result<(StatusCode, Json<ConvoyCreateResponse>), AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     if req.convoy.is_empty() {
         return Err(AppError::bad_request("convoy id is empty"));
@@ -513,14 +525,15 @@ where
 /// `ConvoyFailed` event chain the MCP tool produces flows through the audit log and
 /// SSE. The body carries the human-readable reason (operator's "why"); path params
 /// disambiguate the target so the URL itself is a self-describing audit entry.
-pub async fn fail_convoy_member<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn fail_convoy_member<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
     Path((convoy, member)): Path<(String, String)>,
     Json(req): Json<MemberFailRequest>,
 ) -> Result<Json<serde_json::Value>, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     if convoy.is_empty() {
         return Err(AppError::bad_request("convoy id is empty"));
@@ -553,14 +566,15 @@ where
 /// HTTP route (hq-fe-api-w.10). Dispatches through the same [`gt_root::CommandBus`] the
 /// gt-mcp tools drive, so audit and scope flow uniformly. Path `:id` is the source
 /// account (the one being rotated *away from*); the body carries the healthy target.
-pub async fn quota_rotate<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn quota_rotate<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
     Path(id): Path<String>,
     Json(req): Json<QuotaRotateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     if id.is_empty() {
         return Err(AppError::bad_request("account id is empty"));
@@ -595,13 +609,14 @@ where
 /// because account-registration is not event-logged in the domain — see
 /// [`gt_mcp::RetireAccount`]). Idempotent: a missing account returns `removed: false`
 /// with HTTP 200 so callers can drive retire-loops without conditional logic.
-pub async fn quota_retire<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn quota_retire<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
     Path(id): Path<String>,
 ) -> Result<Json<QuotaRetireResponse>, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     if id.is_empty() {
         return Err(AppError::bad_request("account id is empty"));
@@ -622,10 +637,11 @@ fn epoch_now() -> u64 {
 }
 
 /// `GET /api/stream` — SSE feed of the running root's broadcast.
-pub async fn stream<R, SQ>(State(state): State<AppState<R, SQ>>) -> impl IntoResponse
+pub async fn stream<R, SQ, M>(State(state): State<AppState<R, SQ, M>>) -> impl IntoResponse
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     sse_from_receiver(state.events.subscribe())
 }
@@ -636,13 +652,14 @@ where
 /// the in-memory dev mode keeps working without a Dolt connection; same posture as
 /// `/api/worktrees`. Query string filters mirror the MCP grammar to keep both surfaces
 /// reading the same bead slice.
-pub async fn list_issues<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn list_issues<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
     Query(q): Query<IssuesQuery>,
 ) -> Result<Json<Vec<IssueDto>>, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     let Some(issues) = state.issues.clone() else {
         return Ok(Json(Vec::new()));
@@ -690,12 +707,13 @@ impl From<IssueRow> for IssueDto {
 /// Walks the live session registry once and returns the first row with role=mayor as
 /// `attached: true`. No mayor present → `attached: false` with all other fields null.
 /// Heartbeat freshness is deferred — see `MayorStatusDto` doc.
-pub async fn mayor_status<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn mayor_status<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
 ) -> Result<Json<MayorStatusDto>, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     let rows = state.sessions.active_sessions().await.map_err(AppError::from)?;
     let dto = match rows.into_iter().find(|s| s.role.as_str() == "mayor") {
@@ -718,17 +736,34 @@ where
     Ok(Json(dto))
 }
 
+/// `GET /api/merges` — snapshot of the merge slot board (hq-fe-api-r.4). One row per
+/// bead currently in the merge queue, with `state` flattened to the canonical string
+/// (`ready|merging|merged|failed`). Stable order is the repository's responsibility —
+/// the in-memory adapter sorts by bead id, the Dolt impl uses `ORDER BY bead`.
+pub async fn list_merges<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
+) -> Result<Json<Vec<MergeSlotDto>>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
+{
+    let slots = state.merges.list_slots().await.map_err(AppError::from)?;
+    Ok(Json(slots.into_iter().map(MergeSlotDto::from).collect()))
+}
+
 /// `GET /api/worktrees` — snapshot of every git worktree under the town root, with branch,
 /// HEAD, ahead/behind vs. `main`, and the dirty file list (hq-fe-api-r.8). Read-only: shells
 /// `git` with `tokio::process` against `state.town_root`. Returns `[]` when no town root is
 /// configured (the gateway does not invent one) and surfaces shell failures as 500 — same
 /// fail-fast posture as the other handlers.
-pub async fn list_worktrees<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn list_worktrees<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
 ) -> Result<Json<Vec<WorktreeDto>>, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     let Some(root) = state.town_root.clone() else {
         return Ok(Json(Vec::new()));
@@ -744,12 +779,13 @@ where
 /// one SSE event. When `worktrees_stream` is unset (no `GT_TOWN_ROOT`) the connection
 /// short-circuits with 503 so clients fall back to the snapshot endpoint instead of
 /// hanging on a never-firing channel.
-pub async fn worktrees_stream<R, SQ>(
-    State(state): State<AppState<R, SQ>>,
+pub async fn worktrees_stream<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
 ) -> Result<axum::response::Response, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
 {
     let Some(tx) = state.worktrees_stream.clone() else {
         return Err(AppError {

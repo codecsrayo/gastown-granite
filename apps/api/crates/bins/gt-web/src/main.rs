@@ -231,7 +231,7 @@ async fn serve<R, SQ, MR, PR, OR>(
 
     let root = spawn_hydrated(
         beads.clone(),
-        merge_repo,
+        merge_repo.clone(),
         patrol_repo,
         orch_repo,
         effects,
@@ -314,6 +314,7 @@ async fn serve<R, SQ, MR, PR, OR>(
     let state = AppState {
         beads,
         sessions,
+        merges: merge_repo,
         agent_events: root.agent_events.clone(),
         events: root.events_sender(),
         town_root,

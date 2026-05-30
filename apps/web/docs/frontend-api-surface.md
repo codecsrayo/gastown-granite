@@ -198,7 +198,7 @@ to the old API; pick the cleanest contract per feature.
 | `GET /api/quota/accounts` — snapshot (live/limited, slots, reset_at, tags por sesión, /upgrade pending) | **gap** | hq-fe-api-r.1 |
 | `GET /api/quota/rotation` — `waiting_unlock[]` + `recent_rotations[since=]` | **gap** | hq-fe-api-r.2 |
 | `GET /api/convoys` — snapshot por estado | **gap** (solo SSE `orch.*`) | hq-fe-api-r.3 |
-| `GET /api/merges` — slots snapshot | **gap** | hq-fe-api-r.4 |
+| `GET /api/merges` — slots snapshot | **live** | hq-fe-api-r.4 |
 | `GET /api/feed?since=` — activity feed con histórico (PG projection) | **gap** | hq-fe-api-r.5 |
 | `GET /api/sessions?rig=…` — filtro por rig (combinable con `?role=`) | **live** | hq-fe-api-r.6 |
 | `GET /api/mayor/status` — ATTACHED / DETACHED (heartbeat deferred) | **live** | hq-fe-api-r.7 |
