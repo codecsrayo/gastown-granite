@@ -12,6 +12,7 @@
 //! via `rmcp::transport::stdio`.
 
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::mpsc;
 
@@ -213,6 +214,73 @@ impl CreateBead {
 
     fn to_bead(&self) -> Bead {
         Bead::new(&self.id, &self.title, BeadStatus::Pending, self.priority)
+    }
+}
+
+/// Input for the `meta.report_gap` tool (hq-mcp-onboard.8). Closes the agent loop the
+/// gap-discipline doc section §4 prescribes: when a tool an agent needs does not exist,
+/// the agent calls this with the missing operation's canonical name; the server mints a
+/// `hq-gap-…` bead the routine catalog can pick up. Bead id + title are derived from
+/// `operation` so two agents reporting the same gap in the same second hit the same id —
+/// idempotency is not enforced at the actor (CreateBead is upsert today), but the slug
+/// keeps duplicates obvious.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ReportGap {
+    /// Canonical name of the missing operation, e.g. `issues.update.execute`. Required.
+    pub operation: String,
+    /// Optional free-form context: what payload was expected, why blocked, links.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    /// Optional priority override (0 = P0 .. 2 = P2). Defaults to P2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u8>,
+}
+
+impl ReportGap {
+    fn validate(&self) -> Result<(), AppError> {
+        if self.operation.trim().is_empty() {
+            return Err(AppError::Validation("operation is empty".into()));
+        }
+        Ok(())
+    }
+
+    /// Derive a stable, filesystem-safe bead id from the operation name plus a coarse
+    /// timestamp suffix so concurrent reports of the same gap do not collide on the
+    /// upsert. Format: `hq-gap-<sanitized-operation>-<unix-secs>`.
+    fn to_bead_id(&self) -> String {
+        let slug: String = self
+            .operation
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+            .collect();
+        let slug = slug.trim_matches('-').to_string();
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        format!("hq-gap-{slug}-{secs}")
+    }
+
+    fn to_title(&self) -> String {
+        match self.notes.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(n) => {
+                let truncated: String = n.chars().take(180).collect();
+                format!("gap: {} — {}", self.operation, truncated)
+            }
+            None => format!("gap: {}", self.operation),
+        }
+    }
+
+    fn effective_priority(&self) -> u8 {
+        self.priority.unwrap_or(2)
+    }
+
+    fn to_create_bead(&self) -> CreateBead {
+        CreateBead {
+            id: self.to_bead_id(),
+            title: self.to_title(),
+            priority: self.effective_priority(),
+        }
     }
 }
 
@@ -1324,6 +1392,73 @@ impl McpService {
 
         let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
         Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    #[tool(
+        name = "meta.report_gap",
+        description = "Surface a missing MCP operation: server mints a `hq-gap-<slug>-<ts>` bead so the gap enters the routine catalog. Closes the loop the gap-discipline doc (§4) prescribes. Input: { operation (required, canonical name like `issues.update.execute`), notes (optional context), priority (optional u8, 0=P0..2=P2, defaults to P2) }."
+    )]
+    async fn meta_report_gap(
+        &self,
+        Parameters(args): Parameters<ReportGap>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_report_gap(args).await
+    }
+
+    /// Scope check + validate + mint the gap bead + audit. Plain method so tests drive
+    /// the same code path the tool dispatch hits, no `RequestContext` needed (mirrors
+    /// `run_create_bead`).
+    pub async fn run_report_gap(
+        &self,
+        args: ReportGap,
+    ) -> Result<CallToolResult, McpError> {
+        let tool = "meta.report_gap";
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let json = serde_json::to_value(&args).expect("ReportGap is Serialize");
+        let domain_result = match args.validate() {
+            Ok(()) => {
+                let create = args.to_create_bead();
+                let bead = create.to_bead();
+                let bead_id = create.id.clone();
+                match self.inner.bus.sched().create_bead(bead).await {
+                    Ok(()) => Ok(bead_id),
+                    Err(e) => Err(e),
+                }
+            }
+            Err(e) => Err(e),
+        };
+
+        let outcome = match &domain_result {
+            Ok(_) => Outcome::Ok,
+            Err(e) => Outcome::Failed { error: e.to_string() },
+        };
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments: json,
+            outcome,
+        });
+
+        match domain_result {
+            Ok(bead_id) => {
+                let body = serde_json::json!({
+                    "bead": bead_id,
+                    "operation": args.operation,
+                    "priority": args.effective_priority(),
+                });
+                let text = serde_json::to_string_pretty(&body).unwrap_or_else(|_| body.to_string());
+                Ok(CallToolResult::success(vec![Content::text(text)]))
+            }
+            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
+        }
     }
 
     /// Build the JSON payload returned by `meta.help`. Kept as a plain method so tests can
