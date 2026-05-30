@@ -61,15 +61,15 @@ Docs hermanos (lectura obligada antes de tocar nada):
 |---|---|---|---|---|
 | **hq-fe-svelte** | Master · dashboard reconstruction | (todas abajo) | — | PLANEADO |
 | **hq-fe-api-r** | Read-side gaps (snapshots por dominio) | 12 | — | EN PROGRESO · r.8-r.12 CLOSED |
-| **hq-fe-api-w** | Write-side commands (HTTP routes) | 11 | hq-fe-api-w.1 (bus) | PLANEADO |
+| **hq-fe-api-w** | Write-side commands (HTTP routes) | 11 | hq-fe-api-w.1 (bus) | EN PROGRESO · w.1/.2/.3/.4/.10 CLOSED · w.6 working |
 | **hq-fe-rbac** | RBAC · JWT · whoami · scopes | 5 | hq-fe-api-w.1 | PLANEADO |
 | **hq-fe-auth** | Account auth (Claude `/login` pty driver) | 5 | hq-fe-api-w (idem) | PLANEADO |
 | **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
 | **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | PLANEADO · spike obligatorio |
-| **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | PLANEADO |
-| **hq-fe-view** | Vistas + componentes (UI) | 19 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.14-19 CLOSED |
+| **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | EN PROGRESO · .1 CLOSED |
+| **hq-fe-view** | Vistas + componentes (UI) | 19 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.1/.2/.4/.12/.13/.14-19 CLOSED (9/19) |
 | **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | PLANEADO |
-| **hq-mcp-issues** | MCP `issues.*` CRUD (cerrar bypass docker exec) | 5 | hq-fe-api-w.1 | PLANEADO |
+| **hq-mcp-issues** | MCP `issues.*` CRUD (cerrar bypass docker exec) | 5 | hq-fe-api-w.1 | DONE · 5/5 closed |
 | **hq-mcp-onboard** | MCP agent onboarding + discoverability (slogan-feedback gaps) | 10 | parcial hq-mcp-issues.2 + hq-fe-api-w.1 | DONE · claude-host-onboard |
 
 Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
@@ -169,16 +169,16 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 
 | Bead | Título | Pri | Estado | Agente | Notas |
 |---|---|---|---|---|---|
-| hq-fe-api-w.1 | command-bus interno en gt-root | P1 | open | — | **blocker** del resto del epic |
-| hq-fe-api-w.2 | `Idempotency-Key` middleware en gt-web | P1 | open | — | requerido por todos los POST |
-| hq-fe-api-w.3 | `POST /api/beads` + `PATCH /api/beads/:id` | P1 | open | — | depende w.1 + w.2 |
-| hq-fe-api-w.4 | `POST /api/beads/:id/transition` state machine | P1 | open | — | guard ilegales → 409 |
+| hq-fe-api-w.1 | command-bus interno en gt-root | P1 | closed | claude-host | dispatcher across 7 domains; unlock root write-side |
+| hq-fe-api-w.2 | `Idempotency-Key` middleware en gt-web | P1 | closed | claude-host | TTL configurable via `GT_WEB_IDEMPOTENCY_TTL_SECS` |
+| hq-fe-api-w.3 | `POST /api/beads` + `PATCH /api/beads/:id` | P1 | closed | claude-host | dispatch via CommandBus |
+| hq-fe-api-w.4 | `POST /api/beads/:id/transition` state machine | P1 | closed | — | guard ilegales → 409 |
 | hq-fe-api-w.5 | `POST /api/beads/:id/comments` | P2 | open | — | |
-| hq-fe-api-w.6 | `DELETE /api/sessions/:id` kill via gt-polecat | P1 | open | — | SIGTERM con timeout → SIGKILL |
+| hq-fe-api-w.6 | `DELETE /api/sessions/:id` kill via gt-polecat | P1 | working | — | SIGTERM con timeout → SIGKILL |
 | hq-fe-api-w.7 | `POST /api/sessions/:id/restart` | P2 | open | — | kill + respawn con misma crew |
 | hq-fe-api-w.8 | `POST /api/sessions/:id/interrupt` (tmux ESC) | P2 | open | — | send-keys; documentar risk |
 | hq-fe-api-w.9 | `POST /api/convoys` + pause/resume/fail-member | P2 | open | — | nuevo dominio eventos pause/resume |
-| hq-fe-api-w.10 | `POST /api/quota/accounts/:n/{rotate,retire}` HTTP | P2 | open | — | existe MCP; promover |
+| hq-fe-api-w.10 | `POST /api/quota/accounts/:n/{rotate,retire}` HTTP | P2 | closed | claude-host | dispatch via CommandBus |
 | hq-fe-api-w.11 | `POST /api/beads/bulk` + rate-limit | P3 | open | — | follow-up para drag masivo |
 
 ### Epic `hq-fe-rbac` — perfiles, JWT, scopes
@@ -240,7 +240,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-view.1 | Layout raíz: Shell + Sidebar + Topbar + Dock + theme toggle | P1 | closed | claude-host | `lib/stores/theme.svelte.ts` + `lib/components/{layout/{Shell,Sidebar,Topbar,Dock,TabStrip,StubView},theme/ThemeToggle}.svelte`; 7 placeholder routes + landing hub |
 | hq-fe-view.2 | `/login` route + bearer guard en `+layout.ts` | P1 | closed | claude-host | `routes/login/+page.svelte` paste + dev sentinel; `+layout.ts` LayoutLoad redirige 307 a `/login` si falta bearer; ProfileMenu logout ahora `goto('/login')` |
 | hq-fe-view.3 | Activity view (feed + cat filter + rig filter + recent peek) | P1 | open | — | canon hero (imagen) |
-| hq-fe-view.4 | Sessions view (table + filters + kill DangerButton) | P1 | open | — | |
+| hq-fe-view.4 | Sessions view (table + filters + kill DangerButton) | P1 | closed | claude-host | `lib/{types,api}/session*` + tabla con role/rig/state filters + per-role tint; Kill DangerButton disabled hasta api-w.6 |
 | hq-fe-view.5 | Work view (kanban 5 cols + drag-drop + DangerZone close) | P1 | open | — | svelte-dnd-action |
 | hq-fe-view.6 | Convoys view (list + e-stop DangerZone) | P2 | open | — | |
 | hq-fe-view.7 | Merge Q view | P2 | open | — | |
