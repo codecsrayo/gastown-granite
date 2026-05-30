@@ -273,6 +273,28 @@ pub struct IssueDto {
     pub closed_at: Option<String>,
 }
 
+/// Snapshot of `GET /api/mayor/status` (hq-fe-api-r.7). The dashboard's mayor strip
+/// answers a single question: is the mayor session attached? `attached` reflects whether
+/// the active-session registry currently holds a row with role=mayor; `session_id` + `rig`
+/// surface the live row when one exists so the UI can deep-link the topbar.
+///
+/// Heartbeat freshness is intentionally deferred: the agent relay does not yet stamp
+/// per-role heartbeats with a wall-clock ts the read side can compare against. When the
+/// mayor heartbeat is plumbed, add `last_heartbeat: Option<String>` here without breaking
+/// the existing contract (serde tolerates the new field).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MayorStatusDto {
+    /// `true` when the session registry currently exposes a mayor.
+    pub attached: bool,
+    /// Live mayor session id, or `None` when detached.
+    pub session_id: Option<String>,
+    /// Rig the mayor is anchored to (typically "town"), or `None` when detached.
+    pub rig: Option<String>,
+    /// Lifecycle state of the mayor session as the registry sees it (spawned/working/done/
+    /// killed). Same canonical string [`SessionDto::state`] surfaces.
+    pub state: Option<String>,
+}
+
 /// Query for `GET /api/issues?status=working&external_ref=hq-fe-view&limit=50`. All fields
 /// optional; absent = no filter. `status` accepts a comma-separated list so the dashboard
 /// can pull `open,working` in one round-trip (mirrors the MCP resource's grammar).

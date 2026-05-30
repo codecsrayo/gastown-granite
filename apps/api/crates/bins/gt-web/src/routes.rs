@@ -20,8 +20,8 @@ use gt_store_dolt::{IssueFilter, IssueRow};
 use crate::dto::{
     BeadCreateRequest, BeadDto, BeadTransitionRequest, BeadUpdateRequest, BeadsQuery,
     ConvoyCreateRequest, ConvoyCreateResponse, DirtyFileDto, IssueDto, IssuesQuery,
-    MemberFailRequest, NudgeRequest, NudgeResponse, QuotaRetireResponse, QuotaRotateRequest,
-    SessionDto, SessionsQuery, WorktreeDto,
+    MayorStatusDto, MemberFailRequest, NudgeRequest, NudgeResponse, QuotaRetireResponse,
+    QuotaRotateRequest, SessionDto, SessionsQuery, WorktreeDto,
 };
 use crate::state::AppState;
 use crate::stream::{sse_from_json_receiver, sse_from_receiver};
@@ -603,6 +603,38 @@ impl From<IssueRow> for IssueDto {
             closed_at: r.closed_at,
         }
     }
+}
+
+/// `GET /api/mayor/status` — derived snapshot of mayor attach state (hq-fe-api-r.7).
+/// Walks the live session registry once and returns the first row with role=mayor as
+/// `attached: true`. No mayor present → `attached: false` with all other fields null.
+/// Heartbeat freshness is deferred — see `MayorStatusDto` doc.
+pub async fn mayor_status<R, SQ>(
+    State(state): State<AppState<R, SQ>>,
+) -> Result<Json<MayorStatusDto>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
+    let rows = state.sessions.active_sessions().await.map_err(AppError::from)?;
+    let dto = match rows.into_iter().find(|s| s.role.as_str() == "mayor") {
+        Some(s) => {
+            let SessionDto { id, rig, state, .. } = SessionDto::from(s);
+            MayorStatusDto {
+                attached: true,
+                session_id: Some(id),
+                rig: Some(rig),
+                state: Some(state),
+            }
+        }
+        None => MayorStatusDto {
+            attached: false,
+            session_id: None,
+            rig: None,
+            state: None,
+        },
+    };
+    Ok(Json(dto))
 }
 
 /// `GET /api/worktrees` — snapshot of every git worktree under the town root, with branch,

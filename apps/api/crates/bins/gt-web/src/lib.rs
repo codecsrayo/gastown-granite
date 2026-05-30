@@ -121,6 +121,9 @@ where
             post(routes::transition_bead::<R, SQ>),
         )
         .route("/api/issues", get(routes::list_issues::<R, SQ>))
+        // hq-fe-api-r.7 — derived snapshot of mayor attach state. Read-only over the
+        // active-session registry; heartbeat freshness deferred (see dto).
+        .route("/api/mayor/status", get(routes::mayor_status::<R, SQ>))
         .route("/api/worktrees", get(routes::list_worktrees::<R, SQ>))
         .route(
             "/api/worktrees/stream",
