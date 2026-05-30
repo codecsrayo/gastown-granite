@@ -1986,7 +1986,37 @@ impl McpService {
                 let bead = create.to_bead();
                 let bead_id = create.id.clone();
                 match self.inner.bus.sched().create_bead(bead).await {
-                    Ok(()) => Ok(bead_id),
+                    Ok(()) => {
+                        // hq-taxon.5 — mirror the gap into hq.issues with
+                        // `domain:[meta.gap]` so the gt://graph/* resources
+                        // surface it. Best-effort: a duplicate-id retry (two
+                        // agents reporting the same op in the same second) is
+                        // intentionally swallowed — the primary write to the
+                        // scheduler already succeeded and the gap is tracked
+                        // there; we don't want to fail the tool over a mirror
+                        // race. Unwired backends (no GT_DOLT_URL) are also a
+                        // silent no-op for the same reason.
+                        let new_issue = gt_store_dolt::NewIssue {
+                            id: bead_id.clone(),
+                            title: create.title.clone(),
+                            description: String::new(),
+                            design: String::new(),
+                            acceptance_criteria: String::new(),
+                            notes: args.notes.clone().unwrap_or_default(),
+                            priority: create.priority,
+                            issue_type: "gap".into(),
+                            created_by: self.inner.scope.actor.clone(),
+                            external_ref: None,
+                            assignee: None,
+                            owner: None,
+                            domain_json: "[\"meta.gap\"]".to_string(),
+                            surface_json: "[]".to_string(),
+                            depends_on_json: "[]".to_string(),
+                            role_scope: None,
+                        };
+                        let _ = self.inner.issues.insert(&new_issue).await;
+                        Ok(bead_id)
+                    }
                     Err(e) => Err(e),
                 }
             }
