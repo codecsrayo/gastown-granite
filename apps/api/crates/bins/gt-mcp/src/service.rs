@@ -1480,6 +1480,69 @@ impl McpService {
         .await
     }
 
+    // --- meta: server self-description (hq-mcp-onboard.7) -----------------------------------
+
+    #[tool(
+        name = "meta.help",
+        description = "Server self-description: gt-mcp version, full tool index (names + descriptions), and resource catalog (URIs + descriptions). Single-call discovery — substitutes tools/list + resources/list. No state change, no actor dispatch."
+    )]
+    async fn meta_help(&self) -> Result<CallToolResult, McpError> {
+        let tool = "meta.help";
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let payload = self.meta_help_payload();
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments: serde_json::Value::Null,
+            outcome: Outcome::Ok,
+        });
+
+        let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Build the JSON payload returned by `meta.help`. Kept as a plain method so tests can
+    /// drive it without the scope + audit layer — same shape the wire serves.
+    pub fn meta_help_payload(&self) -> serde_json::Value {
+        let tools: Vec<serde_json::Value> = Self::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|t| {
+                serde_json::json!({
+                    "name": t.name,
+                    "description": t.description,
+                })
+            })
+            .collect();
+        let resources: Vec<serde_json::Value> = self
+            .resource_list()
+            .into_iter()
+            .map(|r| {
+                serde_json::json!({
+                    "uri": r.uri,
+                    "name": r.name,
+                    "description": r.description,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "server": {
+                "name": env!("CARGO_PKG_NAME"),
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+            "tools": tools,
+            "resources": resources,
+        })
+    }
+
     // --- read-side: domain snapshots exposed as MCP Resources (doc 09 row 1) ----------------
     //
     // These are the read queries the rmcp ServerHandler exposes via `list_resources` /
