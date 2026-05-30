@@ -1,0 +1,30 @@
+[package]
+name = "gt-terminal"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+# hq-fe-term.1 — terminal attach adapters (post-spike hq-fe-term.0).
+#
+# Substrate for the dashboard's dock terminal (epic `hq-fe-term`). Owns the `Attach` port
+# the WS route `hq-fe-term.2` (`GET /api/sessions/:id/term`) plugs into, plus two adapters:
+#
+# - `TmuxPipeAttach` — primary, attaches to a live tmux session via `tmux pipe-pane -O`
+#   (pane bytes -> fifo) + `tmux send-keys` (keystrokes back). Avoids spawning a fresh PTY
+#   per attach since tmux is already the multiplexer (see spike doc step 2).
+# - `PtyAttach` — fallback for non-tmux targets, wraps `gt_login::pty::Pty` over a fresh
+#   pseudo-terminal. The same substrate `hq-fe-auth.1` ships, re-used here so we don't fork
+#   pty handling per call-site.
+# - `FakeAttach` — in-memory adapter for unit tests (scripted reads, recorded writes).
+#
+# Sync ports: each adapter call is a short tmux invocation or a single pty op. The WS route
+# keeps async on the edge (one task per attach).
+[dependencies]
+gt-events = { path = "../../../kernel/gt-events" }
+gt-login = { path = "../../orchestration/gt-login" }
+gt-polecat = { path = "../../lifecycle/gt-polecat" }
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
