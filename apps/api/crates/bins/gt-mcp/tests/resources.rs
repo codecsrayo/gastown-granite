@@ -56,11 +56,34 @@ async fn resource_catalog_lists_every_domain_snapshot() {
             // with the `IssuesRead::none` default, so the resource returns an
             // empty array — still readable, which the loop below asserts.
             "gt://issues",
+            // hq-taxon.4: dependency-graph projections. The catalog entries are
+            // RFC 6570-flavoured templates; the readability loop substitutes a
+            // concrete key below before reading. Unwired backend returns an empty
+            // graph payload.
+            "gt://graph/domain/{d}",
+            "gt://graph/role/{r}",
+            "gt://graph/depends_on/{bead}",
+            "gt://graph/blocks/{bead}",
+            "gt://graph/surface/{crate}",
         ],
     );
-    // Every catalog entry must be readable.
+    // Every catalog entry must be readable. Template URIs (containing `{`) are
+    // substituted with a concrete probe value first so the read goes through the
+    // hq-taxon.4 graph dispatch.
     for uri in &uris {
-        svc.read_resource_json(uri).await.unwrap_or_else(|e| panic!("read {uri}: {e}"));
+        let concrete = if uri.contains('{') {
+            uri.split_once('/').map(|_| ()); // satisfy clippy when uri has '/'
+            // Replace any single `{...}` segment with a placeholder slug.
+            uri.replace("{d}", "probe")
+                .replace("{r}", "sheriff")
+                .replace("{bead}", "hq-probe")
+                .replace("{crate}", "gt-mcp")
+        } else {
+            (*uri).clone()
+        };
+        svc.read_resource_json(&concrete)
+            .await
+            .unwrap_or_else(|e| panic!("read {concrete}: {e}"));
     }
 }
 

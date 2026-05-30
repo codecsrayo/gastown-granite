@@ -8,6 +8,7 @@
 
 pub mod audit;
 pub mod auth;
+pub mod graph;
 pub mod http;
 pub mod service;
 pub mod taxonomy;

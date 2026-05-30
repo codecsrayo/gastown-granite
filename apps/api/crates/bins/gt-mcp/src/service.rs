@@ -115,6 +115,22 @@ impl IssuesRead {
         }
     }
 
+    /// Full table snapshot for the `gt://graph/*` resources (hq-taxon.4).
+    /// Returns an empty vec when the backend is unwired so the graph builders
+    /// still produce a valid empty payload instead of erroring at the edge.
+    pub async fn list_all(&self) -> Result<Vec<gt_store_dolt::IssueRow>, AppError> {
+        match &self.inner {
+            Some(d) => {
+                let filter = IssueFilter {
+                    limit: Some(1000),
+                    ..Default::default()
+                };
+                d.list(&filter).await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// Write through to the underlying `DoltIssues` adapter (hq-mcp-issues.2).
     /// Returns `AppError::Other("issues backend not wired")` when the gt-mcp
     /// composition root was built without `GT_DOLT_URL` — the same shape as the
@@ -2064,6 +2080,35 @@ impl McpService {
                 "issues",
                 "Canonical issues snapshot from Dolt. Filters via querystring: status=open[,working], priority_max=2, assignee=X, external_ref=Y, issue_type=epic, limit=N.",
             ),
+            // hq-taxon.4 — dependency graph projections over the taxonomy
+            // columns introduced in hq-taxon.{1,3}. URI segment after the
+            // resource kind is the lookup key (no querystring). See
+            // apps/api/docs/14-bead-taxonomy.md §7.
+            mk(
+                "gt://graph/domain/{d}",
+                "graph.domain",
+                "Subgraph of beads + epics whose `domain[]` contains `{d}` (closed-set Domain enum). Includes 1-level depends_on edges among the matched set.",
+            ),
+            mk(
+                "gt://graph/role/{r}",
+                "graph.role",
+                "Beads + epics whose `role_scope = {r}` (`sheriff|deacon|refinery|witness|mayor`). Used for `¿qué está haciendo el rol R?`.",
+            ),
+            mk(
+                "gt://graph/depends_on/{bead}",
+                "graph.depends_on",
+                "Forward transitive closure: every bead reachable from `{bead}` by walking `depends_on` edges (max depth 16). Use to plan dispatch order.",
+            ),
+            mk(
+                "gt://graph/blocks/{bead}",
+                "graph.blocks",
+                "Backward transitive closure: every bead that (transitively) blocks `{bead}` via `depends_on`. Use to answer `¿qué se desbloquea si cierro X?` from the inverse angle.",
+            ),
+            mk(
+                "gt://graph/surface/{crate}",
+                "graph.surface",
+                "Beads + epics whose `surface[]` contains `{crate}` — hotspot detector for crate-level conflict (e.g. `gt-mcp` / `gt-root`).",
+            ),
         ]
     }
 
@@ -2083,6 +2128,29 @@ impl McpService {
         if let Some(qs) = issues_match {
             let filter = parse_issue_filter(qs)?;
             return self.inner.issues.snapshot(&filter).await;
+        }
+        // hq-taxon.4 — graph projections. The URI segment after the kind is
+        // a path component (single-segment by spec; trailing `/` or extra
+        // segments are rejected so future schemes don't silently collide).
+        if let Some(rest) = uri.strip_prefix("gt://graph/") {
+            let (kind, key) = rest
+                .split_once('/')
+                .ok_or_else(|| AppError::NotFound(format!("resource {uri}")))?;
+            if key.is_empty() || key.contains('/') {
+                return Err(AppError::Validation(format!(
+                    "gt://graph/{kind}/<key> expects a single path segment"
+                )));
+            }
+            let rows = self.inner.issues.list_all().await?;
+            let payload = match kind {
+                "domain" => crate::graph::by_domain(&rows, key),
+                "role" => crate::graph::by_role(&rows, key),
+                "surface" => crate::graph::by_surface(&rows, key),
+                "depends_on" => crate::graph::depends_on(&rows, key),
+                "blocks" => crate::graph::blocks(&rows, key),
+                other => return Err(AppError::NotFound(format!("graph kind `{other}`"))),
+            };
+            return Ok(payload);
         }
         match uri {
             "gt://agent/sessions" => {
