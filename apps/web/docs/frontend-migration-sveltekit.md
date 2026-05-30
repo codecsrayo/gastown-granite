@@ -249,7 +249,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-view.10 | Quota sidebar (AccountCard + Meter + RotationChips + LoginBtn) | P1 | open | — | sidebar fija |
 | hq-fe-view.11 | Dock terminal shell (mount + tabs + xterm lazy) | P2 | open | — | bloqueada por hq-fe-term decision |
 | hq-fe-view.12 | `<Guard>`, `<DangerButton>`, `<DangerZone>` components | P1 | closed | claude-host | `lib/stores/auth.svelte.ts` (dev permissive · live hydrate · readOnly) + `lib/components/auth/{Guard,DangerButton,DangerZone}.svelte` + extracted `danger-button.ts` state machine (12 vitest); `/design` playground route |
-| hq-fe-view.13 | Profile menu topbar (whoami + read-only toggle + logout) | P1 | open | — | |
+| hq-fe-view.13 | Profile menu topbar (whoami + read-only toggle + logout) | P1 | closed | claude-host | `lib/components/auth/{ProfileBadge,ProfileMenu}.svelte` + `lib/bearer.ts` (3 vitest); dropdown click-outside + esc; wired into Topbar replacing placeholder |
 | hq-fe-view.14 | Worktrees view (SCM-like panel: branches+dirty+ahead/behind por agente) | P1 | closed | claude-host | route `/worktrees` + `lib/{api,types,claim-branch}` + vitest; bead badge desde `claim/<bead-id>` convención |
 | hq-fe-view.15 | Worktrees panel cross-link real: bead title+assignee desde /api/issues | P1 | closed | claude-host | `Promise.allSettled([worktrees,issues])`; `issuesById` derived map; `open,working` slice; badge tooltip = título |
 | hq-fe-view.16 | Worktrees panel: ocultar idle por default (clean + no claim/ + no main) | P2 | closed | claude-host | `lib/worktree-filter.ts::isActive` + 5 vitest cases; counter `X active · Y idle hidden` en header |

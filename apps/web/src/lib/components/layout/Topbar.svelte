@@ -1,6 +1,7 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import ThemeToggle from '$lib/components/theme/ThemeToggle.svelte';
+  import ProfileMenu from '$lib/components/auth/ProfileMenu.svelte';
 
   function pageTitle(pathname: string): string {
     if (pathname === '/' || pathname === '') return 'Home';
@@ -24,12 +25,6 @@
 
   <div class="flex items-center gap-2">
     <ThemeToggle />
-    <span
-      class="rounded border px-2 py-1 font-mono text-[10px]"
-      style="border-color: var(--border-soft); color: var(--ink-faint)"
-      title="Profile menu lands in hq-fe-view.13"
-    >
-      profile · .13
-    </span>
+    <ProfileMenu />
   </div>
 </header>
