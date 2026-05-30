@@ -68,7 +68,7 @@ Docs hermanos (lectura obligada antes de tocar nada):
 | **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | spike DECIDIDO ([doc](spike-hq-fe-term-0-transport.md)) → WS en gt-web · `.1`/`.2` desbloqueados |
 | **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | EN PROGRESO · .1-.4 + .6 + .8 CLOSED (6/8) |
 | **hq-fe-view** | Vistas + componentes (UI) | 19 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.1-.7/.12/.13/.14-.19 CLOSED (15/19) |
-| **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | PLANEADO |
+| **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | DONE · 3/4 closed (.1/.2/.4); .3 deferido a hq-oap5 |
 | **hq-mcp-issues** | MCP `issues.*` CRUD (cerrar bypass docker exec) | 5 | hq-fe-api-w.1 | DONE · 5/5 closed |
 | **hq-mcp-onboard** | MCP agent onboarding + discoverability (slogan-feedback gaps) | 10 | parcial hq-mcp-issues.2 + hq-fe-api-w.1 | DONE · claude-host-onboard |
 
@@ -262,9 +262,9 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | Bead | Título | Pri | Estado | Agente | Notas |
 |---|---|---|---|---|---|
 | hq-fe-cut.1 | gt-api sirve assets estáticos del build (`/` y `/_app/*`) | P1 | closed | deacon | `tower-http::services::ServeDir` montado como `Router::fallback_service` en `gt-web` (lib.rs `with_static_assets`). SPA history-mode fallback a `index.html`. `GT_WEB_DIST` overridea path; vacío desactiva. 5 tests en `tests/static_assets.rs` (root, `/_app/immutable/*`, deep path, /api 401, dist ausente) |
-| hq-fe-cut.2 | Traefik / compose validación: `gastown.codecsrayo.com` → SPA | P1 | open | — | rollback plan |
-| hq-fe-cut.3 | Borrar `internal/web/` del árbol (limpieza Go) | P2 | open | — | tras semana de bake |
-| hq-fe-cut.4 | Docs ops (token, RBAC bootstrap, troubleshooting) | P2 | open | — | en `apps/api/docs/deployment/` |
+| hq-fe-cut.2 | Traefik / compose validación: `gastown.codecsrayo.com` → SPA | P1 | closed | claude-host | gt-api image hornea `apps/web/build` vía stage `web-builder` (node:20 + pnpm + vite); compose pasa build context al repo root; `GT_WEB_DIST=/srv/web`. Smoke vía traefik con `--resolve`: `/`, `/_app/version.json`, `/login/`, `/sessions/`, `/health`, `/readyz` 200; `/api/quota/accounts` 401 sin token / 200 con bearer (59b53921) |
+| hq-fe-cut.3 | Borrar `internal/web/` del árbol (limpieza Go) | P2 | deferred → hq-oap5 | — | reubicado bajo el epic `hq-oap5` (Retire Go orchestrator); borrar el dir cascadeaba edits a `internal/cmd/dashboard.go` + `internal/cmd/quota.go`, mejor bundle con el resto del Go retirement |
+| hq-fe-cut.4 | Docs ops (token, RBAC bootstrap, troubleshooting) | P2 | closed | claude-host | nuevo `apps/api/docs/deployment/06-ops-runbook.md`: auth modes + bootstrap (bearer / JWT + RBAC `mcp-scope.toml`), rotación, troubleshooting (traefik / SPA / `/api/*` 401-403 / Dolt / PG), smoke recipe; index en `apps/api/docs/README.md`; cross-link desde `07-frontend.md` |
 
 ---
 

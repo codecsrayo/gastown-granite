@@ -211,6 +211,29 @@ desde `GT_WEB_DIST` (default `apps/web/build`); valor vacío desactiva el fallba
 Validado por `tests/static_assets.rs`: root, hashed asset, deep history-mode path,
 `/api/*` sigue exigiendo Bearer (401), y dist ausente no rompe el boot (404 limpio).
 
+### Cutover end-to-end (hq-fe-cut.2)
+
+La imagen de `gt-api` ahora **hornea el build SvelteKit**: stage `web-builder`
+(node:20 + pnpm + vite) corre `pnpm run build` y el stage runtime copia
+`apps/web/build` a `/srv/web` con `ENV GT_WEB_DIST=/srv/web`. El build context de
+los tres servicios Rust (`gt-api`, `gt-mcp`, `gt`) en `docker-compose.yml` se
+mueve al repo root para que la stage `web-builder` pueda `COPY apps/web/`. Un
+`task deploy-gt-api` reconstruye y recrea el contenedor; `gastown.codecsrayo.com`
+sirve el SPA detrás de traefik (`tls.certresolver=netlify`, redirect HTTP→HTTPS
+via middleware `gastown-https`).
+
+### Ops runbook (hq-fe-cut.4)
+
+[`deployment/06-ops-runbook.md`](deployment/06-ops-runbook.md) cubre:
+
+- Token bootstrap por modo (`GT_WEB_TOKEN` legacy bearer · `GT_WEB_JWT_SECRET` +
+  RBAC config para multi-actor) y procedimientos de rotación.
+- Bootstrap RBAC (`apps/api/deploy/mcp-scope.toml` → `/etc/gastown/mcp-scope.toml`
+  baked): cómo añadir actor + role, y cómo auditar via `/api/whoami` +
+  `gt-mcp-cli list-tools`.
+- Troubleshooting por capa (traefik · SPA serving · `/api/*` 401/403 · Dolt/PG
+  readyz) y receta de smoke post-deploy.
+
 ## Estructura en el árbol
 
 ```

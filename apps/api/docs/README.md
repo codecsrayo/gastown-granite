@@ -100,6 +100,8 @@ Docs atómicos del **stack desplegado** (compose), complemento operativo de la s
 | [deployment/02-data-stores.md](deployment/02-data-stores.md) | Los 3 planos de datos: event log compartido, Dolt `hq`, Postgres (audit/outbox/projections) — quién escribe qué |
 | [deployment/03-orchestration.md](deployment/03-orchestration.md) | El daemon `gt`: pipeline de eventos/outbox, daemons vivos, spawn de polecats (claude/tmux) |
 | [deployment/04-mcp.md](deployment/04-mcp.md) | `gt-mcp`: tools validate/execute, resources, scope, `gt-mcp-cli`, y las dos instancias (stdio vs container) |
+| [deployment/05-observability.md](deployment/05-observability.md) | Stack Prometheus + Grafana + Tempo en el mismo compose: scrape targets, dashboards provisionados, sources |
+| [deployment/06-ops-runbook.md](deployment/06-ops-runbook.md) | Runbook ops post-cutover (hq-fe-cut.4): token bootstrap (bearer + JWT), RBAC (`mcp-scope.toml`), troubleshooting traefik/SPA/auth/Dolt + smoke recipe |
 
 ### Features
 
