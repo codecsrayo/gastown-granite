@@ -1,8 +1,7 @@
 # Agent onboarding — Gas Town MCP
 
-> **Estado:** consolidado por `hq-mcp-onboard.9` (`.1`–`.6`, `.10` cerrados).
-> `.7` (tool `help`) y `.8` (tool `report_gap`) pendientes — sus secciones
-> aterrizan cuando los tools shipen.
+> **Estado:** epic `hq-mcp-onboard` cerrado 2026-05-29 (10/10 + master). Tools
+> `meta.help` y `meta.report_gap` shipped vía gt-mcp.
 
 Esta guía cubre lo que un agente nuevo necesita saber para operar en Gas Town
 vía MCP: descubrir tools, leer estado, mutar, reportar huecos, y mantener
@@ -32,6 +31,8 @@ El resto del doc desarrolla cada uno de esos puntos.
 - [4. Gap discipline: qué hacer cuando el tool no existe](#4-gap-discipline-qué-hacer-cuando-el-tool-no-existe-hq-mcp-onboard4)
 - [5. In-session vs out-of-session](#5-in-session-vs-out-of-session-hq-mcp-onboard5)
 - [6. Memory frontmatter: version/status field](#6-memory-frontmatter-versionstatus-field-hq-mcp-onboard6)
+- [7. `meta.help`](#7-metahelp-hq-mcp-onboard7)
+- [8. `meta.report_gap`](#8-metareport_gap-hq-mcp-onboard8)
 - [Glosario rápido](#glosario-rápido)
 - [Apéndice: referencias cruzadas](#apéndice-referencias-cruzadas)
 
@@ -617,6 +618,81 @@ el cambio a la entry nueva.
 
 ---
 
+## 7. `meta.help` (`hq-mcp-onboard.7`)
+
+Tool del propio `gt-mcp` que devuelve, en una sola llamada:
+
+- `server.{name, version}` — `gt-mcp` + semver del binario
+- `tools[]` — índice completo (nombre + descripción) de los tools registrados
+- `resources[]` — catálogo de URIs `gt://*` con descripción
+
+Sustituye la doble llamada `tools/list` + `resources/list` y agrega el sello
+de versión que esas dos no traen. No muta nada, no consume slot. Útil para
+smoke tests, scripts, y agentes que arrancan fresco.
+
+In-session:
+
+```
+ToolSearch  query="select:mcp__gt-mcp__meta_help"
+mcp__gt-mcp__meta_help    # sin args
+```
+
+CLI:
+
+```bash
+gt-mcp-cli call meta.help
+```
+
+## 8. `meta.report_gap` (`hq-mcp-onboard.8`)
+
+Cierra el loop del §4: cuando necesitas una operación que no existe vía
+MCP, llama `meta.report_gap` con el nombre canónico (`<dominio>.<accion>.<fase>`)
+y opcionalmente notas + prioridad. El server acuña un bead
+`hq-gap-<sanitized-op>-<unix-secs>` en estado `pending` a través del
+mismo `scheduling.create_bead` que cualquier otra creación.
+
+Input:
+
+| Campo | Tipo | Obligatorio | Default |
+|---|---|---|---|
+| `operation` | string | sí | — |
+| `notes` | string | no | `null` |
+| `priority` | u8 (0–2) | no | `2` (P2) |
+
+Output:
+
+```json
+{
+  "bead": "hq-gap-issues-update-execute-1780100830",
+  "operation": "issues.update.execute",
+  "priority": 1
+}
+```
+
+In-session:
+
+```
+mcp__gt-mcp__meta_report_gap
+  operation = "issues.update.execute"
+  notes     = "need title/description/priority/assignee"
+  priority  = 1
+```
+
+CLI:
+
+```bash
+gt-mcp-cli call meta.report_gap \
+  --arg operation=issues.update.execute \
+  --arg notes='need title/description/priority' \
+  --arg priority=1
+```
+
+El bead aterriza en `hq.beads` (no en `hq.issues` — tabla distinta; ver
+glosario). Cuando `hq-mcp-issues.2` (`issues.create.execute`) ship, el flujo
+podrá promover el gap-bead a un issue de shape completa.
+
+---
+
 ## Glosario rápido
 
 | Término | Definición corta |
@@ -653,13 +729,13 @@ Mapa de qué sección cubre qué tema, para grep rápido:
 
 ### Beads relacionados
 
-- [`hq-mcp-issues`](https://github.com) — abre `issues.*` CRUD vía MCP
-  (cierra el bypass `docker exec` para beads de shape completa).
-- `hq-mcp-onboard.7` — pendiente · tool `help` (índice + URIs + version
-  inline). Una vez que ship, §1.2 podrá apuntar a `gt-mcp-cli call help`
-  como atajo de discovery.
-- `hq-mcp-onboard.8` — pendiente · tool `report_gap`. Cierra el loop del §4:
-  el agente reporta dominio/acción faltante y el server abre el bead.
+- `hq-mcp-issues` — abre `issues.*` CRUD vía MCP (cierra el bypass
+  `docker exec` para beads de shape completa). En curso.
+- `hq-mcp-onboard.7` — cerrado · tool `meta.help` (índice + URIs + version
+  inline). Atajo de discovery vía `gt-mcp-cli call meta.help`. Detalle §7.
+- `hq-mcp-onboard.8` — cerrado · tool `meta.report_gap`. Cierra el loop del
+  §4: el agente reporta dominio/acción faltante y el server abre el bead
+  `hq-gap-…` automáticamente. Detalle §8.
 - `hq-mcp-onboard.10` — cerrado · `CLAUDE.md` apunta acá como entry point
   operacional (`internal/templates/townroot/claude.md`).
 
@@ -673,7 +749,3 @@ Mapa de qué sección cubre qué tema, para grep rápido:
 - `gt-mcp-cli repo` — dónde vive el CLI de §5.2.
 - `Check parallel bead before claim` — coordinación con co-agentes.
 
----
-
-> Stub deliberado mientras `.7` y `.8` no shipen — esas secciones se
-> adjuntan al final, no rompen la numeración existente.
