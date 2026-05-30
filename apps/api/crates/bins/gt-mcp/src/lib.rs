@@ -16,7 +16,7 @@ pub mod taxonomy;
 pub use audit::{AuditEvent, AuditSink, InMemoryAudit, JsonlAudit, Outcome};
 pub use auth::{Scope, ScopeConfig, ScopeSpec};
 pub use service::{
-    CreateBead, CreateIssue, IssuesRead, McpService, RegisterAccount, ReportGap, RetireAccount,
-    SessionsRead, TransitionIssue, UpdateIssue,
+    CloseIssue, CreateBead, CreateIssue, IssuesRead, McpService, RegisterAccount, ReportGap,
+    RetireAccount, SessionsRead, TransitionIssue, UpdateIssue,
 };
 pub use taxonomy::{Domain, Role};

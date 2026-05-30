@@ -630,6 +630,59 @@ impl DoltIssues {
         Ok(())
     }
 
+    /// Close an issue with attribution (hq-mcp-issues.5). Sets `status='closed'`,
+    /// `closed_at=NOW()`, `closed_by_session=:session`, `updated_at=NOW()` in a
+    /// single status-guarded UPDATE so only `open`/`working` rows actually
+    /// close — a row already `closed` rejects as `InvalidTransition` rather
+    /// than silently bumping the timestamp.
+    ///
+    /// Differs from `transition(id, IssueStatus::Closed)`: that path leaves
+    /// `closed_by_session` untouched. The dedicated `close` tool exists so the
+    /// attribution column gets populated atomically with the lifecycle move.
+    pub async fn close(&self, id: &str, closed_by_session: &str) -> Result<(), AppError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+
+        let result = conn
+            .exec_iter(
+                "UPDATE issues
+                 SET status = 'closed',
+                     closed_at = NOW(),
+                     closed_by_session = :session,
+                     updated_at = NOW()
+                 WHERE id = :id AND status IN ('open', 'working')",
+                mysql_async::params! {
+                    "id" => id,
+                    "session" => closed_by_session,
+                },
+            )
+            .await
+            .map_err(map_err)?;
+        let affected = result.affected_rows();
+        let _ = result.drop_result().await.map_err(map_err)?;
+
+        if affected == 0 {
+            // Distinguish missing row from already-closed.
+            return match self.current_status(id).await? {
+                None => Err(AppError::NotFound(format!("issue {id}"))),
+                Some(current) => Err(AppError::Validation(format!(
+                    "invalid transition: {current} -> closed"
+                ))),
+            };
+        }
+
+        let commit_msg = format!("close {id} by {closed_by_session}");
+        conn.exec_drop(
+            "CALL DOLT_COMMIT('-A', '-m', :msg)",
+            mysql_async::params! {
+                "msg" => commit_msg,
+            },
+        )
+        .await
+        .map_err(map_err)?;
+
+        Ok(())
+    }
+
     /// List issues matching `filter`, newest-updated first. Datetime columns
     /// are formatted server-side to ISO 8601 strings — the workspace pins
     /// `mysql_async` with `minimal` features (no `time`/`chrono` integration),

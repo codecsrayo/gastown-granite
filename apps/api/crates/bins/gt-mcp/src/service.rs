@@ -159,6 +159,15 @@ impl IssuesRead {
             None => Err(AppError::Other("issues backend not wired".into())),
         }
     }
+
+    /// Close with attribution through to the Dolt backend (hq-mcp-issues.5).
+    /// Mirrors [`Self::insert`]'s unwired-backend behavior.
+    pub async fn close(&self, id: &str, closed_by_session: &str) -> Result<(), AppError> {
+        match &self.inner {
+            Some(d) => d.close(id, closed_by_session).await,
+            None => Err(AppError::Other("issues backend not wired".into())),
+        }
+    }
 }
 
 /// Input for the `quota.register` tool (hq-mc72.10). Account registration is intentionally
@@ -631,6 +640,45 @@ impl TransitionIssue {
     fn target_status(&self) -> IssueStatus {
         // `validate` rules out the parse failure before any path that calls this.
         IssueStatus::parse(&self.target).expect("validate guards target parse")
+    }
+}
+
+/// Input for the `issues.close` tool (hq-mcp-issues.5). Sibling of
+/// `issues.transition` with `target=closed`, except it also stamps
+/// `closed_by_session` for kanban attribution. The frontier defaults the
+/// session to the MCP actor when the caller does not override it — the most
+/// natural choice for an agent closing its own bead.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct CloseIssue {
+    /// Target bead id. Non-empty.
+    pub id: String,
+    /// Optional explicit session id for the attribution column. When omitted,
+    /// `closed_by_session` is set to the MCP scope actor (`mcp-local`/`dev`/
+    /// whichever `GT_MCP_ACTOR` resolved to).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_by_session: Option<String>,
+}
+
+impl CloseIssue {
+    fn validate(&self) -> Result<(), AppError> {
+        if self.id.is_empty() {
+            return Err(AppError::Validation("issue id is empty".into()));
+        }
+        if matches!(&self.closed_by_session, Some(s) if s.is_empty()) {
+            return Err(AppError::Validation(
+                "closed_by_session is empty (omit to default to MCP actor)".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Resolve the attribution string, falling back to the scope actor when the
+    /// caller did not supply one. Borrowing `&str` keeps the no-alloc fallback.
+    fn effective_session<'a>(&'a self, scope_actor: &'a str) -> &'a str {
+        match self.closed_by_session.as_deref() {
+            Some(s) => s,
+            None => scope_actor,
+        }
     }
 }
 
@@ -1360,6 +1408,78 @@ impl McpService {
         Parameters(args): Parameters<TransitionIssue>,
     ) -> Result<CallToolResult, McpError> {
         self.run_transition_issue("issues.transition.execute", args, false).await
+    }
+
+    /// Scope check + (validate | close+attribute + DOLT_COMMIT) + audit for
+    /// `issues.close` (hq-mcp-issues.5). Sibling of `issues.transition` with
+    /// `target=closed` that additionally stamps `closed_by_session`. Already-
+    /// closed rows surface as `InvalidTransition` (not idempotent success) so
+    /// the dashboard can flag double-closes.
+    pub async fn run_close_issue(
+        &self,
+        tool: &str,
+        args: CloseIssue,
+        validate_only: bool,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let json = serde_json::to_value(&args).expect("CloseIssue is Serialize");
+        let domain_result = if validate_only {
+            args.validate()
+        } else {
+            match args.validate() {
+                Ok(()) => {
+                    let session = args.effective_session(&self.inner.scope.actor);
+                    self.inner.issues.close(&args.id, session).await
+                }
+                Err(e) => Err(e),
+            }
+        };
+
+        let outcome = match &domain_result {
+            Ok(()) => Outcome::Ok,
+            Err(e) => Outcome::Failed { error: e.to_string() },
+        };
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments: json,
+            outcome,
+        });
+
+        match domain_result {
+            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
+            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "issues.close.validate",
+        description = "Check whether closing an issue (status open|working -> closed) would be accepted. No state change."
+    )]
+    async fn issues_close_validate(
+        &self,
+        Parameters(args): Parameters<CloseIssue>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_close_issue("issues.close.validate", args, true).await
+    }
+
+    #[tool(
+        name = "issues.close.execute",
+        description = "Close hq.issues row + stamp closed_at + closed_by_session (defaults to MCP actor) + atomic Dolt commit. Already-closed rows reject; missing id returns NotFound."
+    )]
+    async fn issues_close_execute(
+        &self,
+        Parameters(args): Parameters<CloseIssue>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_close_issue("issues.close.execute", args, false).await
     }
 
     /// Patrol-domain shim around [`Self::run_command`] (hq-fe-api-w.1). The lease tracker

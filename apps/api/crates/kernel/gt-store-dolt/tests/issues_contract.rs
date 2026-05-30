@@ -168,6 +168,7 @@ async fn insert_commits_atomic() {
         external_ref: Some("hq-root".into()),
         assignee: Some("alice".into()),
         owner: Some("alice".into()),
+        ..Default::default()
     };
     repo.insert(&row).await.expect("insert");
 
@@ -216,6 +217,7 @@ async fn update_patches_visible_fields_and_commits() {
         external_ref: None,
         assignee: None,
         owner: None,
+        ..Default::default()
     };
     repo.insert(&row).await.expect("seed insert");
 
@@ -280,6 +282,7 @@ async fn transition_state_machine_round_trip() {
         external_ref: None,
         assignee: None,
         owner: None,
+        ..Default::default()
     };
     repo.insert(&row).await.expect("seed insert");
 
@@ -308,6 +311,72 @@ async fn transition_state_machine_round_trip() {
     // Missing id surfaces NotFound rather than InvalidTransition.
     let err = repo
         .transition("hq-no-such", IssueStatus::Working)
+        .await
+        .expect_err("missing id must error");
+    assert!(
+        err.to_string().to_lowercase().contains("not found"),
+        "got `{err}`",
+    );
+}
+
+#[tokio::test]
+async fn close_stamps_attribution_and_rejects_double() {
+    let Ok(base) = std::env::var("GT_DOLT_URL") else {
+        eprintln!("GT_DOLT_URL unset — skipping DoltIssues.close contract");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    seed(&base).await.expect("seed");
+
+    use mysql_async::prelude::Queryable;
+    let repo = DoltIssues::connect(&format!("{base}/{TEST_DB}")).expect("connect");
+
+    let id = format!("hq-close-{}", ulid::Ulid::new());
+    let row = NewIssue {
+        id: id.clone(),
+        title: "close gate".into(),
+        description: String::new(),
+        design: String::new(),
+        acceptance_criteria: String::new(),
+        notes: String::new(),
+        priority: 2,
+        issue_type: "task".into(),
+        created_by: "test".into(),
+        external_ref: None,
+        assignee: None,
+        owner: None,
+        ..Default::default()
+    };
+    repo.insert(&row).await.expect("seed insert");
+
+    repo.close(&id, "claude-host").await.expect("close ok");
+    assert_eq!(
+        repo.current_status(&id).await.unwrap().as_deref(),
+        Some("closed"),
+    );
+
+    // Attribution column carries the session id.
+    let pool = gt_store_dolt::connect(&format!("{base}/{TEST_DB}")).expect("pool");
+    let mut conn = pool.get_conn().await.expect("conn");
+    let session: Option<String> = conn
+        .exec_first(
+            "SELECT closed_by_session FROM issues WHERE id = :id",
+            mysql_async::params! { "id" => &id },
+        )
+        .await
+        .expect("read attr");
+    assert_eq!(session.as_deref(), Some("claude-host"));
+
+    // Double-close rejects (already closed -> InvalidTransition).
+    let err = repo.close(&id, "x").await.expect_err("double close must reject");
+    assert!(
+        err.to_string().contains("invalid transition"),
+        "got `{err}`",
+    );
+
+    // Missing id surfaces NotFound.
+    let err = repo
+        .close("hq-no-such", "x")
         .await
         .expect_err("missing id must error");
     assert!(
