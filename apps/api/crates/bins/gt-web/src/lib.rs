@@ -46,6 +46,12 @@ pub use jwt::{Claims, JwtError, JwtIssuer, DEFAULT_TTL, ISSUER};
 pub use gt_rbac::{ActorSpec, RbacConfig, RoleSpec, WebGrant};
 pub use health::{HydrationHandle, ReadinessGate, ReadinessGateBuilder};
 pub use idempotency::{idempotency_middleware, IdempotencyStore};
+// hq-fe-auth.3 — typed payloads for `quota.login_*` SSE kinds. Re-exported so the
+// integration tests and downstream crates can decode wire frames without touching
+// `dto::` directly.
+pub use dto::{
+    QuotaLoginComplete, QuotaLoginEvent, QuotaLoginFailed, QuotaLoginStarted, QuotaLoginUrlReady,
+};
 pub use login::{LoginConfig, LoginRegistry, LoginStartResponse, LoginTokenRequest};
 pub use rate_limit::{rate_limit_middleware, RateLimitStore};
 pub use scope::{scope_middleware, RouteContext, ScopeGuard};

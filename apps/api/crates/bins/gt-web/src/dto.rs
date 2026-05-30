@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use gt_agent::{Session, SessionState};
 use gt_beads::{Bead, BeadStatus};
+use gt_events::EventKind;
+use gt_login::LoginFailure;
 
 /// One row of `GET /api/sessions`. `role`/`crew` (hq-8iur.7) expose the agent kind and the
 /// crew running inside a polecat as the flat canonical strings the frontend can filter on.
@@ -492,4 +494,167 @@ pub struct IssuesQuery {
     pub issue_type: Option<String>,
     pub priority_max: Option<u8>,
     pub limit: Option<u32>,
+}
+
+/// Canonical wire payloads for `quota.login_*` SSE kinds (hq-fe-auth.3).
+///
+/// Each struct is the **payload** carried inside the `EventRecord.payload` field;
+/// the kind ("quota.login_started" etc.) lives in `EventRecord.type`. Payloads do
+/// not duplicate the kind discriminator — the SSE frame is already tagged.
+///
+/// All payloads carry `account` + `flow_id` so the frontend can demux concurrent
+/// flows from a single `/api/stream` connection.
+
+/// `quota.login_started` — driver booted, PTY child is alive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuotaLoginStarted {
+    pub account: String,
+    pub flow_id: String,
+}
+
+/// `quota.login_url_ready` — CLI surfaced the OAuth URL.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuotaLoginUrlReady {
+    pub account: String,
+    pub flow_id: String,
+    pub url: String,
+}
+
+/// `quota.login_complete` — CLI exited 0 after the operator-submitted token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuotaLoginComplete {
+    pub account: String,
+    pub flow_id: String,
+}
+
+/// `quota.login_failed` — terminal failure. `reason` is the typed [`LoginFailure`];
+/// `message` is its `Display` fallback for clients that don't yet type the union.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuotaLoginFailed {
+    pub account: String,
+    pub flow_id: String,
+    pub reason: LoginFailure,
+    pub message: String,
+}
+
+/// Discriminated envelope used by [`crate::login::emit_event`] to stamp the right
+/// kind on the wire. Not a wire shape itself — only its `EventKind` impl and inner
+/// payloads cross the SSE boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuotaLoginEvent {
+    Started(QuotaLoginStarted),
+    UrlReady(QuotaLoginUrlReady),
+    Complete(QuotaLoginComplete),
+    Failed(QuotaLoginFailed),
+}
+
+impl QuotaLoginEvent {
+    /// Stable wire kind — identical to what the SSE consumer sees as `EventRecord.type`.
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            QuotaLoginEvent::Started(_) => "quota.login_started",
+            QuotaLoginEvent::UrlReady(_) => "quota.login_url_ready",
+            QuotaLoginEvent::Complete(_) => "quota.login_complete",
+            QuotaLoginEvent::Failed(_) => "quota.login_failed",
+        }
+    }
+
+    /// Encode the inner payload as a generic `serde_json::Value` — the shape
+    /// `EventRecord.payload` carries.
+    pub fn payload_json(&self) -> serde_json::Value {
+        match self {
+            QuotaLoginEvent::Started(p) => {
+                serde_json::to_value(p).unwrap_or(serde_json::Value::Null)
+            }
+            QuotaLoginEvent::UrlReady(p) => {
+                serde_json::to_value(p).unwrap_or(serde_json::Value::Null)
+            }
+            QuotaLoginEvent::Complete(p) => {
+                serde_json::to_value(p).unwrap_or(serde_json::Value::Null)
+            }
+            QuotaLoginEvent::Failed(p) => {
+                serde_json::to_value(p).unwrap_or(serde_json::Value::Null)
+            }
+        }
+    }
+}
+
+impl EventKind for QuotaLoginEvent {
+    fn kind(&self) -> &'static str {
+        self.kind_str()
+    }
+}
+
+#[cfg(test)]
+mod quota_login_dto_tests {
+    use super::*;
+
+    #[test]
+    fn kind_strings_match_bead_spec() {
+        assert_eq!(
+            QuotaLoginEvent::Started(QuotaLoginStarted {
+                account: "a".into(),
+                flow_id: "F".into(),
+            })
+            .kind_str(),
+            "quota.login_started",
+        );
+        assert_eq!(
+            QuotaLoginEvent::UrlReady(QuotaLoginUrlReady {
+                account: "a".into(),
+                flow_id: "F".into(),
+                url: "https://console.anthropic.com/x".into(),
+            })
+            .kind_str(),
+            "quota.login_url_ready",
+        );
+        assert_eq!(
+            QuotaLoginEvent::Complete(QuotaLoginComplete {
+                account: "a".into(),
+                flow_id: "F".into(),
+            })
+            .kind_str(),
+            "quota.login_complete",
+        );
+        assert_eq!(
+            QuotaLoginEvent::Failed(QuotaLoginFailed {
+                account: "a".into(),
+                flow_id: "F".into(),
+                reason: LoginFailure::Cancelled,
+                message: "login cancelled by caller".into(),
+            })
+            .kind_str(),
+            "quota.login_failed",
+        );
+    }
+
+    #[test]
+    fn url_ready_payload_carries_url() {
+        let p = QuotaLoginEvent::UrlReady(QuotaLoginUrlReady {
+            account: "a".into(),
+            flow_id: "F".into(),
+            url: "https://console.anthropic.com/x".into(),
+        });
+        let v = p.payload_json();
+        assert_eq!(v["url"], "https://console.anthropic.com/x");
+        assert_eq!(v["account"], "a");
+        assert_eq!(v["flow_id"], "F");
+        // Payload must NOT contain a redundant `kind` field — that lives on the
+        // wire `EventRecord.type`.
+        assert!(v.get("kind").is_none());
+    }
+
+    #[test]
+    fn failed_payload_carries_typed_reason_and_flat_message() {
+        let p = QuotaLoginEvent::Failed(QuotaLoginFailed {
+            account: "a".into(),
+            flow_id: "F".into(),
+            reason: LoginFailure::TokenRejected { status: 17 },
+            message: "cli rejected token (exit status 17)".into(),
+        });
+        let v = p.payload_json();
+        assert_eq!(v["reason"]["kind"], "token_rejected");
+        assert_eq!(v["reason"]["status"], 17);
+        assert_eq!(v["message"], "cli rejected token (exit status 17)");
+    }
 }

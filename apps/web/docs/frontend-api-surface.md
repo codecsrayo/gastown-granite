@@ -139,7 +139,7 @@ Grouped by domain. Use `type` to route.
 | merge | `merge.submit`, `merge.start`, `merge.started`, `merge.complete`, `merge.merged`, `merge.fail`, `merge.failed`, `merge.ready` |
 | patrol | `patrol.register`, `patrol.heartbeat`, `patrol.tick`, `patrol.close`, `patrol.lease_registered`, `patrol.lease_closed`, `patrol.lease_expired` |
 | orch | `orch.launch_convoy`, `orch.convoy_created`, `orch.convoy_launched`, `orch.convoy_closed`, `orch.convoy_failed`, `orch.complete_member`, `orch.fail_member`, `orch.member_dispatched`, `orch.member_completed`, `orch.member_failed` |
-| quota | `quota.sample`, `quota.probe`, `quota.rotate`, `quota.rotated`, `quota.tokens_sampled`, `quota.usage_probed`, `quota.account_limited`, `quota.blocked`, `quota.block_predicted`, `quota.window_reset` |
+| quota | `quota.sample`, `quota.probe`, `quota.rotate`, `quota.rotated`, `quota.tokens_sampled`, `quota.usage_probed`, `quota.account_limited`, `quota.blocked`, `quota.block_predicted`, `quota.window_reset`, `quota.login_started`, `quota.login_url_ready`, `quota.login_complete`, `quota.login_failed` |
 | scheduling | `scheduling.enqueue`, `scheduling.mark_dispatched`, `scheduling.dispatched`, `scheduling.dispatch_failed`, `scheduling.dispatch_timeout` |
 | rig | `rig.add`, `rig.added`, `rig.adopt`, `rig.adopted`, `rig.remove`, `rig.removed`, `rig.set_prefix`, `rig.prefix_changed`, `rig.set_default_branch`, `rig.default_branch_changed` |
 | frontier audit (skip in UI) | `web.invoked`, `web.unauthorized`, `mcp.invoked`, `mcp.unauthorized` |
@@ -256,7 +256,7 @@ to the old API; pick the cleanest contract per feature.
 | `RbacConfig` unificado (`mcp-scope.toml` ↔ JWT roles) | **done** (crate `gt-rbac`) | hq-fe-rbac.2 |
 | Middleware per-scope (no single bearer) | **done** (gt-web `scope.rs` `ScopeGuard`) | hq-fe-rbac.3 |
 | Account login pty driver (`POST /api/quota/accounts/:n/login` + token + cancel) | **done** (`gt-web::login`, scope `quota.write`; 503 si `GT_LOGIN_ENABLE` unset) | hq-fe-auth.2 |
-| SSE kinds `quota.login_started` / `login_url_ready` / `login_complete` / `login_failed` | **partial** — `EventRecord`s emitidos en broadcast `gt-web::login::emit_event`; SSE encoding/DTO pendiente | hq-fe-auth.3 |
+| SSE kinds `quota.login_started` / `login_url_ready` / `login_complete` / `login_failed` | **done** — `gt-web::dto::QuotaLogin{Started,UrlReady,Complete,Failed}` payloads + TS mirror en `apps/web/src/lib/types/quota-login.ts`; SSE bridge inalterado (forwarda `EventRecord` crudo) | hq-fe-auth.3 |
 
 ### Terminal / interactive gaps
 

@@ -15,6 +15,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::StreamExt;
 use serde_json::json;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast::error::TryRecvError;
@@ -364,5 +365,107 @@ async fn start_without_pty_returns_503() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 503);
+    root.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// hq-fe-auth.3 — SSE wire shape. The same `quota.login_*` `EventRecord`s the
+// in-process broadcast carries must arrive intact on `GET /api/stream` (the bridge
+// in `gt_web::stream` does no per-kind filtering) and the payload must match the
+// typed DTOs (`gt_web::QuotaLogin{Started,UrlReady,Complete,Failed}`).
+
+#[tokio::test]
+async fn sse_stream_surfaces_quota_login_kinds_in_order() {
+    let pty = Arc::new(FakePty::scripted(
+        vec![b"https://console.anthropic.com/oauth?state=zzz\n".to_vec()],
+        0,
+    )) as Arc<dyn gt_login::Pty>;
+    let (base, root, _events, _srv) = boot_with_pty(pty).await;
+
+    // Open the stream first so the broadcast subscriber exists before the driver
+    // task runs — the broadcast is best-effort, frames pushed before any receiver
+    // is registered are lost.
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{base}/api/stream"))
+        .header("accept", "text/event-stream")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let mut byte_stream = resp.bytes_stream();
+
+    for _ in 0..50 {
+        if root.event_subscribers() >= 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(root.event_subscribers() >= 1, "SSE never subscribed");
+
+    // Drive the flow: start → token → driver writes + waits for exit → complete.
+    let start: serde_json::Value = reqwest::Client::new()
+        .post(format!("{base}/api/quota/accounts/acct-sse/login"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let flow_id = start["flow_id"].as_str().unwrap().to_string();
+    let _ = reqwest::Client::new()
+        .post(format!("{base}/api/quota/accounts/acct-sse/login/token"))
+        .json(&json!({ "flow_id": flow_id, "token": "TOK-Y" }))
+        .send()
+        .await
+        .unwrap();
+
+    let mut buf = Vec::<u8>::new();
+    let saw_all = tokio::time::timeout(Duration::from_secs(3), async {
+        while let Some(chunk) = byte_stream.next().await {
+            let bytes = chunk.unwrap();
+            buf.extend_from_slice(&bytes);
+            if let Ok(s) = std::str::from_utf8(&buf) {
+                if s.contains("\"type\":\"quota.login_started\"")
+                    && s.contains("\"type\":\"quota.login_url_ready\"")
+                    && s.contains("\"type\":\"quota.login_complete\"")
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+
+    let body = String::from_utf8_lossy(&buf).to_string();
+    assert!(
+        saw_all,
+        "did not see all three quota.login_* SSE frames; got:\n{body}"
+    );
+
+    // Lexical order must match the bead spec (started → url_ready → complete).
+    let p_started = body.find("\"type\":\"quota.login_started\"").unwrap();
+    let p_url = body.find("\"type\":\"quota.login_url_ready\"").unwrap();
+    let p_done = body.find("\"type\":\"quota.login_complete\"").unwrap();
+    assert!(p_started < p_url && p_url < p_done, "wrong SSE order:\n{body}");
+
+    // Typed-DTO decode: pull the `url_ready` frame and parse its payload as
+    // `QuotaLoginUrlReady` (no `kind` field inside payload — discriminator lives
+    // on `EventRecord.type`). The `data:` prefix for this frame lives *before*
+    // the `"type":"quota.login_url_ready"` substring, so search backwards.
+    let frame_start =
+        body[..p_url].rfind("data:").unwrap() + "data:".len();
+    let frame_end = body[frame_start..].find('\n').unwrap() + frame_start;
+    let frame_json: serde_json::Value =
+        serde_json::from_str(body[frame_start..frame_end].trim()).expect("frame is JSON");
+    let payload = frame_json["payload"].clone();
+    let typed: gt_web::QuotaLoginUrlReady =
+        serde_json::from_value(payload).expect("payload matches QuotaLoginUrlReady");
+    assert_eq!(typed.account, "acct-sse");
+    assert_eq!(typed.flow_id, flow_id);
+    assert_eq!(typed.url, "https://console.anthropic.com/oauth?state=zzz");
+
     root.shutdown();
 }

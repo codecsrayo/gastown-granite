@@ -36,7 +36,9 @@ use tokio::sync::broadcast;
 use gt_agent::SessionQueries;
 use gt_audit::EventRecord;
 use gt_beads::BeadRepository;
-use gt_login::{LoginDriver, LoginEvent, LoginFailure};
+use gt_login::{LoginDriver, LoginEvent};
+#[cfg(test)]
+use gt_login::LoginFailure;
 use gt_merge::MergeRepository;
 
 use crate::routes::AppError;
@@ -278,37 +280,33 @@ fn emit_event(
     flow_id: &str,
     evt: LoginEvent,
 ) {
-    let (kind, payload) = match evt {
-        LoginEvent::Started => (
-            "quota.login_started",
-            serde_json::json!({
-                "account": account,
-                "flow_id": flow_id,
-            }),
+    let dto = match evt {
+        LoginEvent::Started => crate::dto::QuotaLoginEvent::Started(crate::dto::QuotaLoginStarted {
+            account: account.to_string(),
+            flow_id: flow_id.to_string(),
+        }),
+        LoginEvent::UrlReady { url } => crate::dto::QuotaLoginEvent::UrlReady(
+            crate::dto::QuotaLoginUrlReady {
+                account: account.to_string(),
+                flow_id: flow_id.to_string(),
+                url,
+            },
         ),
-        LoginEvent::UrlReady { url } => (
-            "quota.login_url_ready",
-            serde_json::json!({
-                "account": account,
-                "flow_id": flow_id,
-                "url": url,
-            }),
+        LoginEvent::Complete { account: a } => crate::dto::QuotaLoginEvent::Complete(
+            crate::dto::QuotaLoginComplete {
+                account: a,
+                flow_id: flow_id.to_string(),
+            },
         ),
-        LoginEvent::Complete { account: a } => (
-            "quota.login_complete",
-            serde_json::json!({
-                "account": a,
-                "flow_id": flow_id,
-            }),
-        ),
-        LoginEvent::Failed { reason } => (
-            "quota.login_failed",
-            serde_json::json!({
-                "account": account,
-                "flow_id": flow_id,
-                "reason": serde_json::to_value(&reason).unwrap_or(serde_json::Value::Null),
-                "message": failure_message(&reason),
-            }),
+        LoginEvent::Failed { reason } => crate::dto::QuotaLoginEvent::Failed(
+            crate::dto::QuotaLoginFailed {
+                account: account.to_string(),
+                flow_id: flow_id.to_string(),
+                // `LoginFailure` implements `Display` via `thiserror`; the flat
+                // `message` lets the UI render without typing the union.
+                message: reason.to_string(),
+                reason,
+            },
         ),
     };
     let rec = EventRecord {
@@ -316,18 +314,12 @@ fn emit_event(
         correlation_id: flow_id.to_string(),
         causation_id: None,
         ts: rfc3339_now(),
-        kind: kind.to_string(),
-        payload,
+        kind: dto.kind_str().to_string(),
+        payload: dto.payload_json(),
     };
     // `send` errors when there are zero receivers; that's expected before any SSE
     // client connects and harmless — drop the frame.
     let _ = events.send(rec);
-}
-
-fn failure_message(reason: &LoginFailure) -> String {
-    // `LoginFailure` implements `Display` via `thiserror`; flatten it to a plain string
-    // so the SSE payload carries a human-readable fallback alongside the typed `reason`.
-    reason.to_string()
 }
 
 fn rfc3339_now() -> String {
