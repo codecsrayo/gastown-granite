@@ -36,10 +36,14 @@ impl From<Session> for SessionDto {
     }
 }
 
-/// Query for `GET /api/sessions?role=polecat`. Absent = all active sessions (no role filter).
+/// Query for `GET /api/sessions[?role=polecat][&rig=hq]`. Both filters are independent and
+/// AND together — absent = no constraint on that axis. Unknown values yield an empty result
+/// (filter is a view, not a command), matching the `role` semantics in
+/// [`crate::routes::list_sessions`].
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SessionsQuery {
     pub role: Option<String>,
+    pub rig: Option<String>,
 }
 
 /// One row of `GET /api/beads`. Mirrors the columns the dashboard already reads.

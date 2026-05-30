@@ -26,7 +26,7 @@ use crate::dto::{
 use crate::state::AppState;
 use crate::stream::{sse_from_json_receiver, sse_from_receiver};
 
-/// `GET /api/sessions[?role=polecat]` — snapshot of active sessions, optionally filtered by
+/// `GET /api/sessions[?role=polecat][&rig=hq]` — snapshot of active sessions, optionally filtered by
 /// role (hq-8iur.7). The reader port lives in `gt-agent`; the dashboard fetches this once and
 /// then patches rows via the SSE stream. An unknown `role` value yields an empty result (it
 /// matches no session) rather than an error — the filter is a view, not a command.
@@ -39,11 +39,12 @@ where
     SQ: SessionQueries + Send + Sync + 'static,
 {
     let rows = state.sessions.active_sessions().await.map_err(AppError::from)?;
-    let dtos = rows.into_iter().map(SessionDto::from);
-    let filtered: Vec<SessionDto> = match q.role {
-        Some(role) => dtos.filter(|d| d.role == role).collect(),
-        None => dtos.collect(),
-    };
+    let filtered: Vec<SessionDto> = rows
+        .into_iter()
+        .map(SessionDto::from)
+        .filter(|d| q.role.as_deref().map_or(true, |r| d.role == r))
+        .filter(|d| q.rig.as_deref().map_or(true, |r| d.rig == r))
+        .collect();
     Ok(Json(filtered))
 }
 

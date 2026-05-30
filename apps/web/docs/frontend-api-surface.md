@@ -200,7 +200,7 @@ to the old API; pick the cleanest contract per feature.
 | `GET /api/convoys` — snapshot por estado | **gap** (solo SSE `orch.*`) | hq-fe-api-r.3 |
 | `GET /api/merges` — slots snapshot | **gap** | hq-fe-api-r.4 |
 | `GET /api/feed?since=` — activity feed con histórico (PG projection) | **gap** | hq-fe-api-r.5 |
-| `GET /api/sessions?rig=…` — filtro por rig (hoy solo `?role=`) | **gap** | hq-fe-api-r.6 |
+| `GET /api/sessions?rig=…` — filtro por rig (combinable con `?role=`) | **live** | hq-fe-api-r.6 |
 | `GET /api/mayor/status` — ATTACHED / DETACHED + heartbeat | **gap** | hq-fe-api-r.7 |
 | `GET /api/whoami` — actor + roles[] + scopes[] (RBAC bootstrap) | **gap** | hq-fe-rbac.4 |
 | `GET /api/skills` — catálogo de skills | **gap (new domain)** | hq-fe-skills.2 |

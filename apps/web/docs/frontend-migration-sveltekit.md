@@ -157,7 +157,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-api-r.3 | `GET /api/convoys` snapshot por estado | P2 | open | — | mirror de gt://orch/convoys |
 | hq-fe-api-r.4 | `GET /api/merges` slots snapshot | P2 | open | — | mirror de gt://merge/slots |
 | hq-fe-api-r.5 | `GET /api/feed?since=` activity histórico | P2 | open | — | PG projection |
-| hq-fe-api-r.6 | `?rig=` filter en `/api/sessions` | P2 | open | — | trivial, junto con r.1 |
+| hq-fe-api-r.6 | `?rig=` filter en `/api/sessions` | P2 | closed | claude-host | `SessionsQuery.rig: Option<String>` AND con `role`; mismatch yields empty (view, not error); `fetchSessions({rig, role})` con back-compat string; tests sessions_role 2/2 cubren rig solo + combo + miss |
 | hq-fe-api-r.7 | `GET /api/mayor/status` ATTACHED/DETACHED | P3 | open | — | semántica TBD con mayor |
 | hq-fe-api-r.8 | `GET /api/worktrees` snapshot (live branch tracking) | P1 | closed | claude-host | shell `git worktree list` + `status --porcelain=v2` + `rev-list main...HEAD`; backs hq-fe-view.14 |
 | hq-fe-api-r.9 | `GET /api/issues` snapshot (hq.issues mirror) | P1 | closed | claude-host | DoltIssues reader; filters status/assignee/external_ref/limit; mirror del `gt://issues` MCP; backs hq-fe-view.15 |

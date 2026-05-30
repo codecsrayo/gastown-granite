@@ -138,6 +138,53 @@ async fn api_sessions_exposes_role_and_filters() {
     let none: Vec<gt_web::dto::SessionDto> = unknown.json().await.unwrap();
     assert!(none.is_empty());
 
+    // ?rig=granite narrows to the two granite sessions across roles
+    // (hq-fe-api-r.6 — `rig` is an independent filter from `role`).
+    let granite: Vec<gt_web::dto::SessionDto> = client
+        .get(format!("{base}/api/sessions?rig=granite"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(granite.len(), 2, "two granite sessions");
+    assert!(granite.iter().all(|s| s.rig == "granite"));
+
+    // ?role=polecat&rig=granite intersects to a single row.
+    let combined: Vec<gt_web::dto::SessionDto> = client
+        .get(format!("{base}/api/sessions?role=polecat&rig=granite"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(combined.len(), 1);
+    assert_eq!(combined[0].id, "gt-granite-atom");
+
+    // Unknown rig matches nothing (same semantics as unknown role).
+    let no_rig: Vec<gt_web::dto::SessionDto> = client
+        .get(format!("{base}/api/sessions?rig=nope"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(no_rig.is_empty());
+
+    // Mismatched role + rig combo yields empty (AND semantics).
+    let cross: Vec<gt_web::dto::SessionDto> = client
+        .get(format!("{base}/api/sessions?role=mayor&rig=granite"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(cross.is_empty());
+
     // Give the spawned server a beat, then tear down.
     tokio::time::sleep(Duration::from_millis(10)).await;
     root.shutdown();
