@@ -66,7 +66,7 @@ Docs hermanos (lectura obligada antes de tocar nada):
 | **hq-fe-auth** | Account auth (Claude `/login` pty driver) | 5 | hq-fe-api-w (idem) | PLANEADO |
 | **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
 | **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | PLANEADO · spike obligatorio |
-| **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | EN PROGRESO · .1 + .2 + .3 + .6 + .8 CLOSED (5/8) |
+| **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | EN PROGRESO · .1-.4 + .6 + .8 CLOSED (6/8) |
 | **hq-fe-view** | Vistas + componentes (UI) | 19 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.1/.2/.4/.12/.13/.14-19 CLOSED (9/19) |
 | **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | PLANEADO |
 | **hq-mcp-issues** | MCP `issues.*` CRUD (cerrar bypass docker exec) | 5 | hq-fe-api-w.1 | DONE · 5/5 closed |
@@ -227,7 +227,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-build.1 | Scaffold `apps/web/` (svelte5 + adapter-static + tailwind + pnpm) | P1 | **closed** | codecsrayo | landed 2a76dffc; pnpm install/check/build verdes |
 | hq-fe-build.2 | `lib/api` client wrapper (fetch + bearer + idem-key) | P1 | closed | claude-host | `lib/api/client.ts` (apiGet/apiSend/apiRequest + ApiError + setOn401); inyecta Bearer (skip dev sentinel), Idempotency-Key auto en non-GET, 401 → +layout.svelte hook (clearBearer+goto /login); refactor de issues/sessions/worktrees/beads (10 vitest) |
 | hq-fe-build.3 | `lib/sse` stream + router (fan-out por kind) | P1 | closed | claude-host | `lib/sse.ts` SseRouter singleton; `subscribe(kind, h)` + `subscribeStatus(h)`; exact + `domain.*` + `*` patterns; lazy open + auto-close last-sub; 10 vitest cases con FakeEventSource |
-| hq-fe-build.4 | `lib/stores` base con runes (auth, sessions, beads, activity, quota) | P1 | open | — | `.svelte.ts` singletons |
+| hq-fe-build.4 | `lib/stores` base con runes (auth, sessions, beads, activity, quota) | P1 | closed | claude-host | `stores/{sessions,beads,activity,quota}.svelte.ts` singletons + 23 vitest cases; auth + theme ya estaban en view.1/.12 |
 | hq-fe-build.5 | `lib/types` DTOs manuales desde frontend-api-surface | P1 | open | — | regenerar de JsonSchema si crece |
 | hq-fe-build.6 | Vite proxy + dev workflow doc | P2 | closed | claude-host | `apps/web/docs/dev-workflow.md`: daily loop, proxy table, host-side gt-web + Dolt-mode, troubleshooting matrix; README + docs/README link in |
 | hq-fe-build.7 | Vitest (stores/logic) + Playwright (e2e) bootstrap | P2 | open | — | |
