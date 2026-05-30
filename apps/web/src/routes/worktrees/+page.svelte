@@ -10,6 +10,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { fetchWorktrees } from '$lib/api/worktrees';
   import type { Worktree } from '$lib/types/worktree';
+  import { beadIdFromBranch } from '$lib/claim-branch';
 
   let { data } = $props<{ data: { initial: Worktree[]; error: string | null } }>();
 
@@ -89,6 +90,7 @@
   <ul class="divide-y divide-white/5">
     {#each rows as wt (wt.path)}
       {@const open = expanded[wt.path] ?? false}
+      {@const bead = beadIdFromBranch(wt.branch)}
       <li class="py-3">
         <button
           type="button"
@@ -105,6 +107,15 @@
             <span class="truncate" style="color: var(--ink)">
               {wt.branch ?? '(detached)'}
             </span>
+            {#if bead}
+              <span
+                class="shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase"
+                style="color: var(--accent); border-color: var(--accent)"
+                title="bead id parsed from claim/ branch convention"
+              >
+                {bead}
+              </span>
+            {/if}
             <span class="truncate text-xs" style="color: var(--ink-faint)">
               {wt.path}
             </span>
