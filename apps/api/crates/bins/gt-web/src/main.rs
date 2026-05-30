@@ -44,7 +44,7 @@ use gt_root::{
     load_state, spawn_hydrated, spawn_sessions_projector, RealEffects, RootConfig, RootHandle,
     SystemClock,
 };
-use gt_store_dolt::{DoltBeads, DoltMerge, DoltOrch, DoltPatrol, DoltSessions};
+use gt_store_dolt::{DoltBeads, DoltIssues, DoltMerge, DoltOrch, DoltPatrol, DoltSessions};
 use gt_store_pg::PgAudit;
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 use gt_web::{
@@ -121,7 +121,17 @@ fn main() {
                     .ensure_schema()
                     .await
                     .expect("Dolt orch ensure_schema");
-                eprintln!("[gt-web] beads + sessions + merge/patrol/orch: Dolt @ {url}");
+                // `hq.issues` reader (hq-fe-api-r.9) — distinct from `beads` (5-col
+                // dispatcher table). ensure_schema is idempotent: backfills the taxonomy
+                // columns the `hq-taxon` family added without re-running on warm tables.
+                let dolt_issues = DoltIssues::connect(&url).expect("connect Dolt issues");
+                dolt_issues
+                    .ensure_schema()
+                    .await
+                    .expect("Dolt issues ensure_schema");
+                eprintln!(
+                    "[gt-web] beads + sessions + merge/patrol/orch + issues: Dolt @ {url}"
+                );
 
                 let dolt_probe = dolt.clone();
                 let gate = gate_builder
@@ -137,6 +147,7 @@ fn main() {
                     Arc::new(dolt_merge),
                     Arc::new(dolt_patrol),
                     Arc::new(dolt_orch),
+                    Some(Arc::new(dolt_issues)),
                     &log_path,
                     &bind,
                     auth,
@@ -156,6 +167,7 @@ fn main() {
                     Arc::new(InMemoryMergeRepo::default()),
                     Arc::new(InMemoryPatrolRepo::default()),
                     Arc::new(InMemoryOrchRepo::default()),
+                    None,
                     &log_path,
                     &bind,
                     auth,
@@ -174,6 +186,7 @@ async fn serve<R, SQ, MR, PR, OR>(
     merge_repo: Arc<MR>,
     patrol_repo: Arc<PR>,
     orch_repo: Arc<OR>,
+    issues: Option<Arc<DoltIssues>>,
     log_path: &str,
     bind: &str,
     auth: AuthConfig,
@@ -258,6 +271,7 @@ async fn serve<R, SQ, MR, PR, OR>(
         agent_events: root.agent_events.clone(),
         events: root.events_sender(),
         town_root,
+        issues,
     };
 
     // Idempotency-Key cache (hq-fe-api-w.2). TTL overridable via

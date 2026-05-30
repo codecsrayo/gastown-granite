@@ -54,6 +54,7 @@ async fn boot(auth: AuthConfig, gate: ReadinessGate) -> String {
         agent_events: root.agent_events.clone(),
         events: root.events_sender(),
         town_root: None,
+        issues: None,
     };
 
     let audit = InMemoryWebAudit::new();

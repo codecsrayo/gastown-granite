@@ -11,10 +11,11 @@ use axum::response::{IntoResponse, Json};
 use gt_agent::{AgentEvent, SessionQueries};
 use gt_beads::{BeadRepository, BeadStatus};
 use gt_events::Envelope;
+use gt_store_dolt::{IssueFilter, IssueRow};
 
 use crate::dto::{
-    BeadDto, BeadsQuery, DirtyFileDto, NudgeRequest, NudgeResponse, SessionDto, SessionsQuery,
-    WorktreeDto,
+    BeadDto, BeadsQuery, DirtyFileDto, IssueDto, IssuesQuery, NudgeRequest, NudgeResponse,
+    SessionDto, SessionsQuery, WorktreeDto,
 };
 use crate::state::AppState;
 use crate::stream::sse_from_receiver;
@@ -82,6 +83,62 @@ where
     SQ: SessionQueries + Send + Sync + 'static,
 {
     sse_from_receiver(state.events.subscribe())
+}
+
+/// `GET /api/issues` — thin HTTP mirror of the `gt://issues` MCP resource (hq-fe-api-r.9).
+/// Reads the canonical `hq.issues` table (25 cols, distinct from `BeadRepository`'s `beads`
+/// table — see [`crate::dto::IssueDto`]). Returns `[]` when `AppState.issues` is unset so
+/// the in-memory dev mode keeps working without a Dolt connection; same posture as
+/// `/api/worktrees`. Query string filters mirror the MCP grammar to keep both surfaces
+/// reading the same bead slice.
+pub async fn list_issues<R, SQ>(
+    State(state): State<AppState<R, SQ>>,
+    Query(q): Query<IssuesQuery>,
+) -> Result<Json<Vec<IssueDto>>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
+    let Some(issues) = state.issues.clone() else {
+        return Ok(Json(Vec::new()));
+    };
+    let mut filter = IssueFilter::default();
+    if let Some(s) = q.status.as_deref() {
+        filter.status = s
+            .split(',')
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect();
+    }
+    filter.assignee = q.assignee;
+    filter.external_ref = q.external_ref;
+    filter.issue_type = q.issue_type;
+    filter.priority_max = q.priority_max;
+    filter.limit = q.limit;
+    let rows = issues
+        .list(&filter)
+        .await
+        .map_err(|e| AppError::internal(format!("issues list: {e}")))?;
+    Ok(Json(rows.into_iter().map(IssueDto::from).collect()))
+}
+
+impl From<IssueRow> for IssueDto {
+    fn from(r: IssueRow) -> Self {
+        Self {
+            id: r.id,
+            title: r.title,
+            status: r.status,
+            priority: r.priority,
+            issue_type: r.issue_type,
+            assignee: r.assignee,
+            owner: r.owner,
+            external_ref: r.external_ref,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+            closed_at: r.closed_at,
+        }
+    }
 }
 
 /// `GET /api/worktrees` — snapshot of every git worktree under the town root, with branch,

@@ -77,6 +77,7 @@ where
     let api = Router::new()
         .route("/api/sessions", get(routes::list_sessions::<R, SQ>))
         .route("/api/beads", get(routes::list_beads::<R, SQ>))
+        .route("/api/issues", get(routes::list_issues::<R, SQ>))
         .route("/api/worktrees", get(routes::list_worktrees::<R, SQ>))
         .route("/api/nudge", post(routes::nudge::<R, SQ>))
         .route("/api/stream", get(routes::stream::<R, SQ>))

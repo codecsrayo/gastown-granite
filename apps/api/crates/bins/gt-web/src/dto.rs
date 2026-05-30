@@ -128,3 +128,38 @@ pub struct DirtyFileDto {
     /// staged modify, `.M` for unstaged modify, `A.` for staged add, `UU` for unmerged.
     pub xy: String,
 }
+
+/// One row of `GET /api/issues` (hq-fe-api-r.9). Thin HTTP mirror of the `gt://issues`
+/// MCP resource: surfaces the canonical `hq.issues` slice the dashboard joins against
+/// (e.g. /worktrees cross-link hq-fe-view.15). Heavy fields (description/design/notes)
+/// stay off the listing — clients fetch them per-id when a row is opened.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IssueDto {
+    pub id: String,
+    pub title: String,
+    /// Canonical `open|working|closed` from `hq.issues.status`. Distinct from
+    /// `BeadDto.status` (which mirrors the dispatcher's `beads` table).
+    pub status: String,
+    pub priority: i32,
+    pub issue_type: String,
+    pub assignee: Option<String>,
+    pub owner: Option<String>,
+    /// Parent epic id (the bead's `external_ref` column).
+    pub external_ref: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub closed_at: Option<String>,
+}
+
+/// Query for `GET /api/issues?status=working&external_ref=hq-fe-view&limit=50`. All fields
+/// optional; absent = no filter. `status` accepts a comma-separated list so the dashboard
+/// can pull `open,working` in one round-trip (mirrors the MCP resource's grammar).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct IssuesQuery {
+    pub status: Option<String>,
+    pub assignee: Option<String>,
+    pub external_ref: Option<String>,
+    pub issue_type: Option<String>,
+    pub priority_max: Option<u8>,
+    pub limit: Option<u32>,
+}

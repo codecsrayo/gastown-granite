@@ -10,6 +10,7 @@ use gt_agent::{AgentEvent, SessionQueries};
 use gt_audit::EventRecord;
 use gt_beads::BeadRepository;
 use gt_events::Envelope;
+use gt_store_dolt::DoltIssues;
 
 /// Read-side composition root. Keep it `Clone` (Arc-backed) so axum can hand a fresh handle
 /// to each request without locks. `R`/`SQ` are the bead / session ports.
@@ -26,6 +27,12 @@ where
     /// worktrees the agents have branched off (hq-fe-api-r.8). Optional: when unset the
     /// endpoint reports an empty list — the gateway does not invent a default rig location.
     pub town_root: Option<Arc<PathBuf>>,
+    /// Dolt-backed `hq.issues` reader. Powers `GET /api/issues` (hq-fe-api-r.9), the
+    /// canonical 25-col bead table distinct from `beads` (5-col dispatcher scratch). Optional:
+    /// when `GT_DOLT_URL` is unset the endpoint returns an empty list so the in-memory dev
+    /// mode keeps working without a Dolt connection. Concrete type by design — `DoltIssues`
+    /// is the only reader; introducing a port would add a generic for no current consumer.
+    pub issues: Option<Arc<DoltIssues>>,
 }
 
 impl<R, SQ> Clone for AppState<R, SQ>
@@ -40,6 +47,7 @@ where
             agent_events: self.agent_events.clone(),
             events: self.events.clone(),
             town_root: self.town_root.clone(),
+            issues: self.issues.clone(),
         }
     }
 }

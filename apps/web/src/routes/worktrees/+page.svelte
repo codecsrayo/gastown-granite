@@ -4,34 +4,55 @@
   // the dirty file list. Polls every 2s so an agent's commit/dirty-file change shows up
   // without a manual reload — same cadence VSCode's SCM view uses (cheap GET on local git).
   //
+  // hq-fe-view.15 — cross-link with /api/beads?status=working: the bead-id parsed from the
+  // claim branch is joined against the live bead snapshot so each row surfaces the bead
+  // title + assignee (the agent actively on that worktree). Beads fetch is fire-and-forget
+  // — failures leave `beadsById` empty and the badge falls back to the id-only render.
+  //
   // Layout is intentionally bare: full Shell/Sidebar/Topbar arrive with hq-fe-view.1 and
   // wrap this route via +layout.svelte once that bead lands.
 
   import { onDestroy, onMount } from 'svelte';
   import { fetchWorktrees } from '$lib/api/worktrees';
+  import { fetchIssues } from '$lib/api/issues';
   import type { Worktree } from '$lib/types/worktree';
+  import type { Issue } from '$lib/types/issue';
   import { beadIdFromBranch } from '$lib/claim-branch';
 
-  let { data } = $props<{ data: { initial: Worktree[]; error: string | null } }>();
+  let { data } = $props<{
+    data: { initial: Worktree[]; issues: Issue[]; error: string | null };
+  }>();
 
   // Local mutable mirror of the load() output. `$effect` re-seeds on navigation so a fresh
   // server-side fetch replaces the polled snapshot when the user re-enters the route.
   let rows = $state<Worktree[]>([]);
+  let issues = $state<Issue[]>([]);
   let error = $state<string | null>(null);
   $effect(() => {
     rows = data.initial;
+    issues = data.issues;
     error = data.error;
   });
+  // Derived index for O(1) badge enrichment per row. Rebuilds whenever the polled `issues`
+  // array swaps; Svelte 5 `$derived` keeps the map identity stable across re-renders.
+  let issuesById = $derived(new Map(issues.map((i) => [i.id, i])));
   let expanded = $state<Record<string, boolean>>({});
   let timer: ReturnType<typeof setInterval> | undefined;
 
   async function refresh() {
-    try {
-      rows = await fetchWorktrees();
+    // Parallel + independent: issues failing must not drop the worktrees view. Same posture
+    // as the +page.ts loader so the polled state machine matches the first-paint contract.
+    const [wtResult, issuesResult] = await Promise.allSettled([
+      fetchWorktrees(),
+      fetchIssues('open,working'),
+    ]);
+    if (wtResult.status === 'fulfilled') {
+      rows = wtResult.value;
       error = null;
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+    } else {
+      error = wtResult.reason instanceof Error ? wtResult.reason.message : String(wtResult.reason);
     }
+    if (issuesResult.status === 'fulfilled') issues = issuesResult.value;
   }
 
   onMount(() => {
@@ -90,7 +111,8 @@
   <ul class="divide-y divide-white/5">
     {#each rows as wt (wt.path)}
       {@const open = expanded[wt.path] ?? false}
-      {@const bead = beadIdFromBranch(wt.branch)}
+      {@const beadId = beadIdFromBranch(wt.branch)}
+      {@const liveBead = beadId ? (issuesById.get(beadId) ?? null) : null}
       <li class="py-3">
         <button
           type="button"
@@ -107,13 +129,27 @@
             <span class="truncate" style="color: var(--ink)">
               {wt.branch ?? '(detached)'}
             </span>
-            {#if bead}
+            {#if beadId}
               <span
                 class="shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase"
                 style="color: var(--accent); border-color: var(--accent)"
-                title="bead id parsed from claim/ branch convention"
+                title={liveBead?.title ?? 'bead id parsed from claim/ branch convention'}
               >
-                {bead}
+                {beadId}
+              </span>
+            {/if}
+            {#if liveBead?.title}
+              <span class="truncate text-xs" style="color: var(--ink-soft)">
+                {liveBead.title}
+              </span>
+            {/if}
+            {#if liveBead?.assignee}
+              <span
+                class="shrink-0 rounded bg-white/5 px-1.5 py-0.5 text-[10px]"
+                style="color: var(--ink-soft)"
+                title="bead assignee — agent on this worktree"
+              >
+                @{liveBead.assignee}
               </span>
             {/if}
             <span class="truncate text-xs" style="color: var(--ink-faint)">
