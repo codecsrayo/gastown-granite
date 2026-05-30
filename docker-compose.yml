@@ -51,8 +51,8 @@ services:
   # Replaces the retired Go dashboard as the gastown.codecsrayo.com backend.
   gt-api:
     build:
-      context: ./apps/api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: apps/api/Dockerfile
     container_name: gastown-gt-api
     restart: unless-stopped
     command: ["gt-web"]
@@ -104,8 +104,8 @@ services:
   # GT_POLECAT_CMD overridable to a no-op for safe validation before unleashing on live beads.
   gt:
     build:
-      context: ./apps/api
-      dockerfile: Dockerfile.orchestrator
+      context: .
+      dockerfile: apps/api/Dockerfile.orchestrator
     image: gastown-gt-orch:latest
     container_name: gastown-gt
     restart: unless-stopped
@@ -142,8 +142,8 @@ services:
   # access for dev. Published on 127.0.0.1:8765 for host MCP clients (gt-mcp-cli / Claude Code).
   gt-mcp:
     build:
-      context: ./apps/api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: apps/api/Dockerfile
     container_name: gastown-gt-mcp
     restart: unless-stopped
     command: ["gt-mcp"]
