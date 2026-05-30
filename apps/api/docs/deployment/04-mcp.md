@@ -35,17 +35,30 @@ el protocolo MCP (rmcp) en vez de HTTP-REST.
 
 ## Scope (autorización)
 
-No hay admin hardcodeado. Cada conexión usa un **actor** (`GT_MCP_ACTOR`) y su scope sale de
-`GT_MCP_SCOPE_CONFIG` (TOML/JSON). Un actor ausente del archivo → deny-all.
+No hay admin hardcodeado. Cada conexión usa un **actor** (`GT_MCP_ACTOR`) y su scope sale
+del archivo unificado [`gt-rbac::RbacConfig`](../../crates/kernel/gt-rbac/src/lib.rs)
+(TOML/JSON), apuntado por `GT_MCP_SCOPE_CONFIG`. Un actor ausente del archivo →
+deny-all. El mismo archivo lo lee gt-web (`GT_WEB_RBAC_CONFIG`, fallback a este var)
+para minar `roles`/`scopes` en el JWT — una sola fuente de verdad, hq-fe-rbac.2.
 
 ```toml
 # /etc/gastown/mcp-scope.toml (horneado en la imagen)
 [actors.mcp-local]
-allow = ["*"]          # full, para dev. Restringir antes de exponer multi-cliente.
+allow = ["*"]          # gt-mcp: full para dev. Restringir antes de multi-cliente.
+
+# Opcional — extensión hq-fe-rbac.2 para gt-web (JWT minting):
+# [actors.claude-host]
+# allow = ["scheduling.*", "issues.*"]
+# roles = ["sheriff"]
+#
+# [roles.sheriff]
+# scopes = ["beads.write", "merge.read"]
 ```
 
-Formato: `allow` = lista de patrones de tool (`scheduling.*`, `patrol.tick.execute`);
-`validate_only = true` bloquea los `execute` de ese actor.
+Formato gt-mcp: `allow` = lista de patrones de tool (`scheduling.*`,
+`patrol.tick.execute`); `validate_only = true` bloquea los `execute` de ese actor.
+Formato gt-web: `[actors.X].roles = [...]` referencia `[roles.Y].scopes = [...]`; el
+union flattened se estampa en el JWT vía `JwtIssuer::sign_for_actor`.
 
 ## Cliente local: `gt-mcp-cli`
 

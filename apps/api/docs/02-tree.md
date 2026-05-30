@@ -52,6 +52,8 @@ gastown-rs/                          # (montado bajo apps/api/ en el repo)
 │   │   │   └── src/lib.rs           # town root, paths, FindFromCwd
 │   │   ├── gt-telemetry/
 │   │   │   └── src/{lib, otel, correlation}.rs   # tracing + OTEL, #[instrument]
+│   │   ├── gt-rbac/                                # config RBAC unificada (hq-fe-rbac.2)
+│   │   │   └── src/lib.rs              # RbacConfig{actors, roles} + WebGrant (gt-mcp + gt-web)
 │   │   │
 │   │   │   ── Adaptadores de BD (async, en los bordes) ──
 │   │   ├── gt-store-dolt/

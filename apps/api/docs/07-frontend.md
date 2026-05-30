@@ -126,31 +126,54 @@ Como `gt-web` es el único camino al dato:
 Los dominios y las BD nunca quedan expuestos. Mismo principio que en un API gateway
 bancario: la frontera es el único sitio donde se aplica política.
 
-### Implementación (Paso 7.2, hq-7pdl.2)
+### Implementación (Paso 7.2, hq-7pdl.2 + hq-fe-rbac.1/.2/.4)
 
-- Middleware de autenticación en `bins/gt-web/src/auth.rs`. El binario lee el secreto
-  compartido de `GT_WEB_TOKEN` y compara con tiempo constante el header
-  `Authorization: Bearer <token>`. Sin token configurado el bin se niega a arrancar; para
-  dev existe el override explícito `GT_WEB_AUTH=disabled`. El JWT contra clave pública
-  queda como follow-up.
+- Middleware de autenticación en `bins/gt-web/src/auth.rs`. Tres modos seleccionables al
+  arranque (fail-closed, prioridad descendente):
+  1. `GT_WEB_JWT_SECRET` → `AuthConfig::Jwt` (HS256, per-actor; hq-fe-rbac.1). El
+     issuer/verifier vive en `bins/gt-web/src/jwt.rs` (`JwtIssuer`, `Claims`); decisión
+     HS256 vs RS256 documentada ahí — single binary firma + verifica el mismo token, no
+     hay verifier externo en el trust boundary, RS256 diferido hasta que entre uno.
+  2. `GT_WEB_TOKEN` → `AuthConfig::Bearer` (single shared secret, legacy). Compara con
+     tiempo constante; tag de actor derivado de SHA-256(token) (`web:<12hex>`).
+  3. `GT_WEB_AUTH=disabled` → `AuthConfig::Open` (sólo dev; warning ruidoso).
+  Cualquier otro caso aborta con exit 2.
+- En modo JWT el middleware verifica firma + `exp` + `iss`, propaga `sub` como
+  `crate::auth::Actor` y adjunta los claims verificados como `AuthClaims` extension al
+  request. La razón de fallo (`expired`/`invalid signature`/`malformed`/`issuer
+  mismatch`) se distingue en el audit (`web.unauthorized.reason`) pero el cuerpo 401 es
+  opaco para no filtrar el motivo a un cliente sondeando.
 - Cada request autorizada / rechazada produce un record de auditoría (`web.invoked` o
   `web.unauthorized`) que se persiste en el mismo `events.jsonl` que el resto del sistema
   vía `JsonlWebAudit` (`bins/gt-web/src/audit.rs`). El prefijo `web.*` marca observabilidad
   pura: el `replay_gt` salta esos records y el dominio no los ve, igual que con `mcp.*`.
-- El identificador que aparece en el audit es un tag derivado del SHA-256 del token
-  (`web:<12hex>`); el secreto nunca cae al log.
 - El rate-limit por usuario/endpoint queda como follow-up explícito (no bloquea Paso 7).
+
+### RBAC unificada (hq-fe-rbac.2)
+
+- Config canónica: `crates/kernel/gt-rbac::RbacConfig` (TOML/JSON). Una sola fuente de
+  verdad para gt-mcp (per-actor MCP tool allow-list) **y** gt-web (per-actor JWT roles
+  + scopes). El archivo legacy `deploy/mcp-scope.toml` se mantiene como ubicación
+  canónica; gt-mcp lo lee vía `GT_MCP_SCOPE_CONFIG`, gt-web vía `GT_WEB_RBAC_CONFIG` (con
+  fallback al mismo `GT_MCP_SCOPE_CONFIG`).
+- Schema: `[actors.<id>] allow=[...] validate_only=bool roles=[...]` + `[roles.<name>]
+  scopes=[...]`. Back-compat: un archivo sin `roles=` ni `[roles.*]` parsea como antes
+  (los bins resuelven a grant vacío y la posture deny-by-default se preserva).
+- gt-mcp: `ScopeConfig` es ahora un alias de `RbacConfig`; el puente a `Scope` runtime
+  vive en el trait `ResolveScope` (`cfg.resolve(actor) -> Scope`).
+- gt-web: `JwtIssuer::with_rbac(Arc<RbacConfig>)` + `sign_for_actor(actor)` consulta el
+  config y estampa roles + flattened scopes (dedup por primer-visto) en el token; `sign`
+  con valores explícitos se mantiene para tests / paths que no cargan config.
 
 ### Expansión planeada (epic hq-fe-svelte)
 
-Bearer plano migra a **JWT firmado con claims `roles[]` + `scopes[]`**. Tracked en
-`hq-fe-rbac.*`:
+Estado del epic `hq-fe-rbac`:
 
-- `hq-fe-rbac.1` JWT signing en gt-api (HS256/RS256 decidir).
-- `hq-fe-rbac.2` `roles.toml` unificado con `mcp-scope.toml` (misma fuente de scopes).
+- `hq-fe-rbac.1` JWT signing en gt-api — **CLOSED** (HS256, `bins/gt-web/src/jwt.rs`).
+- `hq-fe-rbac.2` Config RBAC unificada — **CLOSED** (crate `gt-rbac`).
 - `hq-fe-rbac.3` Middleware **per-scope** en gt-web (reemplaza el single bearer check).
-- `hq-fe-rbac.4` `GET /api/whoami` → `{ actor, roles[], scopes[] }` (bootstrap del
-  dashboard).
+- `hq-fe-rbac.4` `GET /api/whoami` → `{ actor, mode, roles[], scopes[] }` — **CLOSED**
+  (poblado desde claims JWT cuando `mode=jwt`).
 - `hq-fe-rbac.5` Enriquecer `web.invoked` con `command` + `target` para el audit feed
   ("brayan killed gg-furiosa").
 
@@ -164,11 +187,12 @@ Write-side actual (`POST /api/nudge`) expande a un comando bus completo (tracked
 bins/gt-web/
 └── src/
     ├── main.rs        # arranca Axum, cablea estado compartido + auth + audit
-    ├── routes.rs      # endpoints REST (sessions, beads, feed, nudge)
+    ├── routes.rs      # endpoints REST (sessions, beads, feed, nudge, whoami)
     ├── stream.rs      # bus → broadcast → SSE
-    ├── auth.rs        # middleware Bearer + AuthConfig + actor tag
+    ├── auth.rs        # AuthConfig (Open/Bearer/Jwt) + middleware + Actor/AuthClaims
+    ├── jwt.rs         # HS256 JwtIssuer + Claims (hq-fe-rbac.1, RBAC bind .2)
     ├── audit.rs       # WebAuditSink + JsonlWebAudit (web.* frontier-audit)
-    └── dto.rs         # SessionDto, BeadDto, FeedEventDto
+    └── dto.rs         # SessionDto, BeadDto, FeedEventDto, WhoamiDto
 ```
 
 Los DTO son traducción del modelo de dominio a JSON estable: nunca exponer tipos internos

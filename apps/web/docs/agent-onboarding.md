@@ -265,10 +265,12 @@ nadie puede ayudarte (incluido tú mismo, una hora después).
 
 ### 3.2 Scope (RBAC)
 
-Cada tool tiene un scope asociado en `mcp-scope.toml`. El server chequea el
-scope contra el rol del caller antes de despachar al actor — un sheriff no
-puede correr `quota.rotate`, un agent normal no puede `merge.fail`, etc.
-Bypassear MCP es bypassear el RBAC. La consola de operador (`docker exec`)
+Cada tool tiene un scope asociado en `mcp-scope.toml` (config canónica:
+[`gt-rbac::RbacConfig`](../../api/crates/kernel/gt-rbac/src/lib.rs), hq-fe-rbac.2 —
+mismo archivo que gt-web lee para minar roles+scopes en el JWT). El server
+chequea el scope contra el rol del caller antes de despachar al actor — un
+sheriff no puede correr `quota.rotate`, un agent normal no puede `merge.fail`,
+etc. Bypassear MCP es bypassear el RBAC. La consola de operador (`docker exec`)
 existe porque alguien tiene que poder romper el sistema; no porque sea el
 camino normal.
 

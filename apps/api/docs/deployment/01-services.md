@@ -53,5 +53,11 @@ Ver [`04-mcp.md`](04-mcp.md).
 
 ## Config / secretos
 
-`.env` (gitignored) en el town root: `GT_WEB_TOKEN` (bearer de `/api/*`), `GT_POLECAT_CMD`
-(default `true` = no-op seguro).
+`.env` (gitignored) en el town root:
+- `GT_WEB_JWT_SECRET` (HS256 JWT, hq-fe-rbac.1) **o** `GT_WEB_TOKEN` (legacy single
+  bearer) — uno es obligatorio; el bin sale con exit 2 sin ninguno. Override de dev:
+  `GT_WEB_AUTH=disabled` (loud warning).
+- `GT_WEB_RBAC_CONFIG` / `GT_MCP_SCOPE_CONFIG` (mismo archivo, hq-fe-rbac.2) — gt-web
+  lo lee para minar roles/scopes en el JWT; gt-mcp lo lee para per-actor tool
+  allow-list.
+- `GT_POLECAT_CMD` (default `true` = no-op seguro).

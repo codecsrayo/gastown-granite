@@ -36,14 +36,34 @@ All `/api/*` routes sit behind the bearer middleware ([auth.rs](../../api/crates
 
 ### Auth
 
+Fail-closed priority at boot:
+
 | Var | Effect |
 |---|---|
-| `GT_WEB_TOKEN=<secret>` | bin starts; routes require `Authorization: Bearer <secret>` |
-| `GT_WEB_AUTH=disabled` | dev override; runs open; logs warning |
-| neither | bin exits with status 2 |
+| `GT_WEB_JWT_SECRET=<secret>` | **HS256 JWT mode** (hq-fe-rbac.1). Routes require `Authorization: Bearer <jwt>`. `sub` claim → actor; `roles`/`scopes` claims → request `AuthClaims` extension + `/api/whoami` payload. |
+| `GT_WEB_RBAC_CONFIG=<path>` (or `GT_MCP_SCOPE_CONFIG`) | Optional, JWT-mode only. Binds [`gt-rbac::RbacConfig`](../../api/crates/kernel/gt-rbac/src/lib.rs) to the issuer so `JwtIssuer::sign_for_actor` mints tokens with per-actor roles + flattened scopes from the same file gt-mcp reads. |
+| `GT_WEB_TOKEN=<secret>` | Legacy single-shared-bearer mode. Actor tag = `web:<sha256-12hex>(token)`. |
+| `GT_WEB_AUTH=disabled` | Dev override; runs open; logs warning. Actor = `web:open`. |
+| none of the above | Bin exits with status 2. |
+
+JWT-mode `Claims` shape (`jwt.rs`):
+
+```json
+{
+  "sub": "claude-host",        // actor id (propagated as Actor in handlers)
+  "iss": "gt-web",              // fixed; rejected on verify if it drifts
+  "iat": 1716393600, "exp": 1716397200,
+  "roles":  ["sheriff"],        // empty until rbac config binds the actor
+  "scopes": ["beads.write", "merge.read"]
+}
+```
+
+Verifier rejects on signature mismatch, expired `exp`, or wrong issuer; reason lands in
+the audit (`web.unauthorized.reason`) but the wire reply stays opaque (always 401
+`invalid bearer token`).
 
 Every request lands in `events.jsonl` as `web.invoked` / `web.unauthorized`
-([audit.rs](../../api/crates/bins/gt-web/src/audit.rs)). Actor tag = `web:<sha256-12hex>`.
+([audit.rs](../../api/crates/bins/gt-web/src/audit.rs)).
 
 ### Routes
 
@@ -232,8 +252,8 @@ to the old API; pick the cleanest contract per feature.
 
 | Need | Status | Bead anchor |
 |---|---|---|
-| JWT firmado con claims `roles[]` + `scopes[]` (vs bearer plano hoy) | **gap** | hq-fe-rbac.1 |
-| `roles.toml` unificado con `mcp-scope.toml` | **gap** | hq-fe-rbac.2 |
+| JWT firmado HS256 con claims `roles[]` + `scopes[]` (vs bearer plano) | **done** (gt-web `AuthConfig::Jwt`) | hq-fe-rbac.1 |
+| `RbacConfig` unificado (`mcp-scope.toml` ↔ JWT roles) | **done** (crate `gt-rbac`) | hq-fe-rbac.2 |
 | Middleware per-scope (no single bearer) | **gap** | hq-fe-rbac.3 |
 | Account login pty driver (`POST /api/quota/accounts/:n/login` + token + cancel) | **gap** | hq-fe-auth.* |
 | SSE kinds `quota.login_started` / `login_url_ready` / `login_complete` / `login_failed` | **gap** | hq-fe-auth.3 |
@@ -266,5 +286,8 @@ destructivas, enriquecer el record con `command` + `target` para que el
 Activity feed muestre "brayan killed gg-furiosa · 2s ago" (bead
 `hq-fe-rbac.5`).
 
-Actor tag actual = `web:<sha256-12hex>(token)`. Tras JWT (hq-fe-rbac.1),
-pasa a `web:<actor>` plano (el JWT identifica al humano).
+Actor tag:
+- JWT mode (hq-fe-rbac.1): `sub` claim verbatim (e.g. `claude-host`). El JWT identifica
+  al humano/agente directo, sin derivar hash del secreto.
+- Bearer mode (legacy): `web:<sha256-12hex>(token)` — el secreto nunca cae al log.
+- Open mode (dev): `web:open`.

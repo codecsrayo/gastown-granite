@@ -108,12 +108,30 @@ pub struct Scope {
 }
 ```
 
+Fuente de verdad: `crates/kernel/gt-rbac::RbacConfig` (hq-fe-rbac.2) — mismo archivo
+TOML/JSON que `gt-web` lee para minar roles + scopes en el JWT, así un agente y su
+dashboard nunca divergen. El env var `GT_MCP_SCOPE_CONFIG` apunta al archivo;
+`ScopeConfig` se conserva como alias type de `RbacConfig` para back-compat. El bridge
+runtime es el trait `ResolveScope` (`cfg.resolve(actor) -> Scope`); actores ausentes
+del config caen a `Scope::denied` — deny-by-default, sin admin hardcoded.
+
 Un command fuera del scope no se envía al actor: se rechaza en `gt-mcp` y se emite
 `UnauthorizedCommand` al audit. Esto permite políticas tipo:
 
 - *"Este modelo solo puede leer y validar"* → `validate_only = true`.
 - *"Ese modelo puede dispatch pero no rotation"* → `allow = {"scheduling.*", "agent.*"}`.
 - *"Modelo de auditoría: solo queries y replay"* → `allow = {"*.sessions", "replay"}`.
+
+Schema extendido (mismo archivo, opt-in para gt-web):
+
+```toml
+[actors.claude-host]
+allow = ["scheduling.*", "issues.*"]    # consumido por gt-mcp
+roles = ["sheriff"]                      # consumido por gt-web (JWT roles claim)
+
+[roles.sheriff]
+scopes = ["beads.write", "merge.read"]  # flatten al claim `scopes` en el JWT
+```
 
 ## Casos de uso cubiertos
 
