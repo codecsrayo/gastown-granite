@@ -26,10 +26,12 @@ pub mod scope;
 pub mod state;
 pub mod stream;
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::routing::{delete, get, patch, post};
 use axum::Router;
+use tower_http::services::{ServeDir, ServeFile};
 
 use gt_agent::SessionQueries;
 use gt_beads::BeadRepository;
@@ -325,4 +327,42 @@ where
         .with_state(readiness);
 
     Router::new().merge(api).merge(probes)
+}
+
+/// hq-fe-cut.1 — attach the SvelteKit static build as the router's fallback service.
+///
+/// The dashboard SPA (`apps/web/build`) is served from `/` and `/_app/*`. Any request that
+/// does not match a declared route (`/api/*`, `/health`, `/readyz`, `/metrics`) lands in
+/// the fallback: [`ServeDir`] resolves the file off disk; missing files (including every
+/// SvelteKit history-mode URL like `/sessions/abc`) fall through to `index.html` so the
+/// client router can take over. Static assets sit **outside** [`auth::auth_middleware`]
+/// on purpose — the login page itself is part of the SPA and cannot require a bearer to
+/// load.
+///
+/// Returns the input router untouched when `dist` does not exist on disk; production boot
+/// logs and continues so a missing build artefact does not block the API. Tests opt in
+/// by passing a populated temp dir.
+pub fn with_static_assets(router: Router, dist: impl AsRef<Path>) -> Router {
+    let dist = dist.as_ref();
+    if !dist.exists() {
+        eprintln!(
+            "[gt-web] static dist missing ({}) — only /api + probes will respond",
+            dist.display()
+        );
+        return router;
+    }
+    let index = dist.join("index.html");
+    let serve = ServeDir::new(dist).fallback(ServeFile::new(index));
+    router.fallback_service(serve)
+}
+
+/// Resolve the SvelteKit build directory from `GT_WEB_DIST`, defaulting to the in-repo
+/// path when the env var is unset. Returns `None` only if the var is set to an empty
+/// string (explicit opt-out — useful for the `/api`-only test rigs).
+pub fn dist_from_env() -> Option<PathBuf> {
+    match std::env::var("GT_WEB_DIST") {
+        Ok(s) if s.is_empty() => None,
+        Ok(s) => Some(PathBuf::from(s)),
+        Err(_) => Some(PathBuf::from("apps/web/build")),
+    }
 }

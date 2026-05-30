@@ -40,6 +40,10 @@ gt-store-dolt = { path = "../../kernel/gt-store-dolt" }
 gt-store-pg = { path = "../../kernel/gt-store-pg" }
 
 axum = "0.7"
+# hq-fe-cut.1 — ServeDir + ServeFile for the SvelteKit static build
+# (`apps/web/build`). `fs` is the only feature we need; the SPA history fallback
+# to `index.html` is wired in `lib.rs` via `ServeDir::fallback`.
+tower-http = { version = "0.6", features = ["fs"] }
 # `process` enables `tokio::process::Command` for `/api/worktrees` (hq-fe-api-r.8).
 tokio = { workspace = true, features = ["signal", "net", "process"] }
 tokio-stream = { version = "0.1", features = ["sync"] }

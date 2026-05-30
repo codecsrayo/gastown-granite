@@ -261,7 +261,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 
 | Bead | Título | Pri | Estado | Agente | Notas |
 |---|---|---|---|---|---|
-| hq-fe-cut.1 | gt-api sirve assets estáticos del build (`/` y `/_app/*`) | P1 | open | — | nuevo handler fuera de /api |
+| hq-fe-cut.1 | gt-api sirve assets estáticos del build (`/` y `/_app/*`) | P1 | closed | deacon | `tower-http::services::ServeDir` montado como `Router::fallback_service` en `gt-web` (lib.rs `with_static_assets`). SPA history-mode fallback a `index.html`. `GT_WEB_DIST` overridea path; vacío desactiva. 5 tests en `tests/static_assets.rs` (root, `/_app/immutable/*`, deep path, /api 401, dist ausente) |
 | hq-fe-cut.2 | Traefik / compose validación: `gastown.codecsrayo.com` → SPA | P1 | open | — | rollback plan |
 | hq-fe-cut.3 | Borrar `internal/web/` del árbol (limpieza Go) | P2 | open | — | tras semana de bake |
 | hq-fe-cut.4 | Docs ops (token, RBAC bootstrap, troubleshooting) | P2 | open | — | en `apps/api/docs/deployment/` |

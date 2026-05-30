@@ -189,6 +189,28 @@ Write-side actual (`POST /api/nudge`) expande a un comando bus completo (tracked
 `hq-fe-api-w.*`); ver gap table en
 [apps/web/docs/frontend-api-surface.md](../../web/docs/frontend-api-surface.md).
 
+### Static build serving (hq-fe-cut.1)
+
+El SPA de SvelteKit (`apps/web/build/`) lo sirve **el mismo binario `gt-web`** como
+`Router::fallback_service`, fuera de la capa de autenticación:
+
+- `/` → `index.html` (login page incluida — la pantalla de login es parte del SPA y
+  debe cargar sin Bearer).
+- `/_app/immutable/*` → bundles versionados por hash; `ServeDir` resuelve directo de
+  disco.
+- `/<cualquier ruta SvelteKit>` (history mode, e.g. `/sessions/abc`) → cae a
+  `index.html` para que el router cliente tome control. Implementado vía
+  `ServeDir::fallback(ServeFile::new(index.html))`.
+- `/api/*`, `/health`, `/readyz`, `/metrics` matchean ANTES del fallback — el SPA
+  nunca tapa la API.
+
+Wiring: `gt_web::with_static_assets(app, dist)` en `main.rs`. El path se resuelve
+desde `GT_WEB_DIST` (default `apps/web/build`); valor vacío desactiva el fallback
+(modo solo-API para tests/CI).
+
+Validado por `tests/static_assets.rs`: root, hashed asset, deep history-mode path,
+`/api/*` sigue exigiendo Bearer (401), y dist ausente no rompe el boot (404 limpio).
+
 ## Estructura en el árbol
 
 ```

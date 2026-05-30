@@ -390,6 +390,18 @@ async fn serve<R, SQ, MR, PR, OR>(
         .unwrap_or(gt_web::idempotency::DEFAULT_TTL);
     let idem_store = gt_web::IdempotencyStore::new(idem_ttl, gt_web::idempotency::DEFAULT_MAX_ENTRIES);
     let app = gt_web::router_with_idempotency(state, auth, audit, gate, idem_store);
+    // hq-fe-cut.1 — serve the SvelteKit static build as the router fallback. `GT_WEB_DIST`
+    // overrides the path; an empty value disables serving (API-only mode for harness rigs).
+    let app = match gt_web::dist_from_env() {
+        Some(dist) => {
+            eprintln!("[gt-web] static dist: {}", dist.display());
+            gt_web::with_static_assets(app, dist)
+        }
+        None => {
+            eprintln!("[gt-web] static dist disabled (GT_WEB_DIST=\"\")");
+            app
+        }
+    };
     let listener = tokio::net::TcpListener::bind(bind).await.expect("bind gt-web");
     eprintln!(
         "[gt-web] up on {bind} — event log: {}",
