@@ -67,7 +67,7 @@ Docs hermanos (lectura obligada antes de tocar nada):
 | **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
 | **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | PLANEADO · spike obligatorio |
 | **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | EN PROGRESO · .1-.4 + .6 + .8 CLOSED (6/8) |
-| **hq-fe-view** | Vistas + componentes (UI) | 19 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.1/.2/.4/.12/.13/.14-19 CLOSED (9/19) |
+| **hq-fe-view** | Vistas + componentes (UI) | 19 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.1/.2/.3/.4/.12/.13/.14-19 CLOSED (10/19) |
 | **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | PLANEADO |
 | **hq-mcp-issues** | MCP `issues.*` CRUD (cerrar bypass docker exec) | 5 | hq-fe-api-w.1 | DONE · 5/5 closed |
 | **hq-mcp-onboard** | MCP agent onboarding + discoverability (slogan-feedback gaps) | 10 | parcial hq-mcp-issues.2 + hq-fe-api-w.1 | DONE · claude-host-onboard |
@@ -239,7 +239,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 |---|---|---|---|---|---|
 | hq-fe-view.1 | Layout raíz: Shell + Sidebar + Topbar + Dock + theme toggle | P1 | closed | claude-host | `lib/stores/theme.svelte.ts` + `lib/components/{layout/{Shell,Sidebar,Topbar,Dock,TabStrip,StubView},theme/ThemeToggle}.svelte`; 7 placeholder routes + landing hub |
 | hq-fe-view.2 | `/login` route + bearer guard en `+layout.ts` | P1 | closed | claude-host | `routes/login/+page.svelte` paste + dev sentinel; `+layout.ts` LayoutLoad redirige 307 a `/login` si falta bearer; ProfileMenu logout ahora `goto('/login')` |
-| hq-fe-view.3 | Activity view (feed + cat filter + rig filter + recent peek) | P1 | open | — | canon hero (imagen) |
+| hq-fe-view.3 | Activity view (feed + cat filter + rig filter + recent peek) | P1 | closed | claude-host | `routes/activity/+page.svelte` + `lib/event-category.ts` (5 buckets · 6 vitest); SSE subscribe '*' → `activity` store; cat/rig/text filters + auto-scroll + status pill; hidrato hist pendiente api-r.5 |
 | hq-fe-view.4 | Sessions view (table + filters + kill DangerButton) | P1 | closed | claude-host | `lib/{types,api}/session*` + tabla con role/rig/state filters + per-role tint; Kill DangerButton disabled hasta api-w.6 |
 | hq-fe-view.5 | Work view (kanban 5 cols + drag-drop + DangerZone close) | P1 | closed | claude-host | `lib/{types/bead,api/beads,kanban}.ts` + `routes/work/+page.svelte`; `svelte-dnd-action@0.9.69` + optimistic drag → POST transition → revert+refresh on 4xx; close via DangerZone typed-name → `done` (4 vitest cubren operator matrix 1:1 con gt-web) |
 | hq-fe-view.6 | Convoys view (list + e-stop DangerZone) | P2 | open | — | |
