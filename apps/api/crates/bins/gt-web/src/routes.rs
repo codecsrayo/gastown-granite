@@ -22,7 +22,7 @@ use crate::dto::{
     BeadCommentRequest, BeadCommentResponse, BeadCreateRequest, BeadDto, BeadTransitionRequest,
     BeadUpdateRequest, BeadsQuery, BulkBeadCreateRequest, BulkBeadCreateResponse,
     ConvoyCreateRequest, ConvoyCreateResponse, ConvoyDto, ConvoyMemberDto, ConvoysQuery,
-    DirtyFileDto, IssueDto, IssuesQuery,
+    DirtyFileDto, FeedQuery, IssueDto, IssuesQuery,
     MayorStatusDto, MemberFailRequest, MergeSlotDto, NudgeRequest, NudgeResponse,
     QuotaRetireResponse, QuotaRotateRequest, SessionDto, SessionsQuery, WhoamiDto, WorktreeDto,
 };
@@ -774,6 +774,33 @@ where
     M: MergeRepository + Send + Sync + 'static,
 {
     sse_from_receiver(state.events.subscribe())
+}
+
+/// `GET /api/feed?since=<rfc3339>&limit=<n>` — historical replay of the shared
+/// `events.jsonl` log (hq-fe-api-r.5). Returns the same `EventRecord` shape `/api/stream`
+/// SSE ships so the dashboard can seed its in-memory store from the gateway with no
+/// transform. `since` is strict-greater-than on the record `ts` (so a client can pass the
+/// `ts` of its last seen event and not get a duplicate); absent or empty returns the tail.
+/// `limit` defaults to 500 and is clamped to 2000 to keep the response bounded.
+///
+/// Returns `[]` when `AppState.event_log` is unset (test setups that do not exercise the
+/// feed route) — same posture as `/api/worktrees` + `/api/issues`. Read failures bubble
+/// up as `500` via `AppError`; an empty log file is `Ok([])`.
+pub async fn feed<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
+    Query(q): Query<FeedQuery>,
+) -> Result<Json<Vec<gt_audit::EventRecord>>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
+{
+    let Some(path) = state.event_log.clone() else {
+        return Ok(Json(Vec::new()));
+    };
+    let limit = q.limit.unwrap_or(500).min(2000);
+    let records = gt_audit::since(path.as_path(), q.since.as_deref(), limit)?;
+    Ok(Json(records))
 }
 
 /// `GET /api/issues` — thin HTTP mirror of the `gt://issues` MCP resource (hq-fe-api-r.9).

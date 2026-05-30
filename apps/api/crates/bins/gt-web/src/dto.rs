@@ -239,6 +239,16 @@ pub struct ConvoysQuery {
     pub state: Option<String>,
 }
 
+/// Query for `GET /api/feed?since=<rfc3339>&limit=<n>` (hq-fe-api-r.5). Historical replay of
+/// the same `EventRecord`s the SSE `/api/stream` ships. `since` is RFC3339; absent or empty
+/// returns the tail of the log. `limit` caps the response (default 500, max 2000) so the
+/// dashboard's first-page seed stays bounded.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct FeedQuery {
+    pub since: Option<String>,
+    pub limit: Option<usize>,
+}
+
 /// Body of `POST /api/convoys/:convoy/members/:member/fail` (hq-fe-api-w.9). Halts the
 /// convoy with an operator-supplied reason. Path params carry the identifiers so a
 /// curl smoke test can omit the body entirely when `reason` is optional — but we keep

@@ -15,28 +15,42 @@ const DEFAULT_CAPACITY = 500;
 class Activity {
   events = $state<EventRecord[]>([]);
   capacity: number;
+  /** Mirror of `events`' `event_id`s so `push` can dedup in O(1). Needed because the
+   *  `/api/feed` hydrate (hq-fe-api-r.5) overlaps with the live SSE stream: any frame
+   *  emitted between snapshot read and subscribe registration lands in both. The keyed
+   *  `{#each ... (e.event_id)}` in the view would warn on duplicate keys, so we drop
+   *  them at the source. */
+  #seen = new Set<string>();
 
   constructor(capacity = DEFAULT_CAPACITY) {
     this.capacity = capacity;
   }
 
-  /** Seed from a historical snapshot (`/api/feed?since=…` once hq-fe-api-r.5 lands).
+  /** Seed from a historical snapshot (`/api/feed?since=…`, hq-fe-api-r.5).
    *  Trims to capacity so a generous server response can't OOM the page. */
   hydrate(initial: EventRecord[]): void {
-    this.events = initial.slice(-this.capacity);
+    const slice = initial.slice(-this.capacity);
+    this.events = slice;
+    this.#seen = new Set(slice.map((e) => e.event_id));
   }
 
-  /** Append one live frame. Drops the oldest when at capacity. */
+  /** Append one live frame. Drops the oldest when at capacity. Idempotent on
+   *  `event_id` so the snapshot/SSE overlap window doesn't surface duplicates. */
   push(rec: EventRecord): void {
+    if (this.#seen.has(rec.event_id)) return;
     if (this.events.length >= this.capacity) {
+      const dropped = this.events[0];
       this.events = [...this.events.slice(this.events.length - this.capacity + 1), rec];
+      if (dropped) this.#seen.delete(dropped.event_id);
     } else {
       this.events = [...this.events, rec];
     }
+    this.#seen.add(rec.event_id);
   }
 
   reset(): void {
     this.events = [];
+    this.#seen = new Set();
   }
 }
 

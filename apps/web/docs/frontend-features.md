@@ -47,7 +47,7 @@ Cross-refs base:
 | | |
 |---|---|
 | **Qué hace** | Feed live de eventos del bus (SSE) + histórico opcional (`/api/feed?since=`); filtros por categoría (agent/work/quota/system/audit) y rig |
-| **Endpoints** | `GET /api/feed?since=1h` (snapshot histórico) |
+| **Endpoints** | `GET /api/feed?since=<rfc3339>&limit=<n>` (snapshot histórico; default 500, cap 2000) |
 | **SSE** | **todos** los kinds (`agent.*`, `merge.*`, `patrol.*`, `orch.*`, `quota.*`, `scheduling.*`, `rig.*`, `web.*` filtrado a categoría audit) |
 | **Scope RBAC** | `feed.read` (= todos los `*.read`) |
 | **Beads** | hq-fe-api-r.5 · hq-fe-view.3 |

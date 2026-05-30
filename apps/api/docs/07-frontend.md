@@ -44,7 +44,7 @@ Browser (SvelteKit + Tailwind)
    │
    ├── GET  /api/sessions        → snapshot: sesiones activas             [Dolt]
    ├── GET  /api/beads?rig=…      → snapshot: beads / cola / escalaciones  [Dolt]
-   ├── GET  /api/feed?since=1h    → snapshot inicial del feed           [Postgres]
+   ├── GET  /api/feed?since=<rfc3339>&limit=<n> → snapshot histórico del feed [events.jsonl]
    ├── POST /api/nudge            → emite comando al bus (write-side)
    └── EventSource /api/stream    → SSE: EventRecord en vivo               [bus]
                                      (spawn, nudge, session_death, merge_*)

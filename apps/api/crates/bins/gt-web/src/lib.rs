@@ -209,6 +209,9 @@ where
             post(routes::quota_retire::<R, SQ, M>),
         )
         .route("/api/stream", get(routes::stream::<R, SQ, M>))
+        // hq-fe-api-r.5 — historical replay of the same events.jsonl `/api/stream` ships;
+        // dashboard seeds its activity store from this before subscribing to SSE.
+        .route("/api/feed", get(routes::feed::<R, SQ, M>))
         .with_state(state.clone());
 
     // hq-fe-api-w.11 — rate-limited bulk-create surface. The per-actor counter sits on

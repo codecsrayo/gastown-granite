@@ -69,6 +69,7 @@ async fn boot_with_auth(
         control: None,
         respawner: None,
         commenter: None,
+        event_log: None,
     };
 
     let audit = InMemoryWebAudit::new();

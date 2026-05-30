@@ -80,6 +80,7 @@ async fn boot(town_root: std::path::PathBuf) -> String {
         control: None,
         respawner: None,
         commenter: None,
+        event_log: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -125,6 +126,7 @@ async fn empty_when_town_root_unset() {
         control: None,
         respawner: None,
         commenter: None,
+        event_log: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -270,6 +272,7 @@ async fn worktrees_stream_503_when_unwired() {
         control: None,
         respawner: None,
         commenter: None,
+        event_log: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -331,6 +334,7 @@ async fn worktrees_stream_delivers_snapshot() {
         control: None,
         respawner: None,
         commenter: None,
+        event_log: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

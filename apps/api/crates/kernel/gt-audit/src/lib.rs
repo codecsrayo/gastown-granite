@@ -11,7 +11,7 @@ mod replay;
 mod store;
 mod writer;
 
-pub use reader::{read_all, tail};
+pub use reader::{read_all, since, tail};
 pub use record::EventRecord;
 pub use replay::replay;
 pub use store::EventStore;

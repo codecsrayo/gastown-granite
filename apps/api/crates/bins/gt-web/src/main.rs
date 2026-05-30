@@ -351,6 +351,9 @@ async fn serve<R, SQ, MR, PR, OR>(
         control: Some(control),
         respawner: Some(respawner),
         commenter,
+        // hq-fe-api-r.5: same `events.jsonl` the reactor + frontier audit append to;
+        // `GET /api/feed?since=` reads it for the dashboard historical seed.
+        event_log: Some(Arc::new(root.log_path().to_path_buf())),
     };
 
     // Idempotency-Key cache (hq-fe-api-w.2). TTL overridable via

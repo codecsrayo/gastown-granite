@@ -53,6 +53,7 @@ Every request lands in `events.jsonl` as `web.invoked` / `web.unauthorized`
 | GET | `/api/beads` | [`list_beads`](../../api/crates/bins/gt-web/src/routes.rs) | `?status=pending\|open\|hooked\|...` (default `pending`) | `Vec<BeadDto>` |
 | POST | `/api/nudge` | [`nudge`](../../api/crates/bins/gt-web/src/routes.rs) | `NudgeRequest { session: String }` | `NudgeResponse { accepted: bool }` |
 | GET | `/api/stream` | [`stream`](../../api/crates/bins/gt-web/src/routes.rs) | — | SSE of `EventRecord` |
+| GET | `/api/feed` | [`feed`](../../api/crates/bins/gt-web/src/routes.rs) | `?since=<rfc3339>` (optional), `?limit=<n>` (default 500, max 2000) | `Vec<EventRecord>` (historical replay over `events.jsonl`) |
 | GET | `/health` | [`health`](../../api/crates/bins/gt-web/src/health.rs) | — | 200 `"ok"` (liveness) |
 | GET | `/readyz` | [`readyz`](../../api/crates/bins/gt-web/src/health.rs) | — | 200/503 + JSON probe report |
 | GET | `/metrics` | [`metrics`](../../api/crates/bins/gt-web/src/routes.rs) | — | Prometheus text |
@@ -199,7 +200,7 @@ to the old API; pick the cleanest contract per feature.
 | `GET /api/quota/rotation` — `waiting_unlock[]` + `recent_rotations[since=]` | **gap** | hq-fe-api-r.2 |
 | `GET /api/convoys` — snapshot por estado | **gap** (solo SSE `orch.*`) | hq-fe-api-r.3 |
 | `GET /api/merges` — slots snapshot | **live** | hq-fe-api-r.4 |
-| `GET /api/feed?since=` — activity feed con histórico (PG projection) | **gap** | hq-fe-api-r.5 |
+| `GET /api/feed?since=&limit=` — activity feed con histórico (jsonl `events.jsonl`) | **live** | hq-fe-api-r.5 |
 | `GET /api/sessions?rig=…` — filtro por rig (combinable con `?role=`) | **live** | hq-fe-api-r.6 |
 | `GET /api/mayor/status` — ATTACHED / DETACHED (heartbeat deferred) | **live** | hq-fe-api-r.7 |
 | `GET /api/whoami` — actor + mode + roles[] + scopes[] (roles/scopes pre-RBAC empty) | **live** | hq-fe-rbac.4 |

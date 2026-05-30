@@ -78,6 +78,12 @@ where
     /// ("issue commenter not wired") if invoked, mirroring the posture for the
     /// other gateway ports.
     pub commenter: Option<Arc<dyn IssueCommenter>>,
+    /// Absolute path to the shared `events.jsonl` log (hq-fe-api-r.5). Same file the
+    /// reactor + frontier audit append to and the SSE `/api/stream` mirrors. Backs
+    /// `GET /api/feed?since=…` historical replay. `None` in test setups not exercising
+    /// the feed route; the handler returns `[]` so the dashboard fall-back (live SSE only)
+    /// matches the gateway empty-list posture used elsewhere.
+    pub event_log: Option<Arc<PathBuf>>,
 }
 
 impl<R, SQ, M> Clone for AppState<R, SQ, M>
@@ -100,6 +106,7 @@ where
             control: self.control.clone(),
             respawner: self.respawner.clone(),
             commenter: self.commenter.clone(),
+            event_log: self.event_log.clone(),
         }
     }
 }

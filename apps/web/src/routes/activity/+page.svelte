@@ -27,13 +27,14 @@
   // bus via `lib/sse` (hq-fe-build.3), pushes every frame into the `activity` ring buffer
   // (hq-fe-build.4), and renders the buffer filtered by category + rig + free text.
   //
-  // History (`/api/feed?since=…`, hq-fe-api-r.5) is still open, so the feed starts empty
-  // on mount and only grows from live SSE. When r.5 ships, hydrate the store from the
-  // load() loader so the first paint already carries the last N minutes.
+  // History (hq-fe-api-r.5) is seeded once on mount via `/api/feed` so the first paint
+  // already carries the recent backlog; live SSE then appends on top. The hydration is
+  // best-effort — if it fails the feed simply starts empty and grows from live frames.
 
   import { onDestroy, onMount } from 'svelte';
   import { subscribe, subscribeStatus, type SseStatus } from '$lib/sse';
   import { activity } from '$lib/stores/activity.svelte';
+  import { fetchFeed } from '$lib/api/feed';
   import { CATEGORIES, categoryOf, type Category } from '$lib/event-category';
   import { relativeAge } from '$lib/relative-time';
 
@@ -47,6 +48,14 @@
   let unsubStatus: (() => void) | undefined;
 
   onMount(() => {
+    // Seed first so the live subscriber appends to backlog rather than racing it.
+    // SSE frames that overlap the snapshot tail are de-duped by `event_id` via the
+    // `{#each ... (e.event_id)}` key — Svelte reuses the existing list entry.
+    void fetchFeed()
+      .then((records) => activity.hydrate(records))
+      .catch(() => {
+        // Fall back to live-only feed; the empty-state message remains accurate.
+      });
     unsubFrames = subscribe('*', (rec) => activity.push(rec));
     unsubStatus = subscribeStatus((s) => (status = s));
   });

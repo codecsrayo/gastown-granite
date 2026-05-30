@@ -43,4 +43,21 @@ describe('activity store', () => {
     s.reset();
     expect(s.events).toEqual([]);
   });
+
+  it('push dedups by event_id against the live buffer (hq-fe-api-r.5 overlap)', () => {
+    const s = _createActivityStore(5);
+    s.hydrate([ev(1), ev(2), ev(3)]);
+    s.push(ev(3)); // SSE re-delivers the last snapshot frame
+    s.push(ev(4));
+    expect(s.events.map((e) => e.event_id)).toEqual(['e1', 'e2', 'e3', 'e4']);
+  });
+
+  it('eviction frees the dedup set so a later id reuse still appends', () => {
+    const s = _createActivityStore(2);
+    s.push(ev(1));
+    s.push(ev(2));
+    s.push(ev(3)); // evicts e1
+    s.push(ev(1)); // e1 is no longer in the buffer, should append again
+    expect(s.events.map((e) => e.event_id)).toEqual(['e3', 'e1']);
+  });
 });

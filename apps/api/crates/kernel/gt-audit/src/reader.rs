@@ -26,3 +26,26 @@ pub fn tail(path: &Path, n: usize) -> Result<Vec<EventRecord>, AppError> {
     let start = all.len().saturating_sub(n);
     Ok(all[start..].to_vec())
 }
+
+/// Records whose `ts` is strictly greater than `since` (RFC3339), capped at `limit` from the
+/// tail end (most recent). When `since` is `None` returns the last `limit` records. Used by
+/// `gt-web`'s `GET /api/feed?since=` historico (hq-fe-api-r.5) to seed the SSE consumer.
+///
+/// `ts` comparison is **string lexicographic** on the RFC3339 form; all writers in this
+/// project emit timezone-`Z` records (`record::from_envelope` uses `Rfc3339`) so the lex
+/// order matches chronological order. A malformed `since` is treated as "no filter" — the
+/// caller decides whether to surface that as a 400; the reader stays infallible on its
+/// query input so the gateway can short-circuit empty logs uniformly.
+pub fn since(
+    path: &Path,
+    since: Option<&str>,
+    limit: usize,
+) -> Result<Vec<EventRecord>, AppError> {
+    let all = read_all(path)?;
+    let filtered: Vec<EventRecord> = match since {
+        Some(s) if !s.is_empty() => all.into_iter().filter(|r| r.ts.as_str() > s).collect(),
+        _ => all,
+    };
+    let start = filtered.len().saturating_sub(limit);
+    Ok(filtered[start..].to_vec())
+}
