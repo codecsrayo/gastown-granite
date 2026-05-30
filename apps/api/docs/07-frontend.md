@@ -177,7 +177,13 @@ Estado del epic `hq-fe-rbac`:
 - `hq-fe-rbac.4` `GET /api/whoami` → `{ actor, mode, roles[], scopes[] }` — **CLOSED**
   (poblado desde claims JWT cuando `mode=jwt`).
 - `hq-fe-rbac.5` Enriquecer `web.invoked` con `command` + `target` para el audit feed
-  ("brayan killed gg-furiosa").
+  ("brayan killed gg-furiosa") — **CLOSED**. `WebAuditEvent::Invoked` gana dos campos
+  opcionales (`command`, `target`); `scope_middleware` los rellena con `(scope, last id)`
+  vía `RouteContext` parqueada en `Response.extensions`, y `auth_middleware` los lee al
+  estampar el record final. Cobertura: cualquier ruta con `route_layer(req("..."))` en
+  modo JWT; Bearer/Open y rutas sin scope guard (`/api/whoami`) caen al fallback
+  method+path. Wire shape estable: campos serializados con
+  `skip_serializing_if = "Option::is_none"` para no romper consumidores existentes.
 
 Write-side actual (`POST /api/nudge`) expande a un comando bus completo (tracked en
 `hq-fe-api-w.*`); ver gap table en

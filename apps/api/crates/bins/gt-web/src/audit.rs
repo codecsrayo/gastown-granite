@@ -15,11 +15,22 @@ use gt_events::{Envelope, EventKind};
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WebAuditEvent {
     /// The boundary accepted the request: bearer token validated and the handler ran.
+    ///
+    /// `command` and `target` (hq-fe-rbac.5) carry the per-route capability label and the
+    /// addressed resource id so the activity feed reads like the mcp.invoked twin: instead
+    /// of "/api/beads/abc-123 → 200" the operator sees `beads.write @ abc-123 → 200`.
+    /// Both default to `None`: unguarded routes (`/api/whoami`, probes) and Bearer/Open
+    /// requests on guarded routes never run the scope middleware, so no capability label
+    /// is available to attribute.
     Invoked {
         actor: String,
         method: String,
         path: String,
         status: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
     },
     /// The boundary rejected the request before dispatching (missing/invalid token).
     Unauthorized {

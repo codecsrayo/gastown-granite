@@ -44,7 +44,7 @@ pub use gt_rbac::{ActorSpec, RbacConfig, RoleSpec, WebGrant};
 pub use health::{HydrationHandle, ReadinessGate, ReadinessGateBuilder};
 pub use idempotency::{idempotency_middleware, IdempotencyStore};
 pub use rate_limit::{rate_limit_middleware, RateLimitStore};
-pub use scope::{scope_middleware, ScopeGuard};
+pub use scope::{scope_middleware, RouteContext, ScopeGuard};
 pub use comments::{DoltIssueCommenter, InMemoryIssueCommenter, IssueCommenter};
 pub use control::{
     InMemoryPolecatControl, InMemoryPolecatRespawner, LifecyclePolecatRespawner, PolecatControl,

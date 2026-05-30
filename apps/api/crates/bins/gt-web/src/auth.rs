@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 
 use crate::audit::{WebAuditEvent, WebAuditSink};
 use crate::jwt::{Claims, JwtError, JwtIssuer};
+use crate::scope::RouteContext;
 
 /// Auth posture for the router. Open mode skips both the check and the `invoked`/`unauthorized`
 /// audit records — useful only for the unit tests of the snapshot/SSE wiring that pre-date the
@@ -176,11 +177,14 @@ pub async fn auth_middleware(
             let actor = actor_tag(secret.as_str());
             req.extensions_mut().insert(Actor(actor.clone()));
             let resp = next.run(req).await;
+            let (command, target) = route_context_of(&resp);
             layer.audit.record(WebAuditEvent::Invoked {
                 actor,
                 method,
                 path,
                 status: resp.status().as_u16(),
+                command,
+                target,
             });
             resp
         }
@@ -208,14 +212,28 @@ pub async fn auth_middleware(
             req.extensions_mut().insert(Actor(actor.clone()));
             req.extensions_mut().insert(AuthClaims(claims));
             let resp = next.run(req).await;
+            let (command, target) = route_context_of(&resp);
             layer.audit.record(WebAuditEvent::Invoked {
                 actor,
                 method,
                 path,
                 status: resp.status().as_u16(),
+                command,
+                target,
             });
             resp
         }
+    }
+}
+
+/// Pull the [`RouteContext`] parked by [`crate::scope::scope_middleware`] from the response
+/// extensions (hq-fe-rbac.5). Absent on unguarded routes (`/api/whoami`, probes) and on
+/// Bearer/Open requests that skipped the scope check; in both cases the audit record falls
+/// back to method+path attribution.
+fn route_context_of(resp: &Response) -> (Option<String>, Option<String>) {
+    match resp.extensions().get::<RouteContext>() {
+        Some(ctx) => (Some(ctx.command.clone()), ctx.target.clone()),
+        None => (None, None),
     }
 }
 

@@ -184,7 +184,7 @@ Cross-refs base:
 | **Scope RBAC** | `audit.read` (operator+) |
 | **Beads** | hq-fe-rbac.5 · hq-fe-view.3 |
 | **Componentes** | `features/activity/AuditFeed.svelte` |
-| **Notas** | Útil post-incidente: "¿quién mató mi sesión?". Backend ya emite `web.invoked`; falta enriquecer con command + target (hq-fe-rbac.5). |
+| **Notas** | Útil post-incidente: "¿quién mató mi sesión?". Backend emite `web.invoked` con `command` + `target` opcionales en modo JWT (hq-fe-rbac.5 closed). |
 
 ---
 

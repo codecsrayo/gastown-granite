@@ -281,10 +281,12 @@ to the old API; pick the cleanest contract per feature.
 
 Cada request `/api/*` (aceptado o rechazado) produce un `web.invoked` /
 `web.unauthorized` en `events.jsonl` + PG audit (ver
-[audit.rs](../../api/crates/bins/gt-web/src/audit.rs)). Para acciones
-destructivas, enriquecer el record con `command` + `target` para que el
-Activity feed muestre "brayan killed gg-furiosa · 2s ago" (bead
-`hq-fe-rbac.5`).
+[audit.rs](../../api/crates/bins/gt-web/src/audit.rs)). En modo JWT, todo
+`web.invoked` sobre una ruta con scope guard incluye además `command`
+(el scope, p.ej. `sessions.write`) y `target` (el id de la ruta, p.ej.
+`gg-furiosa`) para que el Activity feed muestre "brayan @ sessions.write
+gg-furiosa · 2s ago" (bead `hq-fe-rbac.5`). Ambos campos son opcionales:
+Bearer/Open y `/api/whoami` quedan en el fallback method+path.
 
 Actor tag:
 - JWT mode (hq-fe-rbac.1): `sub` claim verbatim (e.g. `claude-host`). El JWT identifica
