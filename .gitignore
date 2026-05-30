@@ -167,6 +167,11 @@ docs/fork-info/
 
 # Crew workspaces (user-managed)
 **/crew/
+# FE Crew tab (hq-fe-view.8) — checked-in source, exempt from the workspace rule.
+!apps/web/src/routes/crew/
+!apps/web/src/routes/crew/**
+!apps/web/src/lib/components/crew/
+!apps/web/src/lib/components/crew/**
 
 # =============================================================================
 # Runtime state directories (gitignored ephemeral data)
