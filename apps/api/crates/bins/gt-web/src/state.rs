@@ -13,7 +13,7 @@ use gt_events::Envelope;
 use gt_root::CommandBus;
 use gt_store_dolt::DoltIssues;
 
-use crate::control::PolecatControl;
+use crate::control::{PolecatControl, PolecatRespawner};
 use crate::dto::WorktreeDto;
 
 /// Read-side composition root. Keep it `Clone` (Arc-backed) so axum can hand a fresh handle
@@ -57,6 +57,13 @@ where
     /// routes — the handlers return 500 ("polecat control not wired") if invoked,
     /// mirroring the posture for `bus`/`issues`.
     pub control: Option<Arc<dyn PolecatControl>>,
+    /// Polecat respawner (hq-fe-api-w.7). Backs `POST /api/sessions/:id/restart`.
+    /// Production cables [`crate::LifecyclePolecatRespawner`] over a shared
+    /// [`gt_polecat::PolecatLifecycle`] so the new polecat carries identical env and
+    /// `GT_HOOK_BEAD` pinning as the original — restart is a "fresh process in the
+    /// same harness". `None` in test setups not exercising this route; the handler
+    /// returns 500 ("polecat respawner not wired") if invoked.
+    pub respawner: Option<Arc<dyn PolecatRespawner>>,
 }
 
 impl<R, SQ> Clone for AppState<R, SQ>
@@ -75,6 +82,7 @@ where
             bus: self.bus.clone(),
             worktrees_stream: self.worktrees_stream.clone(),
             control: self.control.clone(),
+            respawner: self.respawner.clone(),
         }
     }
 }

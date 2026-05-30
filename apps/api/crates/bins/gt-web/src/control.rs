@@ -13,9 +13,22 @@
 
 use std::sync::{Arc, Mutex};
 
-use gt_polecat::Tmux;
+use gt_polecat::{PolecatLifecycle, Tmux, GT_HOOK_BEAD};
 
 use crate::routes::AppError;
+
+/// Result of a successful respawn (hq-fe-api-w.7). The session id is the tmux session
+/// the lifecycle spawned — equal to the pre-restart id because `SpawnTemplate::spec_for`
+/// derives the session name from the (sanitized) `member`, which the respawner reads
+/// back from the dying session's `GT_HOOK_BEAD` env. Rig + convoy mirror the spec the
+/// lifecycle produced so the handler can rebuild a fresh `AgentEvent::Spawned`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RespawnInfo {
+    pub session: String,
+    pub rig: String,
+    pub member: String,
+    pub convoy: Option<String>,
+}
 
 /// Edge port: control a live polecat's tmux session. Cheap to clone (Arc-backed impls)
 /// so the gateway can hand it to handlers via [`crate::AppState`].
@@ -93,5 +106,108 @@ impl PolecatControl for InMemoryPolecatControl {
         let owned: Vec<String> = keys.iter().map(|k| (*k).to_string()).collect();
         self.keys_sent.lock().unwrap().push((session.to_string(), owned));
         Ok(())
+    }
+}
+
+/// Edge port: cold-restart a live polecat (hq-fe-api-w.7). Reads the dying session's
+/// `GT_HOOK_BEAD` and `GT_CONVOY` env (so the operator does not need to re-supply
+/// them), tears the tmux session down, then slings a fresh polecat with the same
+/// hook. Returns [`RespawnInfo`] so the handler can publish the matching
+/// `AgentEvent::Killed` + `AgentEvent::Spawned` envelopes the in-process reactor
+/// would have emitted.
+pub trait PolecatRespawner: Send + Sync {
+    fn respawn(&self, session: &str) -> Result<RespawnInfo, AppError>;
+}
+
+/// Production adapter: drives the same [`PolecatLifecycle`] the composition root uses
+/// for `sling`. Sharing the lifecycle means the new polecat carries identical env, work
+/// directory, and `GT_HOOK_BEAD` pinning as the original — restart is a "fresh process
+/// in the same harness", not a re-derived spawn.
+pub struct LifecyclePolecatRespawner {
+    tmux: Arc<dyn Tmux>,
+    lifecycle: Arc<PolecatLifecycle>,
+}
+
+impl LifecyclePolecatRespawner {
+    pub fn new(tmux: Arc<dyn Tmux>, lifecycle: Arc<PolecatLifecycle>) -> Self {
+        Self { tmux, lifecycle }
+    }
+}
+
+impl PolecatRespawner for LifecyclePolecatRespawner {
+    fn respawn(&self, session: &str) -> Result<RespawnInfo, AppError> {
+        // Read the hook + convoy pins *before* killing — once the tmux session is gone
+        // we lose the env, and reconstructing it from env-vars on the gateway would skip
+        // any operator-set per-session overrides.
+        let member = self
+            .tmux
+            .show_environment(session, GT_HOOK_BEAD)
+            .map_err(|e| AppError::internal(format!("tmux show-environment {session}: {e}")))?
+            .ok_or_else(|| {
+                AppError::bad_request(format!(
+                    "session {session} has no {GT_HOOK_BEAD} env — cannot restart \
+                     (operator must spawn a fresh polecat via convoy launch)"
+                ))
+            })?;
+        let convoy = self
+            .tmux
+            .show_environment(session, "GT_CONVOY")
+            .map_err(|e| AppError::internal(format!("tmux show-environment {session}: {e}")))?
+            .unwrap_or_default();
+        let convoy_arg = if convoy.is_empty() { "_" } else { &convoy };
+
+        self.tmux
+            .kill_session(session)
+            .map_err(|e| AppError::internal(format!("tmux kill-session {session}: {e}")))?;
+        let spec = self
+            .lifecycle
+            .sling(convoy_arg, &member)
+            .map_err(|e| AppError::internal(format!("polecat sling: {e}")))?;
+        Ok(RespawnInfo {
+            session: spec.session,
+            rig: spec.rig,
+            member: spec.polecat,
+            convoy: if convoy.is_empty() { None } else { Some(convoy) },
+        })
+    }
+}
+
+/// Test double for [`PolecatRespawner`]. Records every restart the handler issued and
+/// returns a canned [`RespawnInfo`] so gates can assert the route called us with the
+/// right session id and consumed the response correctly.
+#[derive(Default, Clone)]
+pub struct InMemoryPolecatRespawner {
+    restarts: Arc<Mutex<Vec<String>>>,
+    info: Arc<Mutex<RespawnInfo>>,
+}
+
+impl InMemoryPolecatRespawner {
+    pub fn new(info: RespawnInfo) -> Self {
+        Self {
+            restarts: Arc::new(Mutex::new(Vec::new())),
+            info: Arc::new(Mutex::new(info)),
+        }
+    }
+
+    pub fn restarts(&self) -> Vec<String> {
+        self.restarts.lock().unwrap().clone()
+    }
+}
+
+impl PolecatRespawner for InMemoryPolecatRespawner {
+    fn respawn(&self, session: &str) -> Result<RespawnInfo, AppError> {
+        self.restarts.lock().unwrap().push(session.to_string());
+        Ok(self.info.lock().unwrap().clone())
+    }
+}
+
+impl Default for RespawnInfo {
+    fn default() -> Self {
+        Self {
+            session: String::new(),
+            rig: String::new(),
+            member: String::new(),
+            convoy: None,
+        }
     }
 }

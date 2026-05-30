@@ -70,6 +70,7 @@ async fn boot(with_killer: bool) -> Setup {
         } else {
             None
         },
+        respawner: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -9,7 +9,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
 
-use gt_agent::{AgentEvent, SessionQueries};
+use gt_agent::{AgentEvent, SessionQueries, SessionRole};
 use gt_beads::{Bead, BeadRepository, BeadStatus};
 use gt_events::Envelope;
 use gt_orchestration::{FailMember, LaunchConvoy, OrchCommand};
@@ -105,6 +105,73 @@ where
         .await
         .map_err(|_| AppError::internal("agent relay closed"))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/sessions/:id/restart` — cold-restart a stuck polecat (hq-fe-api-w.7).
+/// The route is the dashboard's "respawn" button: it (a) verifies the session is still
+/// in the active registry, (b) calls the [`crate::PolecatRespawner`] port which reads
+/// the dying session's `GT_HOOK_BEAD` + `GT_CONVOY` env, tears the tmux session down,
+/// and slings a fresh polecat with the same hook, and (c) emits
+/// `AgentEvent::Killed` + `AgentEvent::Spawned` on the agent relay so the projector +
+/// SSE subscribers see the same close+reopen pair the reactor would emit on a real
+/// supervisor restart.
+///
+/// Both events are emitted unconditionally after a successful respawn — restart is a
+/// close-and-reopen pair, not a swap. The new session id is typically the same as the
+/// old one (`SpawnTemplate::spec_for` derives the session name from the member, which
+/// the respawner reads back from `GT_HOOK_BEAD`); a mismatch surfaces in the response
+/// body so the dashboard can re-subscribe to the new tmux session if needed.
+pub async fn restart_session<R, SQ>(
+    State(state): State<AppState<R, SQ>>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
+    if id.is_empty() {
+        return Err(AppError::bad_request("session id is empty"));
+    }
+    let active = state.sessions.active_sessions().await.map_err(AppError::from)?;
+    if !active.iter().any(|s| s.id == id) {
+        return Err(AppError::not_found(format!("session {id}")));
+    }
+    let respawner = state
+        .respawner
+        .as_ref()
+        .ok_or_else(|| AppError::internal("polecat respawner not wired"))?;
+    let info = respawner.respawn(&id)?;
+
+    // Close the dying session row + reopen with the freshly-slung spec so the projector
+    // flips state in a single tick. Same envelopes the in-process reactor produces.
+    let killed = Envelope::root(AgentEvent::Killed {
+        session: id.clone(),
+        reason: "operator: POST /api/sessions/:id/restart".to_string(),
+    });
+    state
+        .agent_events
+        .send(killed)
+        .await
+        .map_err(|_| AppError::internal("agent relay closed"))?;
+    let spawned = Envelope::root(AgentEvent::Spawned {
+        session: info.session.clone(),
+        rig: info.rig.clone(),
+        role: SessionRole::Polecat,
+        crew: None,
+    });
+    state
+        .agent_events
+        .send(spawned)
+        .await
+        .map_err(|_| AppError::internal("agent relay closed"))?;
+
+    Ok(Json(serde_json::json!({
+        "restarted": true,
+        "session": info.session,
+        "rig": info.rig,
+        "member": info.member,
+        "convoy": info.convoy,
+    })))
 }
 
 /// `POST /api/sessions/:id/interrupt` — softer e-stop (hq-fe-api-w.8). Sends `Escape`

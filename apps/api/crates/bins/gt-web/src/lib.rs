@@ -34,7 +34,10 @@ pub use audit::{InMemoryWebAudit, JsonlWebAudit, WebAuditEvent, WebAuditSink};
 pub use auth::{AuthConfig, AuthLayer};
 pub use health::{HydrationHandle, ReadinessGate, ReadinessGateBuilder};
 pub use idempotency::{idempotency_middleware, IdempotencyStore};
-pub use control::{InMemoryPolecatControl, PolecatControl, TmuxPolecatControl};
+pub use control::{
+    InMemoryPolecatControl, InMemoryPolecatRespawner, LifecyclePolecatRespawner, PolecatControl,
+    PolecatRespawner, RespawnInfo, TmuxPolecatControl,
+};
 pub use routes::collect_worktrees;
 pub use state::AppState;
 
@@ -93,6 +96,14 @@ where
         .route(
             "/api/sessions/:id/interrupt",
             post(routes::interrupt_session::<R, SQ>),
+        )
+        // hq-fe-api-w.7 — cold-restart: respawn a stuck polecat with the same hook
+        // bead + convoy by reading env from the dying session before tearing it down.
+        // Emits the close+reopen `AgentEvent` pair the supervisor would on a real
+        // restart so SSE subscribers + projector see a single atomic transition.
+        .route(
+            "/api/sessions/:id/restart",
+            post(routes::restart_session::<R, SQ>),
         )
         // hq-fe-api-w.3: write surface on the dispatcher's bead table — POST mints a
         // `pending` row (wrapping scheduling.create_bead), PATCH partially updates

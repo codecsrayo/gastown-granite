@@ -49,6 +49,7 @@ async fn boot() -> (String, gt_root::RootHandle<Arc<InMemoryBeads>>, tokio::task
         bus: Some(root.commands()),
         worktrees_stream: None,
         control: None,
+        respawner: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

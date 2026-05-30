@@ -48,8 +48,8 @@ use gt_store_dolt::{DoltBeads, DoltIssues, DoltMerge, DoltOrch, DoltPatrol, Dolt
 use gt_store_pg::PgAudit;
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 use gt_web::{
-    AppState, AuthConfig, JsonlWebAudit, PolecatControl, ReadinessGate, ReadinessGateBuilder,
-    TmuxPolecatControl, WebAuditSink,
+    AppState, AuthConfig, JsonlWebAudit, LifecyclePolecatRespawner, PolecatControl,
+    PolecatRespawner, ReadinessGate, ReadinessGateBuilder, TmuxPolecatControl, WebAuditSink,
 };
 
 
@@ -297,9 +297,19 @@ async fn serve<R, SQ, MR, PR, OR>(
     // A single shared `TmuxCli` matches the supervisor/lifecycle convention (same
     // default tmux server, no socket drift), so kill/interrupt land on the same session
     // the spawner created.
-    let control: Arc<dyn PolecatControl> = Arc::new(TmuxPolecatControl::new(Arc::new(
-        gt_polecat::TmuxCli::new(),
-    )));
+    let tmux: Arc<dyn gt_polecat::Tmux> = Arc::new(gt_polecat::TmuxCli::new());
+    let control: Arc<dyn PolecatControl> = Arc::new(TmuxPolecatControl::new(tmux.clone()));
+
+    // hq-fe-api-w.7: production polecat respawner. Builds a dedicated `PolecatLifecycle`
+    // off the same env the composition root reads — restart-via-HTTP and restart-via-
+    // supervisor produce identically-shaped polecats.
+    let respawner: Arc<dyn PolecatRespawner> = {
+        let lifecycle = Arc::new(gt_polecat::PolecatLifecycle::new(
+            Box::new(gt_polecat::TmuxCli::new()),
+            gt_root::spawn_template_from_env(),
+        ));
+        Arc::new(LifecyclePolecatRespawner::new(tmux.clone(), lifecycle))
+    };
 
     let state = AppState {
         beads,
@@ -313,6 +323,7 @@ async fn serve<R, SQ, MR, PR, OR>(
         bus: Some(root.commands()),
         worktrees_stream,
         control: Some(control),
+        respawner: Some(respawner),
     };
 
     // Idempotency-Key cache (hq-fe-api-w.2). TTL overridable via

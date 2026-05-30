@@ -20,7 +20,7 @@ mod notify_real;
 pub mod root;
 
 pub use commands::{CommandBus, RootCommand};
-pub use effects_real::{QuotaSlot, RealEffects};
+pub use effects_real::{spawn_template_from_env, QuotaSlot, RealEffects};
 pub use event::{replay_gt, GtEvent, GtState};
 pub use notify_real::MailNotifier;
 pub use root::{
