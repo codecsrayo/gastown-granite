@@ -67,6 +67,9 @@ async fn boot(with_commenter: bool) -> Setup {
             None
         },
         event_log: None,
+        login_registry: std::sync::Arc::new(gt_web::LoginRegistry::new()),
+        login_pty: None,
+        login_config: std::sync::Arc::new(gt_web::LoginConfig::default()),
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

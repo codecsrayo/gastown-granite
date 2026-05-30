@@ -56,6 +56,9 @@ async fn boot_jwt() -> (String, Arc<JwtIssuer>, Arc<InMemoryWebAudit>, RootHandl
         respawner: None,
         commenter: None,
         event_log: None,
+        login_registry: std::sync::Arc::new(gt_web::LoginRegistry::new()),
+        login_pty: None,
+        login_config: std::sync::Arc::new(gt_web::LoginConfig::default()),
     };
     let issuer = JwtIssuer::from_secret("rbac-3-test-secret").shared();
     let audit = Arc::new(InMemoryWebAudit::new());
@@ -251,6 +254,9 @@ async fn bearer_mode_grandfathers_through_guarded_routes() {
         respawner: None,
         commenter: None,
         event_log: None,
+        login_registry: std::sync::Arc::new(gt_web::LoginRegistry::new()),
+        login_pty: None,
+        login_config: std::sync::Arc::new(gt_web::LoginConfig::default()),
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

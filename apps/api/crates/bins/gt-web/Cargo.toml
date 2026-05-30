@@ -35,6 +35,8 @@ gt-rbac = { path = "../../kernel/gt-rbac" }
 gt-polecat = { path = "../../domain/lifecycle/gt-polecat" }
 # hq-fe-api-w.10: POST /api/quota/accounts/:n/{rotate,retire} dispatches QuotaCommand.
 gt-quota = { path = "../../domain/orchestration/gt-quota" }
+# hq-fe-auth.2: PTY login driver behind POST /api/quota/accounts/:n/login{,/token,/cancel}.
+gt-login = { path = "../../domain/orchestration/gt-login" }
 # Real persistence adapters: opt-in via env (GT_DOLT_URL / GT_PG_AUDIT_URL).
 gt-store-dolt = { path = "../../kernel/gt-store-dolt" }
 gt-store-pg = { path = "../../kernel/gt-store-pg" }
@@ -58,6 +60,9 @@ sha2 = "0.10"
 # the build on the crate's pure-Rust default (`use_pem` off).
 jsonwebtoken = { version = "9", default-features = false }
 thiserror.workspace = true
+# hq-fe-auth.2: ulid for `flow_id` minting + time for `quota.login_*` event timestamps.
+ulid.workspace = true
+time.workspace = true
 
 [dev-dependencies]
 ulid.workspace = true

@@ -255,8 +255,8 @@ to the old API; pick the cleanest contract per feature.
 | JWT firmado HS256 con claims `roles[]` + `scopes[]` (vs bearer plano) | **done** (gt-web `AuthConfig::Jwt`) | hq-fe-rbac.1 |
 | `RbacConfig` unificado (`mcp-scope.toml` ↔ JWT roles) | **done** (crate `gt-rbac`) | hq-fe-rbac.2 |
 | Middleware per-scope (no single bearer) | **done** (gt-web `scope.rs` `ScopeGuard`) | hq-fe-rbac.3 |
-| Account login pty driver (`POST /api/quota/accounts/:n/login` + token + cancel) | **gap** | hq-fe-auth.* |
-| SSE kinds `quota.login_started` / `login_url_ready` / `login_complete` / `login_failed` | **gap** | hq-fe-auth.3 |
+| Account login pty driver (`POST /api/quota/accounts/:n/login` + token + cancel) | **done** (`gt-web::login`, scope `quota.write`; 503 si `GT_LOGIN_ENABLE` unset) | hq-fe-auth.2 |
+| SSE kinds `quota.login_started` / `login_url_ready` / `login_complete` / `login_failed` | **partial** — `EventRecord`s emitidos en broadcast `gt-web::login::emit_event`; SSE encoding/DTO pendiente | hq-fe-auth.3 |
 
 ### Terminal / interactive gaps
 

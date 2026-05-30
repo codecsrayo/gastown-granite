@@ -63,6 +63,9 @@ async fn boot(auth: AuthConfig, gate: ReadinessGate) -> String {
         respawner: None,
         commenter: None,
         event_log: None,
+        login_registry: std::sync::Arc::new(gt_web::LoginRegistry::new()),
+        login_pty: None,
+        login_config: std::sync::Arc::new(gt_web::LoginConfig::default()),
     };
 
     let audit = InMemoryWebAudit::new();

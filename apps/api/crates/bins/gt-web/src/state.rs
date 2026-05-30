@@ -17,6 +17,7 @@ use gt_store_dolt::DoltIssues;
 use crate::comments::IssueCommenter;
 use crate::control::{PolecatControl, PolecatRespawner};
 use crate::dto::WorktreeDto;
+use crate::login::{LoginConfig, LoginRegistry};
 
 /// Read-side composition root. Keep it `Clone` (Arc-backed) so axum can hand a fresh handle
 /// to each request without locks. `R`/`SQ`/`M` are the bead / session / merge ports.
@@ -84,6 +85,20 @@ where
     /// the feed route; the handler returns `[]` so the dashboard fall-back (live SSE only)
     /// matches the gateway empty-list posture used elsewhere.
     pub event_log: Option<Arc<PathBuf>>,
+    /// Account-login flow registry (hq-fe-auth.2). Holds one in-flight
+    /// [`crate::login::FlowSlot`] per account so `/login/token` and `/login/cancel` can
+    /// route to the right pending `LoginDriver` task. Always present (built at boot); a
+    /// missing PTY port short-circuits `start` with 503 instead of hiding the registry.
+    pub login_registry: Arc<LoginRegistry>,
+    /// PTY adapter the login registry spawns `claude /login` under (hq-fe-auth.2).
+    /// Production cables [`gt_login::PortablePty`]; tests cable
+    /// [`gt_login::FakePty`] with a scripted output script. `None` disables the route —
+    /// `POST /api/quota/accounts/:n/login` returns 503 so a deploy without a `claude`
+    /// binary or without GT_LOGIN_ENABLE never silently no-ops.
+    pub login_pty: Option<Arc<dyn gt_login::Pty>>,
+    /// Shared login command config (program + args + account env var name). Read at
+    /// boot from `GT_LOGIN_CMD` / `GT_LOGIN_ARGS`; defaults to `claude /login`.
+    pub login_config: Arc<LoginConfig>,
 }
 
 impl<R, SQ, M> Clone for AppState<R, SQ, M>
@@ -107,6 +122,9 @@ where
             respawner: self.respawner.clone(),
             commenter: self.commenter.clone(),
             event_log: self.event_log.clone(),
+            login_registry: self.login_registry.clone(),
+            login_pty: self.login_pty.clone(),
+            login_config: self.login_config.clone(),
         }
     }
 }

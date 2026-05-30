@@ -20,6 +20,7 @@ pub mod idempotency;
 pub mod jwt;
 pub mod comments;
 pub mod control;
+pub mod login;
 pub mod rate_limit;
 pub mod routes;
 pub mod scope;
@@ -45,6 +46,7 @@ pub use jwt::{Claims, JwtError, JwtIssuer, DEFAULT_TTL, ISSUER};
 pub use gt_rbac::{ActorSpec, RbacConfig, RoleSpec, WebGrant};
 pub use health::{HydrationHandle, ReadinessGate, ReadinessGateBuilder};
 pub use idempotency::{idempotency_middleware, IdempotencyStore};
+pub use login::{LoginConfig, LoginRegistry, LoginStartResponse, LoginTokenRequest};
 pub use rate_limit::{rate_limit_middleware, RateLimitStore};
 pub use scope::{scope_middleware, RouteContext, ScopeGuard};
 pub use comments::{DoltIssueCommenter, InMemoryIssueCommenter, IssueCommenter};
@@ -260,6 +262,22 @@ where
         .route(
             "/api/quota/rotation",
             get(routes::quota_rotation::<R, SQ, M>).route_layer(req("quota.read")),
+        )
+        // hq-fe-auth.2 — account login flow (PTY-driven `claude /login`). Three POSTs on
+        // the same prefix so a single scope grant (`quota.write`) covers the full flow.
+        // Events surface as `quota.login_*` `EventRecord`s on the existing events
+        // broadcast; `.3` defines their SSE rendering.
+        .route(
+            "/api/quota/accounts/:id/login",
+            post(login::login_start::<R, SQ, M>).route_layer(req("quota.write")),
+        )
+        .route(
+            "/api/quota/accounts/:id/login/token",
+            post(login::login_token::<R, SQ, M>).route_layer(req("quota.write")),
+        )
+        .route(
+            "/api/quota/accounts/:id/login/cancel",
+            post(login::login_cancel::<R, SQ, M>).route_layer(req("quota.write")),
         )
         .route(
             "/api/stream",

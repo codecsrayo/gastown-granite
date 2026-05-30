@@ -55,8 +55,8 @@ use gt_store_pg::PgAudit;
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 use gt_web::{
     AppState, AuthConfig, DoltIssueCommenter, IssueCommenter, JsonlWebAudit, JwtIssuer,
-    LifecyclePolecatRespawner, PolecatControl, PolecatRespawner, ReadinessGate,
-    ReadinessGateBuilder, TmuxPolecatControl, WebAuditSink,
+    LifecyclePolecatRespawner, LoginConfig, LoginRegistry, PolecatControl, PolecatRespawner,
+    ReadinessGate, ReadinessGateBuilder, TmuxPolecatControl, WebAuditSink,
 };
 
 
@@ -361,6 +361,22 @@ async fn serve<R, SQ, MR, PR, OR>(
         .clone()
         .map(|i| Arc::new(DoltIssueCommenter::new(i)) as Arc<dyn IssueCommenter>);
 
+    // hq-fe-auth.2: account-login flow registry + PTY adapter. The registry is one
+    // per process (single source of truth for "is a flow in flight for $account"); the
+    // PTY adapter is gated on `GT_LOGIN_ENABLE=1` so prod images without the `claude`
+    // binary report 503 cleanly instead of dying mid-flow. `GT_LOGIN_CMD` /
+    // `GT_LOGIN_ARGS` parameterise the spawn (see `LoginConfig::from_env`).
+    let login_registry = Arc::new(LoginRegistry::new());
+    let login_pty: Option<Arc<dyn gt_login::Pty>> =
+        match std::env::var("GT_LOGIN_ENABLE").as_deref() {
+            Ok("1") | Ok("true") => {
+                eprintln!("[gt-web] login pty: PortablePty (GT_LOGIN_ENABLE=1)");
+                Some(Arc::new(gt_login::PortablePty::new()))
+            }
+            _ => None,
+        };
+    let login_config = Arc::new(LoginConfig::from_env());
+
     let state = AppState {
         beads,
         sessions,
@@ -379,6 +395,9 @@ async fn serve<R, SQ, MR, PR, OR>(
         // hq-fe-api-r.5: same `events.jsonl` the reactor + frontier audit append to;
         // `GET /api/feed?since=` reads it for the dashboard historical seed.
         event_log: Some(Arc::new(root.log_path().to_path_buf())),
+        login_registry,
+        login_pty,
+        login_config,
     };
 
     // Idempotency-Key cache (hq-fe-api-w.2). TTL overridable via

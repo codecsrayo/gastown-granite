@@ -1349,6 +1349,30 @@ impl AppError {
             message: msg.into(),
         }
     }
+    /// 503 — port not wired (e.g. login PTY missing). Distinguished from 500 so the
+    /// dashboard can render a config-error banner instead of a generic failure toast.
+    pub fn service_unavailable(msg: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: msg.into(),
+        }
+    }
+    /// 409 — resource is busy with another in-flight operation (e.g. login flow already
+    /// running for an account). Surfaces enough context for the caller to re-attach.
+    pub fn conflict(msg: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: msg.into(),
+        }
+    }
+    /// 410 — resource was alive but is no longer (e.g. login flow already terminated
+    /// before the token submission landed). Signals "restart, do not retry".
+    pub fn gone(msg: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::GONE,
+            message: msg.into(),
+        }
+    }
 }
 
 impl From<gt_events::AppError> for AppError {

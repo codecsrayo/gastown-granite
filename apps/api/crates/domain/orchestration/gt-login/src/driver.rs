@@ -26,11 +26,11 @@ pub enum LoginOutcome {
 /// - a token producer: the driver blocks on this after surfacing `UrlReady`. Returning
 ///   `None` cancels the flow (mapped to [`LoginFailure::Cancelled`]).
 /// - an event sink that takes each [`LoginEvent`] as it happens.
-pub struct LoginDriver<P: Pty> {
+pub struct LoginDriver<P: Pty + ?Sized> {
     pty: Arc<P>,
 }
 
-impl<P: Pty> LoginDriver<P> {
+impl<P: Pty + ?Sized> LoginDriver<P> {
     pub fn new(pty: Arc<P>) -> Self {
         Self { pty }
     }
