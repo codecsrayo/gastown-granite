@@ -19,9 +19,10 @@ use gt_store_dolt::{IssueFilter, IssueRow};
 
 use crate::dto::{
     BeadCreateRequest, BeadDto, BeadTransitionRequest, BeadUpdateRequest, BeadsQuery,
-    ConvoyCreateRequest, ConvoyCreateResponse, DirtyFileDto, IssueDto, IssuesQuery,
-    MayorStatusDto, MemberFailRequest, NudgeRequest, NudgeResponse, QuotaRetireResponse,
-    QuotaRotateRequest, SessionDto, SessionsQuery, WorktreeDto,
+    BulkBeadCreateRequest, BulkBeadCreateResponse, ConvoyCreateRequest, ConvoyCreateResponse,
+    DirtyFileDto, IssueDto, IssuesQuery, MayorStatusDto, MemberFailRequest, NudgeRequest,
+    NudgeResponse, QuotaRetireResponse, QuotaRotateRequest, SessionDto, SessionsQuery,
+    WorktreeDto,
 };
 use crate::state::AppState;
 use crate::stream::{sse_from_json_receiver, sse_from_receiver};
@@ -262,6 +263,86 @@ where
         .await
         .map_err(AppError::from)?;
     Ok((StatusCode::CREATED, Json(BeadDto::from(bead))))
+}
+
+/// Hard cap on `POST /api/beads/bulk` items per request (hq-fe-api-w.11). Operators
+/// run imports of a few dozen beads at a time; the cap is high enough to absorb a
+/// realistic batch but low enough that a runaway script cannot empty the dispatcher's
+/// per-actor budget in one call. Tunable later via env if a legitimate use case lands.
+pub const BULK_BEADS_MAX_ITEMS: usize = 100;
+
+/// `POST /api/beads/bulk` — atomic create-N (hq-fe-api-w.11). All items are validated
+/// up front (same rules `create_bead` enforces) and the whole batch is rejected on the
+/// first failure so the kanban never lands in a partial state the operator did not
+/// request. Items are dispatched sequentially through the same `scheduling.create_bead`
+/// edge the single-row route uses — audit, idempotency, and the rate-limit middleware
+/// all behave per-request, not per-item.
+pub async fn create_beads_bulk<R, SQ>(
+    State(state): State<AppState<R, SQ>>,
+    Json(req): Json<BulkBeadCreateRequest>,
+) -> Result<(StatusCode, Json<BulkBeadCreateResponse>), AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
+    if req.beads.is_empty() {
+        return Err(AppError::bad_request("bulk request has no beads"));
+    }
+    if req.beads.len() > BULK_BEADS_MAX_ITEMS {
+        return Err(AppError::bad_request(format!(
+            "bulk request exceeds cap of {BULK_BEADS_MAX_ITEMS} items, got {}",
+            req.beads.len()
+        )));
+    }
+    let mut prepared: Vec<Bead> = Vec::with_capacity(req.beads.len());
+    let mut seen = std::collections::HashSet::with_capacity(req.beads.len());
+    for (i, item) in req.beads.iter().enumerate() {
+        if item.id.is_empty() {
+            return Err(AppError::bad_request(format!(
+                "beads[{i}]: bead id is empty"
+            )));
+        }
+        if item.title.is_empty() {
+            return Err(AppError::bad_request(format!(
+                "beads[{i}]: bead title is empty"
+            )));
+        }
+        if item.priority > 2 {
+            return Err(AppError::bad_request(format!(
+                "beads[{i}]: priority must be 0..=2, got {}",
+                item.priority
+            )));
+        }
+        if !seen.insert(item.id.as_str()) {
+            return Err(AppError::bad_request(format!(
+                "beads[{i}]: duplicate bead id `{}` in batch",
+                item.id
+            )));
+        }
+        let mut bead = Bead::new(&item.id, &item.title, BeadStatus::Pending, item.priority);
+        bead.assignee = item
+            .assignee
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        prepared.push(bead);
+    }
+    let bus = state
+        .bus
+        .as_ref()
+        .ok_or_else(|| AppError::internal("command bus not wired"))?;
+    let mut created: Vec<BeadDto> = Vec::with_capacity(prepared.len());
+    for bead in prepared {
+        bus.sched()
+            .create_bead(bead.clone())
+            .await
+            .map_err(AppError::from)?;
+        created.push(BeadDto::from(bead));
+    }
+    Ok((
+        StatusCode::CREATED,
+        Json(BulkBeadCreateResponse { created }),
+    ))
 }
 
 /// `PATCH /api/beads/:id` — partial update of `title`, `priority`, or `assignee`

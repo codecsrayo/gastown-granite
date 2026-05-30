@@ -18,6 +18,7 @@ pub mod dto;
 pub mod health;
 pub mod idempotency;
 pub mod control;
+pub mod rate_limit;
 pub mod routes;
 pub mod state;
 pub mod stream;
@@ -34,6 +35,7 @@ pub use audit::{InMemoryWebAudit, JsonlWebAudit, WebAuditEvent, WebAuditSink};
 pub use auth::{AuthConfig, AuthLayer};
 pub use health::{HydrationHandle, ReadinessGate, ReadinessGateBuilder};
 pub use idempotency::{idempotency_middleware, IdempotencyStore};
+pub use rate_limit::{rate_limit_middleware, RateLimitStore};
 pub use control::{
     InMemoryPolecatControl, InMemoryPolecatRespawner, LifecyclePolecatRespawner, PolecatControl,
     PolecatRespawner, RespawnInfo, TmuxPolecatControl,
@@ -62,18 +64,50 @@ where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
 {
-    router_with_idempotency(state, auth, audit, readiness, IdempotencyStore::with_defaults())
+    router_with_stores(
+        state,
+        auth,
+        audit,
+        readiness,
+        IdempotencyStore::with_defaults(),
+        RateLimitStore::with_defaults(),
+    )
 }
 
-/// `router` variant that lets the caller inject a pre-built idempotency store. Production
-/// boot in `main.rs` uses [`router`]; tests reuse this so they can run with a tighter TTL
-/// or assert directly on the cache state.
+/// `router` variant that lets the caller inject a pre-built idempotency store. Defaults
+/// the rate-limit store; tests that need to assert the 429 path use
+/// [`router_with_stores`] instead.
 pub fn router_with_idempotency<R, SQ>(
     state: AppState<R, SQ>,
     auth: AuthConfig,
     audit: Arc<dyn WebAuditSink>,
     readiness: ReadinessGate,
     idempotency: IdempotencyStore,
+) -> Router
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
+    router_with_stores(
+        state,
+        auth,
+        audit,
+        readiness,
+        idempotency,
+        RateLimitStore::with_defaults(),
+    )
+}
+
+/// Full `router` constructor with both stores injected — production boot uses [`router`]
+/// (defaults both); tests reuse this so they can pin a tighter budget on either layer
+/// and assert directly on the cache / counter state.
+pub fn router_with_stores<R, SQ>(
+    state: AppState<R, SQ>,
+    auth: AuthConfig,
+    audit: Arc<dyn WebAuditSink>,
+    readiness: ReadinessGate,
+    idempotency: IdempotencyStore,
+    rate_limit: RateLimitStore,
 ) -> Router
 where
     R: BeadRepository + Send + Sync + 'static,
@@ -148,7 +182,22 @@ where
             post(routes::quota_retire::<R, SQ>),
         )
         .route("/api/stream", get(routes::stream::<R, SQ>))
+        .with_state(state.clone());
+
+    // hq-fe-api-w.11 — rate-limited bulk-create surface. The per-actor counter sits on
+    // a sibling sub-router so the layer applies only to the bulk path; the rest of the
+    // /api surface is unchanged. Merged into `api` *before* idempotency + auth so the
+    // global layers still wrap every request.
+    let bulk = Router::new()
+        .route("/api/beads/bulk", post(routes::create_beads_bulk::<R, SQ>))
         .with_state(state)
+        .layer(axum::middleware::from_fn_with_state(
+            rate_limit,
+            rate_limit_middleware,
+        ));
+
+    let api = api
+        .merge(bulk)
         // Idempotency-Key middleware (hq-fe-api-w.2). Layered between routes and auth so
         // an unauthorised retry never poisons the cache (auth runs first); replays still
         // re-enter the auth middleware so revoked tokens fail every retry.

@@ -86,6 +86,26 @@ fn default_bead_priority() -> u8 {
     2
 }
 
+/// Body of `POST /api/beads/bulk` (hq-fe-api-w.11). Atomic "create N beads" call so the
+/// dashboard's import flow does not need N round-trips. The handler validates every
+/// item against the same rules `POST /api/beads` enforces (non-empty id+title,
+/// `priority 0..=2`) and refuses the whole batch on the first failure — partial
+/// success would leave the kanban in a state the operator did not request.
+///
+/// Hard cap on `beads.len()` prevents one request from monopolizing the dispatcher;
+/// rate-limit middleware fronts the route so the cap interacts with per-actor budget.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BulkBeadCreateRequest {
+    pub beads: Vec<BeadCreateRequest>,
+}
+
+/// Response of `POST /api/beads/bulk`. Echoes every created row in the same order the
+/// request listed them so the caller can pair input ↔ persisted state in one pass.
+#[derive(Debug, Clone, Serialize)]
+pub struct BulkBeadCreateResponse {
+    pub created: Vec<BeadDto>,
+}
+
 /// Body of `PATCH /api/beads/:id` (hq-fe-api-w.3). Every editable field is `Option`:
 /// `None` leaves it alone, `Some(_)` overwrites. Status is deliberately absent — status
 /// transitions live on the dispatcher reactor (claim / release / done / failed events).

@@ -223,7 +223,7 @@ to the old API; pick the cleanest contract per feature.
 | `POST /api/convoys` · `members/:m/fail` (e-stop) | **done** (gt-web) | hq-fe-api-w.9 |
 | `pause` · `resume` (convoy lifecycle) | **gap** (no domain ops) | hq-fe-api-w.9 follow-up |
 | `POST /api/quota/accounts/:n/rotate` · `retire` | **gap (HTTP)** (existe MCP) | hq-fe-api-w.10 |
-| `POST /api/beads/bulk` + rate-limit | **gap** | hq-fe-api-w.11 |
+| `POST /api/beads/bulk` + rate-limit | **done** (gt-web) | hq-fe-api-w.11 |
 | `POST /api/roles/:role/skills` (toggle) | **gap (new domain)** | hq-fe-skills.3 |
 
 ### Auth gaps
