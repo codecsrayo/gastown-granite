@@ -17,7 +17,7 @@ pub mod auth;
 pub mod dto;
 pub mod health;
 pub mod idempotency;
-pub mod killer;
+pub mod control;
 pub mod routes;
 pub mod state;
 pub mod stream;
@@ -34,7 +34,7 @@ pub use audit::{InMemoryWebAudit, JsonlWebAudit, WebAuditEvent, WebAuditSink};
 pub use auth::{AuthConfig, AuthLayer};
 pub use health::{HydrationHandle, ReadinessGate, ReadinessGateBuilder};
 pub use idempotency::{idempotency_middleware, IdempotencyStore};
-pub use killer::{InMemoryPolecatKiller, PolecatKiller, TmuxPolecatKiller};
+pub use control::{InMemoryPolecatControl, PolecatControl, TmuxPolecatControl};
 pub use routes::collect_worktrees;
 pub use state::AppState;
 
@@ -80,12 +80,19 @@ where
     let api = Router::new()
         .route("/api/sessions", get(routes::list_sessions::<R, SQ>))
         // hq-fe-api-w.6 — operator e-stop on a runaway polecat. Tmux-side kill goes
-        // through `AppState.killer` (a thin port over `gt_polecat::Tmux`); the registry
+        // through `AppState.control` (a thin port over `gt_polecat::Tmux`); the registry
         // close happens via the existing `AgentEvent::Killed` projector path so SSE
         // subscribers see the same `agent.killed` record the in-process reactor produces.
         .route(
             "/api/sessions/:id",
             delete(routes::delete_session::<R, SQ>),
+        )
+        // hq-fe-api-w.8 — softer e-stop: `tmux send-keys Escape` cancels the agent's
+        // in-flight turn without killing the polecat. The same `PolecatControl` port
+        // handles both ops so the production wiring stays a single shared `TmuxCli`.
+        .route(
+            "/api/sessions/:id/interrupt",
+            post(routes::interrupt_session::<R, SQ>),
         )
         // hq-fe-api-w.3: write surface on the dispatcher's bead table — POST mints a
         // `pending` row (wrapping scheduling.create_bead), PATCH partially updates

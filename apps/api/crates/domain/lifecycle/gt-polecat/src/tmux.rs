@@ -50,6 +50,13 @@ pub trait Tmux: Send + Sync {
     fn has_session(&self, session: &str) -> bool;
 
     fn kill_session(&self, session: &str) -> io::Result<()>;
+
+    /// Send a tmux key chord to the session's active pane (`tmux send-keys -t <session>
+    /// <keys...>`). Used by the operator e-stop chain: an `Escape` interrupt cancels the
+    /// coding agent's in-flight turn without killing the polecat. `keys` is the verbatim
+    /// argument list tmux expects (e.g. `&["Escape"]` or `&["C-c"]`); the adapter does
+    /// not encode literals — callers stay in tmux's key-name vocabulary.
+    fn send_keys(&self, session: &str, keys: &[&str]) -> io::Result<()>;
 }
 
 /// Real adapter: shells out to the `tmux` binary. Mirrors the flag shape of
@@ -259,6 +266,16 @@ impl Tmux for TmuxCli {
         self.run_retry(&["kill-session", "-t", session])?;
         Ok(())
     }
+
+    fn send_keys(&self, session: &str, keys: &[&str]) -> io::Result<()> {
+        // `send-keys` is not retried: a retry could double-deliver an `Escape` /  C-c
+        // and the agent has no way to dedupe. A wedged tmux server surfaces the spawn
+        // error to the caller (HTTP 500), same posture as `new-session`.
+        let mut argv: Vec<&str> = vec!["send-keys", "-t", session];
+        argv.extend_from_slice(keys);
+        self.run_checked(&argv)?;
+        Ok(())
+    }
 }
 
 /// Parse `tmux show-environment -t <s> <key>` output. tmux prints `KEY=value` when set and
@@ -330,6 +347,17 @@ impl Tmux for FakeTmux {
 
     fn kill_session(&self, session: &str) -> io::Result<()> {
         self.sessions.lock().unwrap().remove(session);
+        Ok(())
+    }
+
+    fn send_keys(&self, session: &str, keys: &[&str]) -> io::Result<()> {
+        // Record the chord under a synthetic env key so gates can assert "the route sent
+        // this exact key sequence". A real `Escape` doesn't change tmux env, but the fake
+        // is in-memory: we only need a deterministic place to read it back from.
+        let value = keys.join(" ");
+        let mut map = self.sessions.lock().unwrap();
+        let entry = map.entry(session.to_string()).or_default();
+        entry.insert("__SEND_KEYS__".to_string(), value);
         Ok(())
     }
 }

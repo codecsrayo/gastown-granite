@@ -13,8 +13,8 @@ use gt_events::Envelope;
 use gt_root::CommandBus;
 use gt_store_dolt::DoltIssues;
 
+use crate::control::PolecatControl;
 use crate::dto::WorktreeDto;
-use crate::killer::PolecatKiller;
 
 /// Read-side composition root. Keep it `Clone` (Arc-backed) so axum can hand a fresh handle
 /// to each request without locks. `R`/`SQ` are the bead / session ports.
@@ -49,13 +49,14 @@ where
     /// connection. `None` when there is no town root configured — the SSE endpoint then
     /// short-circuits, mirroring the `/api/worktrees` empty-list posture.
     pub worktrees_stream: Option<broadcast::Sender<Vec<WorktreeDto>>>,
-    /// Polecat killer (hq-fe-api-w.6). `DELETE /api/sessions/:id` forwards the canonical
-    /// session id to this port; production cables [`crate::TmuxPolecatKiller`] over a
-    /// shared [`gt_polecat::TmuxCli`] handle so the kill path uses the same tmux server
-    /// the supervisor already watches. `None` in test setups that do not exercise the
-    /// route — the handler returns 500 ("killer not wired") if invoked, mirroring the
-    /// posture for `bus`/`issues`.
-    pub killer: Option<Arc<dyn PolecatKiller>>,
+    /// Polecat control port (hq-fe-api-w.6 + .8). Backs `DELETE /api/sessions/:id`
+    /// (tmux kill-session) and `POST /api/sessions/:id/interrupt` (tmux send-keys).
+    /// Production cables [`crate::TmuxPolecatControl`] over a shared
+    /// [`gt_polecat::TmuxCli`] handle so every control op targets the same tmux server
+    /// the supervisor already watches. `None` in test setups that do not exercise these
+    /// routes — the handlers return 500 ("polecat control not wired") if invoked,
+    /// mirroring the posture for `bus`/`issues`.
+    pub control: Option<Arc<dyn PolecatControl>>,
 }
 
 impl<R, SQ> Clone for AppState<R, SQ>
@@ -73,7 +74,7 @@ where
             issues: self.issues.clone(),
             bus: self.bus.clone(),
             worktrees_stream: self.worktrees_stream.clone(),
-            killer: self.killer.clone(),
+            control: self.control.clone(),
         }
     }
 }

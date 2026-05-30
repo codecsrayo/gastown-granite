@@ -1,11 +1,11 @@
 //! Gate for hq-fe-api-w.6: `DELETE /api/sessions/:id`. The route is the operator's
 //! e-stop on a runaway polecat: it (a) confirms the session is still active, (b) calls
-//! the `PolecatKiller` port (production: tmux kill-session), and (c) emits
+//! the `PolecatControl` port (production: tmux kill-session), and (c) emits
 //! `AgentEvent::Killed` on the agent relay so the projector flips the row and SSE
 //! subscribers see the lifecycle close.
 //!
 //! Setup mirrors the other `gt-web` integration tests: a real `RootHandle` + in-memory
-//! ports + a recording [`InMemoryPolecatKiller`] so each gate can assert the route
+//! ports + a recording [`InMemoryPolecatControl`] so each gate can assert the route
 //! reached the edge with the right session id.
 
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use gt_beads::InMemoryBeads;
 use gt_events::Envelope;
 use gt_root::{root::Effects, spawn, RootConfig, SystemClock};
 use gt_web::{
-    router, AppState, AuthConfig, InMemoryPolecatKiller, InMemoryWebAudit, PolecatKiller,
+    router, AppState, AuthConfig, InMemoryPolecatControl, InMemoryWebAudit, PolecatControl,
     ReadinessGate, WebAuditSink,
 };
 
@@ -30,7 +30,7 @@ impl Effects for NoopEffects {
 struct Setup {
     base: String,
     sessions: Arc<InMemorySessions>,
-    killer: Arc<InMemoryPolecatKiller>,
+    killer: Arc<InMemoryPolecatControl>,
     root: gt_root::RootHandle<Arc<InMemoryBeads>>,
     agent_tx: tokio::sync::mpsc::Sender<Envelope<AgentEvent>>,
     _srv: tokio::task::JoinHandle<()>,
@@ -54,7 +54,7 @@ async fn boot(with_killer: bool) -> Setup {
         log,
         RootConfig::default(),
     );
-    let killer = Arc::new(InMemoryPolecatKiller::new());
+    let killer = Arc::new(InMemoryPolecatControl::new());
     let agent_tx = root.agent_events.clone();
     let state = AppState {
         beads: beads.clone(),
@@ -65,8 +65,8 @@ async fn boot(with_killer: bool) -> Setup {
         issues: None,
         bus: Some(root.commands()),
         worktrees_stream: None,
-        killer: if with_killer {
-            Some(killer.clone() as Arc<dyn PolecatKiller>)
+        control: if with_killer {
+            Some(killer.clone() as Arc<dyn PolecatControl>)
         } else {
             None
         },
@@ -180,9 +180,104 @@ async fn delete_with_no_killer_returns_500() {
     assert_eq!(resp.status(), 500);
     let body: serde_json::Value = resp.json().await.expect("json");
     assert!(
-        body["error"].as_str().unwrap_or_default().contains("killer"),
-        "error mentions killer wiring: {body}",
+        body["error"].as_str().unwrap_or_default().contains("control"),
+        "error mentions control wiring: {body}",
     );
+    s.root.shutdown();
+}
+
+// hq-fe-api-w.8 — `POST /api/sessions/:id/interrupt`. Softer e-stop: sends `Escape`
+// via tmux `send-keys`, cancelling the agent's in-flight turn without killing the
+// polecat. Same registry pre-check as DELETE; no `AgentEvent` emit (the lifecycle row
+// stays in its current state — the polecat is still alive).
+
+#[tokio::test]
+async fn interrupt_unknown_session_returns_404() {
+    let s = boot(true).await;
+    let resp = reqwest::Client::new()
+        .post(format!("{}/api/sessions/ghost/interrupt", s.base))
+        .send()
+        .await
+        .expect("send interrupt");
+    assert_eq!(resp.status(), 404);
+    assert!(
+        s.killer.keys_sent().is_empty(),
+        "no send-keys on 404"
+    );
+    s.root.shutdown();
+}
+
+#[tokio::test]
+async fn interrupt_active_session_sends_escape_and_returns_204() {
+    let s = boot(true).await;
+    seed_session(&s.sessions, "gt-furiosa-hq-iq-9").await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/api/sessions/gt-furiosa-hq-iq-9/interrupt", s.base))
+        .send()
+        .await
+        .expect("send interrupt");
+    assert_eq!(resp.status(), 204);
+    assert_eq!(
+        s.killer.keys_sent(),
+        vec![("gt-furiosa-hq-iq-9".to_string(), vec!["Escape".to_string()])],
+        "send-keys called with canonical session id + Escape chord",
+    );
+    assert!(
+        s.killer.killed().is_empty(),
+        "interrupt does not kill the session — that is DELETE"
+    );
+    s.root.shutdown();
+}
+
+#[tokio::test]
+async fn interrupt_without_control_returns_500() {
+    let s = boot(false).await;
+    seed_session(&s.sessions, "gt-furiosa-hq-iq-3").await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/api/sessions/gt-furiosa-hq-iq-3/interrupt", s.base))
+        .send()
+        .await
+        .expect("send interrupt");
+    assert_eq!(resp.status(), 500);
+    let body: serde_json::Value = resp.json().await.expect("json");
+    assert!(
+        body["error"].as_str().unwrap_or_default().contains("control"),
+        "error mentions control wiring: {body}",
+    );
+    s.root.shutdown();
+}
+
+#[tokio::test]
+async fn interrupt_does_not_emit_agent_killed() {
+    // The polecat keeps running, so no `agent.killed` record should land on the audit
+    // broadcast as a side effect of an interrupt. We watch the tap for ~500ms after the
+    // request returns and assert no killed event appeared.
+    let s = boot(true).await;
+    let mut rx = s.root.events_sender().subscribe();
+    seed_session(&s.sessions, "gt-furiosa-hq-iq-5").await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/api/sessions/gt-furiosa-hq-iq-5/interrupt", s.base))
+        .send()
+        .await
+        .expect("send interrupt");
+    assert_eq!(resp.status(), 204);
+
+    let saw_killed = tokio::time::timeout(std::time::Duration::from_millis(500), async {
+        loop {
+            match rx.recv().await {
+                Ok(rec) if rec.kind == "agent.killed" => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(!saw_killed, "interrupt must not produce agent.killed");
+    drop(s.agent_tx);
     s.root.shutdown();
 }
 

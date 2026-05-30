@@ -63,9 +63,9 @@ where
 
 /// `DELETE /api/sessions/:id` — operator e-stop on a runaway polecat (hq-fe-api-w.6).
 /// The route is the dashboard's "kill" button: it (a) confirms the session is still in
-/// the active registry, (b) calls the [`crate::PolecatKiller`] port to terminate the
-/// underlying tmux session, and (c) emits `AgentEvent::Killed` on the agent relay so the
-/// projector flips the row to `Killed` and SSE subscribers see the lifecycle close.
+/// the active registry, (b) calls the [`crate::PolecatControl::kill`] port to terminate
+/// the underlying tmux session, and (c) emits `AgentEvent::Killed` on the agent relay so
+/// the projector flips the row to `Killed` and SSE subscribers see the lifecycle close.
 ///
 /// Order matters: tmux kill goes *before* the event so a fatal edge error (missing
 /// `tmux` binary, server unreachable) surfaces as 500 without leaving a half-closed
@@ -87,11 +87,11 @@ where
     if !active.iter().any(|s| s.id == id) {
         return Err(AppError::not_found(format!("session {id}")));
     }
-    let killer = state
-        .killer
+    let control = state
+        .control
         .as_ref()
-        .ok_or_else(|| AppError::internal("polecat killer not wired"))?;
-    killer.kill(&id)?;
+        .ok_or_else(|| AppError::internal("polecat control not wired"))?;
+    control.kill(&id)?;
     let env = Envelope::root(AgentEvent::Killed {
         session: id.clone(),
         reason: "operator: DELETE /api/sessions/:id".to_string(),
@@ -101,6 +101,36 @@ where
         .send(env)
         .await
         .map_err(|_| AppError::internal("agent relay closed"))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/sessions/:id/interrupt` — softer e-stop (hq-fe-api-w.8). Sends `Escape`
+/// through tmux `send-keys`, which cancels the coding agent's in-flight turn without
+/// ending the polecat. Same registry pre-check as `delete_session` (404 on unknown id),
+/// no `AgentEvent` emit: the lifecycle row stays in its current state because the
+/// polecat is still alive — only the agent's current message is cancelled. Returns 204
+/// on success; idempotent at the route layer since the registry check absorbs repeats
+/// against an already-dead session.
+pub async fn interrupt_session<R, SQ>(
+    State(state): State<AppState<R, SQ>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
+    if id.is_empty() {
+        return Err(AppError::bad_request("session id is empty"));
+    }
+    let active = state.sessions.active_sessions().await.map_err(AppError::from)?;
+    if !active.iter().any(|s| s.id == id) {
+        return Err(AppError::not_found(format!("session {id}")));
+    }
+    let control = state
+        .control
+        .as_ref()
+        .ok_or_else(|| AppError::internal("polecat control not wired"))?;
+    control.send_keys(&id, &["Escape"])?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -64,7 +64,7 @@ async fn boot_with_auth(
         issues: None,
         bus: None,
         worktrees_stream: None,
-        killer: None,
+        control: None,
     };
 
     let audit = InMemoryWebAudit::new();
