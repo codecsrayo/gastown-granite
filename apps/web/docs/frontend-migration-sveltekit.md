@@ -235,7 +235,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 
 | Bead | Título | Pri | Estado | Agente | Notas |
 |---|---|---|---|---|---|
-| hq-fe-view.1 | Layout raíz: Shell + Sidebar + Topbar + Dock + theme toggle | P1 | open | — | persistente; canvas swap por route |
+| hq-fe-view.1 | Layout raíz: Shell + Sidebar + Topbar + Dock + theme toggle | P1 | closed | claude-host | `lib/stores/theme.svelte.ts` + `lib/components/{layout/{Shell,Sidebar,Topbar,Dock,TabStrip,StubView},theme/ThemeToggle}.svelte`; 7 placeholder routes + landing hub |
 | hq-fe-view.2 | `/login` route + bearer guard en `+layout.ts` | P1 | open | — | |
 | hq-fe-view.3 | Activity view (feed + cat filter + rig filter + recent peek) | P1 | open | — | canon hero (imagen) |
 | hq-fe-view.4 | Sessions view (table + filters + kill DangerButton) | P1 | open | — | |
