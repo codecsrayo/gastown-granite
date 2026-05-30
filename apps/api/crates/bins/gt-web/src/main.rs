@@ -11,10 +11,16 @@
 //! sling` subprocess is gone — the Go binary is off the runtime path); `rotate` drives the
 //! `QuotaCommand::Rotate` chain. The polecat spawn template is sourced from the environment.
 //!
-//! IAM (hq-7pdl.2): bearer-token middleware sits in front of every `/api` route. The secret
-//! is read from `GT_WEB_TOKEN`; without it the bin refuses to start unless
-//! `GT_WEB_AUTH=disabled` is set explicitly (intended for in-tree dev only). Every accepted
-//! / rejected request lands in the shared `events.jsonl` as a `web.*` frontier-audit record.
+//! IAM (hq-7pdl.2 + hq-fe-rbac.1): the gateway accepts three postures, picked at boot in
+//! priority order:
+//! 1. `GT_WEB_JWT_SECRET` — HS256 JWT mode (hq-fe-rbac.1). Same secret signs and verifies;
+//!    `sub` is forwarded as the [`gt_web::Actor`] and the verified claims hang on every
+//!    handler request as [`gt_web::AuthClaims`]. Preferred for production.
+//! 2. `GT_WEB_TOKEN` — single shared bearer (legacy, kept as a one-secret fallback while
+//!    the FE migrates to JWT issuance).
+//! 3. `GT_WEB_AUTH=disabled` — open mode for in-tree dev. Refused unless explicit.
+//! Every accepted / rejected request lands in the shared `events.jsonl` as a `web.*`
+//! frontier-audit record.
 //!
 //! Operational readiness (paso 8.5, hq-8iur.5):
 //! - `/health` (liveness) and `/readyz` (readiness) sit **outside** the IAM middleware so
@@ -48,7 +54,7 @@ use gt_store_dolt::{DoltBeads, DoltIssues, DoltMerge, DoltOrch, DoltPatrol, Dolt
 use gt_store_pg::PgAudit;
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 use gt_web::{
-    AppState, AuthConfig, DoltIssueCommenter, IssueCommenter, JsonlWebAudit,
+    AppState, AuthConfig, DoltIssueCommenter, IssueCommenter, JsonlWebAudit, JwtIssuer,
     LifecyclePolecatRespawner, PolecatControl, PolecatRespawner, ReadinessGate,
     ReadinessGateBuilder, TmuxPolecatControl, WebAuditSink,
 };
@@ -69,18 +75,29 @@ fn main() {
             .unwrap_or_else(|_| "/tmp/gt.events.jsonl".to_string());
         let bind = std::env::var("GT_WEB_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
 
-        // IAM at the frontier (doc 07). Fail-closed: refuse to start without a token unless
-        // GT_WEB_AUTH=disabled is set explicitly (intended for in-tree dev only).
-        let auth = match std::env::var("GT_WEB_TOKEN").ok() {
-            Some(t) if !t.is_empty() => AuthConfig::bearer(t),
-            _ if std::env::var("GT_WEB_AUTH").as_deref() == Ok("disabled") => {
-                eprintln!("[gt-web] WARNING: auth disabled via GT_WEB_AUTH=disabled");
-                AuthConfig::open()
-            }
-            _ => {
-                eprintln!("[gt-web] refusing to start: set GT_WEB_TOKEN or GT_WEB_AUTH=disabled");
-                std::process::exit(2);
-            }
+        // IAM at the frontier (doc 07 + hq-fe-rbac.1). Fail-closed in priority order:
+        //   1. GT_WEB_JWT_SECRET  → AuthConfig::Jwt (HS256, per-actor)
+        //   2. GT_WEB_TOKEN       → AuthConfig::Bearer (single shared secret, legacy)
+        //   3. GT_WEB_AUTH=disabled → AuthConfig::Open (dev only, loud warning)
+        // Anything else exits non-zero so a misconfigured deploy never lands an open API.
+        let auth = if let Some(secret) = std::env::var("GT_WEB_JWT_SECRET")
+            .ok()
+            .filter(|s| !s.is_empty())
+        {
+            eprintln!("[gt-web] auth: jwt (HS256, GT_WEB_JWT_SECRET)");
+            AuthConfig::jwt(JwtIssuer::from_secret(secret).shared())
+        } else if let Some(token) = std::env::var("GT_WEB_TOKEN").ok().filter(|s| !s.is_empty()) {
+            eprintln!("[gt-web] auth: bearer (legacy GT_WEB_TOKEN)");
+            AuthConfig::bearer(token)
+        } else if std::env::var("GT_WEB_AUTH").as_deref() == Ok("disabled") {
+            eprintln!("[gt-web] WARNING: auth disabled via GT_WEB_AUTH=disabled");
+            AuthConfig::open()
+        } else {
+            eprintln!(
+                "[gt-web] refusing to start: set GT_WEB_JWT_SECRET (preferred), \
+                 GT_WEB_TOKEN, or GT_WEB_AUTH=disabled"
+            );
+            std::process::exit(2);
         };
 
         // PG audit is opt-in; if configured, we both spawn the audit relay AND register a

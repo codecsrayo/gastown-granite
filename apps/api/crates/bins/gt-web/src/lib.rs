@@ -17,6 +17,7 @@ pub mod auth;
 pub mod dto;
 pub mod health;
 pub mod idempotency;
+pub mod jwt;
 pub mod comments;
 pub mod control;
 pub mod rate_limit;
@@ -34,7 +35,8 @@ use gt_beads::BeadRepository;
 use gt_merge::MergeRepository;
 
 pub use audit::{InMemoryWebAudit, JsonlWebAudit, WebAuditEvent, WebAuditSink};
-pub use auth::{AuthConfig, AuthLayer};
+pub use auth::{Actor, AuthClaims, AuthConfig, AuthLayer};
+pub use jwt::{Claims, JwtError, JwtIssuer, DEFAULT_TTL, ISSUER};
 pub use health::{HydrationHandle, ReadinessGate, ReadinessGateBuilder};
 pub use idempotency::{idempotency_middleware, IdempotencyStore};
 pub use rate_limit::{rate_limit_middleware, RateLimitStore};

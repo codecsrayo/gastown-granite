@@ -62,7 +62,7 @@ Docs hermanos (lectura obligada antes de tocar nada):
 | **hq-fe-svelte** | Master · dashboard reconstruction | (todas abajo) | — | PLANEADO |
 | **hq-fe-api-r** | Read-side gaps (snapshots por dominio) | 12 | — | EN PROGRESO · r.3/.4/.6/.7/.8-.12 CLOSED (9/12) |
 | **hq-fe-api-w** | Write-side commands (HTTP routes) | 11 | hq-fe-api-w.1 (bus) | EN PROGRESO · w.1/.2/.3/.4/.10 CLOSED · w.6 working |
-| **hq-fe-rbac** | RBAC · JWT · whoami · scopes | 5 | hq-fe-api-w.1 | PLANEADO |
+| **hq-fe-rbac** | RBAC · JWT · whoami · scopes | 5 | hq-fe-api-w.1 | EN PROGRESO · .1/.4 CLOSED (2/5) |
 | **hq-fe-auth** | Account auth (Claude `/login` pty driver) | 5 | hq-fe-api-w (idem) | PLANEADO |
 | **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
 | **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | PLANEADO · spike obligatorio |
@@ -185,7 +185,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 
 | Bead | Título | Pri | Estado | Agente | Notas |
 |---|---|---|---|---|---|
-| hq-fe-rbac.1 | JWT signing en gt-api (HS256/RS256 decidir) | P1 | open | — | reemplaza bearer plano |
+| hq-fe-rbac.1 | JWT signing en gt-api (HS256 decidido) | P1 | closed | claude-host | HS256 (single binary issues+verifies; RS256 deferred a multi-verifier); `jwt.rs` (`Claims{sub,iss,iat,exp,roles,scopes}` + `JwtIssuer{sign,verify}`); `AuthConfig::Jwt{issuer}` + `AuthClaims` request ext; middleware verifica firma/exp/iss y propaga claims; `/api/whoami` ahora reporta `mode=jwt` + roles/scopes desde claims; main.rs prioridad `GT_WEB_JWT_SECRET` > `GT_WEB_TOKEN` > `GT_WEB_AUTH=disabled`; 5 cargo tests (jwt module) + 4 middleware tests + 2 whoami integration tests |
 | hq-fe-rbac.2 | `roles.toml` unificado con `mcp-scope.toml` | P1 | open | — | misma fuente de scopes |
 | hq-fe-rbac.3 | Middleware per-scope en gt-web | P1 | open | — | reemplaza single bearer check |
 | hq-fe-rbac.4 | `GET /api/whoami` (actor + roles + scopes) | P1 | closed | claude-host | `Actor` newtype en request ext via auth middleware (open=`web:open`, bearer=`actor_tag`); `WhoamiDto {actor, mode, roles, scopes}` (roles/scopes empty hasta rbac.{1,2,3}); 3 cargo tests; `lib/{types,api}/whoami.ts` + `+layout.svelte` hidrata `auth.hydrate(whoami)` con skip401Hook |

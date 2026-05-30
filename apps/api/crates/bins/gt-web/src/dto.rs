@@ -350,14 +350,15 @@ pub struct IssueDto {
 
 /// Response of `GET /api/whoami` (hq-fe-rbac.4). Surfaces the request actor + the
 /// frontier's auth mode so the dashboard can short-circuit RBAC gating in dev
-/// (`mode=open` → permissive Guard) and start enforcing scopes once a real bearer is
-/// presented (`mode=bearer`). `roles`/`scopes` are left empty until hq-fe-rbac.1..3
-/// land — the field is on the wire today so the FE can hydrate the auth store
-/// against a stable contract.
+/// (`mode=open` → permissive Guard), enforce a single shared secret (`mode=bearer`), or
+/// honour per-actor role/scope claims (`mode=jwt`, hq-fe-rbac.1). `roles`/`scopes` come
+/// from the verified JWT claims when in JWT mode and stay empty in the other modes —
+/// same wire shape so the FE never special-cases the posture.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WhoamiDto {
     pub actor: String,
-    /// Frontier posture: `open` (dev, every request passes) or `bearer` (token enforced).
+    /// Frontier posture: `open` (dev, every request passes), `bearer` (single shared
+    /// token enforced), or `jwt` (per-actor HS256 token enforced).
     pub mode: String,
     pub roles: Vec<String>,
     pub scopes: Vec<String>,

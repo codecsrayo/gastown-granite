@@ -866,14 +866,17 @@ where
     Ok(Json(dto))
 }
 
-/// `GET /api/whoami` — identity bootstrap for the dashboard (hq-fe-rbac.4). Returns
-/// the request's actor tag, the frontier's auth mode, and (pre-RBAC) empty
-/// roles/scopes arrays. The contract is shaped so hq-fe-rbac.{1,2,3} can populate
-/// roles + scopes without breaking the wire — clients already consume them as
-/// arrays.
+/// `GET /api/whoami` — identity bootstrap for the dashboard (hq-fe-rbac.4). Returns the
+/// request's actor tag, the frontier's auth mode, and the request's roles/scopes. When
+/// the gateway runs in `Bearer` or `Open` mode there are no claims attached, so the
+/// arrays come back empty (same wire shape — the FE never special-cases the mode).
+/// JWT mode (hq-fe-rbac.1) pulls roles + scopes off the verified claims; once
+/// hq-fe-rbac.2 populates them at issuance, the dashboard hydrates the auth store with
+/// real values.
 pub async fn whoami<R, SQ, M>(
     State(state): State<AppState<R, SQ, M>>,
     actor: axum::extract::Extension<crate::auth::Actor>,
+    claims: Option<axum::extract::Extension<crate::auth::AuthClaims>>,
 ) -> Result<Json<WhoamiDto>, AppError>
 where
     R: BeadRepository + Send + Sync + 'static,
@@ -882,12 +885,16 @@ where
 {
     let _ = state;
     let id = actor.0 .0.clone();
-    let mode = if id == "web:open" { "open" } else { "bearer" };
+    let (mode, roles, scopes) = match claims {
+        Some(c) => ("jwt", c.0 .0.roles.clone(), c.0 .0.scopes.clone()),
+        None if id == "web:open" => ("open", Vec::new(), Vec::new()),
+        None => ("bearer", Vec::new(), Vec::new()),
+    };
     Ok(Json(WhoamiDto {
         actor: id,
         mode: mode.to_string(),
-        roles: Vec::new(),
-        scopes: Vec::new(),
+        roles,
+        scopes,
     }))
 }
 

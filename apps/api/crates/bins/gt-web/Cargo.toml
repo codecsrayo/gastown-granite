@@ -44,6 +44,13 @@ futures = "0.3"
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
+# hq-fe-rbac.1 — HS256 JWT issuer/verifier at the gateway. Single binary issues
+# and verifies the same token, so symmetric is sufficient; RS256 migration is
+# deferred until an external verifier (separate service / IDP) joins the trust
+# boundary. `default-features = false` drops the OpenSSL/ring choice and keeps
+# the build on the crate's pure-Rust default (`use_pem` off).
+jsonwebtoken = { version = "9", default-features = false }
+thiserror.workspace = true
 
 [dev-dependencies]
 ulid.workspace = true
