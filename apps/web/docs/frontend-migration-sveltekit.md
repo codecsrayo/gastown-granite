@@ -66,7 +66,7 @@ Docs hermanos (lectura obligada antes de tocar nada):
 | **hq-fe-auth** | Account auth (Claude `/login` pty driver) | 5 | hq-fe-api-w (idem) | PLANEADO |
 | **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
 | **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | PLANEADO · spike obligatorio |
-| **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | EN PROGRESO · .1 CLOSED |
+| **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | EN PROGRESO · .1 + .8 CLOSED |
 | **hq-fe-view** | Vistas + componentes (UI) | 19 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.1/.2/.4/.12/.13/.14-19 CLOSED (9/19) |
 | **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | PLANEADO |
 | **hq-mcp-issues** | MCP `issues.*` CRUD (cerrar bypass docker exec) | 5 | hq-fe-api-w.1 | DONE · 5/5 closed |
@@ -231,7 +231,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-build.5 | `lib/types` DTOs manuales desde frontend-api-surface | P1 | open | — | regenerar de JsonSchema si crece |
 | hq-fe-build.6 | Vite proxy + dev workflow doc | P2 | open | — | proxy `/api` → :8787 |
 | hq-fe-build.7 | Vitest (stores/logic) + Playwright (e2e) bootstrap | P2 | open | — | |
-| hq-fe-build.8 | CI lint + build gate (svelte-check estricto) | P2 | open | — | |
+| hq-fe-build.8 | CI lint + build gate (svelte-check estricto) | P2 | closed | claude-host | `.github/workflows/web-ci.yml` (pnpm 9 + node 22 · install → check → eslint → vitest → build); `.prettierignore` skips docs/lock; prettier dropped pending plugin 3.5 + prettier 3.8 compat fix |
 
 ### Epic `hq-fe-view` — vistas + componentes
 
