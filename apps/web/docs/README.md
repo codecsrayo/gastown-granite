@@ -138,9 +138,7 @@ identidad humana, no de máquina.
 Backend en compose (`gt-api` service). Si SSE falla: verifica `GT_WEB_TOKEN`
 en `.env` y que el container esté up.
 
-**¿Dónde está el spike de terminal?** `hq-fe-term.0` — bead obligatorio
-antes de tocar terminal/dock. Decisión: WebSocket en gt-api vs MCP tool vs
-bin separado.
+**¿Dónde está el spike de terminal?** [spike-hq-fe-term-0-transport.md](spike-hq-fe-term-0-transport.md) — decidido 2026-05-30: WS `GET /api/sessions/:id/term` en gt-web (binary frames). Pty substrate viene de `gt-login::pty`; tmux substrate de `gt-polecat::tmux`. Próximos beads: `hq-fe-term.1` (PTY adapter), `hq-fe-term.2` (route).
 
 **¿Skills/Roles existen en backend?** No todavía. Dominio NUEVO
 (`gt-skills` crate). Plan en `hq-fe-skills.*`. No hay endpoint hasta que

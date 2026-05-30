@@ -143,12 +143,12 @@ Cross-refs base:
 | | |
 |---|---|
 | **Qué hace** | Panel inferior fijo con tabs por sesión tmux; attach a la sesión activa para ver stream y enviar input; chips de "waiting on unlock" + "last rotation" |
-| **Endpoints** | TBD post-spike (`hq-fe-term.0`): WS `/api/sessions/:id/term` o MCP tool |
+| **Endpoints** | WS `GET /api/sessions/:id/term` (binary frames) en gt-web — decidido por [spike `hq-fe-term.0`](spike-hq-fe-term-0-transport.md) |
 | **SSE** | `quota.rotated` (para chips de rotation status) |
 | **Scope RBAC** | `terminal.attach` (operator+) |
 | **Beads** | hq-fe-term.* · hq-fe-view.11 |
 | **Componentes** | `features/terminal/XtermWrap.svelte` · `TermTabs.svelte` · `TermPrompt.svelte` |
-| **Notas** | **BLOQUEADA** hasta spike `hq-fe-term.0` decida transport. xterm.js carga lazy (~150kb) solo al abrir dock. Pop-out window = follow-up. |
+| **Notas** | Spike `hq-fe-term.0` decidido → WS en gt-web ([doc](spike-hq-fe-term-0-transport.md)). Implementación bloqueada hasta `hq-fe-term.1` (PTY adapter) + `.2` (WS route). xterm.js carga lazy (~150kb) solo al abrir dock. Pop-out window = follow-up. |
 
 ## 12 · Theme toggle (dark/light)
 

@@ -65,7 +65,7 @@ Docs hermanos (lectura obligada antes de tocar nada):
 | **hq-fe-rbac** | RBAC · JWT · whoami · scopes | 5 | hq-fe-api-w.1 | DONE · 5/5 CLOSED |
 | **hq-fe-auth** | Account auth (Claude `/login` pty driver) | 5 | hq-fe-api-w (idem) | PLANEADO |
 | **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
-| **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | PLANEADO · spike obligatorio |
+| **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | spike DECIDIDO ([doc](spike-hq-fe-term-0-transport.md)) → WS en gt-web · `.1`/`.2` desbloqueados |
 | **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | EN PROGRESO · .1-.4 + .6 + .8 CLOSED (6/8) |
 | **hq-fe-view** | Vistas + componentes (UI) | 19 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.1-.7/.12/.13/.14-.19 CLOSED (15/19) |
 | **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | PLANEADO |
@@ -215,9 +215,9 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 
 | Bead | Título | Pri | Estado | Agente | Notas |
 |---|---|---|---|---|---|
-| hq-fe-term.0 | **Spike obligatorio**: WS en gt-api · MCP tool · bin separado | P2 | open | — | escribir RFC, decidir antes del .1 |
-| hq-fe-term.1 | PTY adapter en gt-api (post-decision) | P2 | open | — | bloqueada por .0 |
-| hq-fe-term.2 | WebSocket `/api/sessions/:id/term` (o equivalente) | P2 | open | — | bloqueada por .0 |
+| hq-fe-term.0 | **Spike obligatorio**: WS en gt-api · MCP tool · bin separado | P2 | DECIDIDO 2026-05-30 → WS en gt-web ([doc](spike-hq-fe-term-0-transport.md)) | sheriff | substrate: `gt-login::pty` + `gt-polecat::tmux` |
+| hq-fe-term.1 | PTY adapter en gt-api (post-decision) | P2 | open · DESBLOQUEADO | — | use `tmux pipe-pane` (read) + `send-keys` (write); fallback `portable-pty` |
+| hq-fe-term.2 | WebSocket `/api/sessions/:id/term` (o equivalente) | P2 | open · DESBLOQUEADO | — | en gt-web; scope `terminal.attach`; per-method router (no `route_layer`) |
 | hq-fe-term.3 | Structured stream (kind: code/comment/highlight/warn/raw) | P3 | open | — | derivar de Claude output o passthrough |
 
 ### Epic `hq-fe-build` — scaffold + tooling

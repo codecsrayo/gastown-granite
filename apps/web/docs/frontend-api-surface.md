@@ -262,7 +262,7 @@ to the old API; pick the cleanest contract per feature.
 
 | Need | Status | Bead anchor |
 |---|---|---|
-| tmux attach over WebSocket (or MCP tool) — structured stream (not raw PTY) | **gap · diseño abierto** | hq-fe-term.0 (spike) |
+| tmux attach over WebSocket en gt-web (`GET /api/sessions/:id/term`, binary frames) | **decided** ([spike](spike-hq-fe-term-0-transport.md)) · gap implementación | hq-fe-term.0 decidido → hq-fe-term.1 / .2 |
 | Pop-out terminal window | **gap** | hq-fe-term.* (follow-up) |
 
 ### No aplica / fuera de alcance
