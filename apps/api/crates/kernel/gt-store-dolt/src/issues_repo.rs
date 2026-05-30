@@ -48,6 +48,56 @@ pub struct IssueRow {
     pub spec_id: Option<String>,
 }
 
+/// Patch payload for [`DoltIssues::update`] (hq-mcp-issues.3). Every field is
+/// `Option<T>`: `None` leaves the column untouched, `Some(_)` overwrites it.
+/// Status changes belong to [`DoltIssues::transition`] (hq-mcp-issues.4) so they
+/// are deliberately absent here — keeping write paths separable for audit /
+/// scope grants ("read + edit-fields" vs "transition").
+#[derive(Debug, Default, Clone)]
+pub struct IssuePatch {
+    /// New title. `Some("")` is rejected upstream — schema is `NOT NULL`.
+    pub title: Option<String>,
+    /// New description. Empty allowed.
+    pub description: Option<String>,
+    /// New design notes. Empty allowed.
+    pub design: Option<String>,
+    /// New acceptance criteria. Empty allowed.
+    pub acceptance_criteria: Option<String>,
+    /// New free-form notes. Empty allowed.
+    pub notes: Option<String>,
+    /// New priority `0..=2` (0 = P0).
+    pub priority: Option<u8>,
+    /// New `issue_type` (`epic`/`task`/`spike`/...).
+    pub issue_type: Option<String>,
+    /// New assignee. `Some(String::new())` stores `''` (canonical "unassigned"
+    /// for the column when nullable-with-default is in play; schema accepts
+    /// either form). `None` leaves the column alone.
+    pub assignee: Option<String>,
+    /// New owner. Same nullability shape as `assignee`.
+    pub owner: Option<String>,
+    /// New epic linkage. `Some(String::new())` clears to empty string (schema
+    /// is nullable, so the frontier can map to `NULL` if desired).
+    pub external_ref: Option<String>,
+}
+
+impl IssuePatch {
+    /// True when no field is set — the caller has nothing to patch, which the
+    /// frontier should treat as `Validation` rather than emitting a no-op
+    /// `UPDATE issues SET WHERE id = ?` (parses as a syntax error).
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.description.is_none()
+            && self.design.is_none()
+            && self.acceptance_criteria.is_none()
+            && self.notes.is_none()
+            && self.priority.is_none()
+            && self.issue_type.is_none()
+            && self.assignee.is_none()
+            && self.owner.is_none()
+            && self.external_ref.is_none()
+    }
+}
+
 /// Insert payload for [`DoltIssues::insert`] (hq-mcp-issues.2). Mirrors the
 /// required columns of `hq.issues`; the optional fields fall back to schema
 /// defaults so callers only have to supply what the bead's design lists as
@@ -168,6 +218,100 @@ impl DoltIssues {
         // here is fatal — the INSERT already landed in the working set and
         // would be picked up by the next commit silently.
         let commit_msg = format!("create {}", row.id);
+        conn.exec_drop(
+            "CALL DOLT_COMMIT('-A', '-m', :msg)",
+            mysql_async::params! {
+                "msg" => commit_msg,
+            },
+        )
+        .await
+        .map_err(map_err)?;
+
+        Ok(())
+    }
+
+    /// Apply a partial patch to an existing row in `hq.issues` and stamp the
+    /// change as a Dolt commit (hq-mcp-issues.3). Returns `AppError::NotFound`
+    /// when no row matches `id` so the frontier can translate to a clean MCP
+    /// `not found`.
+    ///
+    /// `updated_at = NOW()` is always set so dashboards reorder the row.
+    /// `IssuePatch::is_empty` is the caller's responsibility — passing an empty
+    /// patch here produces an `UPDATE ... SET updated_at = NOW() WHERE id = :id`,
+    /// which is wasted churn; the frontier validates before delegating.
+    pub async fn update(&self, id: &str, patch: &IssuePatch) -> Result<(), AppError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+
+        let mut set_parts: Vec<&str> = Vec::new();
+        let mut params_vec: Vec<(String, mysql_async::Value)> =
+            vec![("id".to_string(), mysql_async::Value::from(id.to_string()))];
+
+        if let Some(v) = &patch.title {
+            set_parts.push("title = :title");
+            params_vec.push(("title".to_string(), mysql_async::Value::from(v.clone())));
+        }
+        if let Some(v) = &patch.description {
+            set_parts.push("description = :description");
+            params_vec.push(("description".to_string(), mysql_async::Value::from(v.clone())));
+        }
+        if let Some(v) = &patch.design {
+            set_parts.push("design = :design");
+            params_vec.push(("design".to_string(), mysql_async::Value::from(v.clone())));
+        }
+        if let Some(v) = &patch.acceptance_criteria {
+            set_parts.push("acceptance_criteria = :acceptance_criteria");
+            params_vec.push((
+                "acceptance_criteria".to_string(),
+                mysql_async::Value::from(v.clone()),
+            ));
+        }
+        if let Some(v) = &patch.notes {
+            set_parts.push("notes = :notes");
+            params_vec.push(("notes".to_string(), mysql_async::Value::from(v.clone())));
+        }
+        if let Some(v) = patch.priority {
+            set_parts.push("priority = :priority");
+            params_vec.push(("priority".to_string(), mysql_async::Value::from(v as i32)));
+        }
+        if let Some(v) = &patch.issue_type {
+            set_parts.push("issue_type = :issue_type");
+            params_vec.push(("issue_type".to_string(), mysql_async::Value::from(v.clone())));
+        }
+        if let Some(v) = &patch.assignee {
+            set_parts.push("assignee = :assignee");
+            params_vec.push(("assignee".to_string(), mysql_async::Value::from(v.clone())));
+        }
+        if let Some(v) = &patch.owner {
+            set_parts.push("owner = :owner");
+            params_vec.push(("owner".to_string(), mysql_async::Value::from(v.clone())));
+        }
+        if let Some(v) = &patch.external_ref {
+            set_parts.push("external_ref = :external_ref");
+            params_vec.push((
+                "external_ref".to_string(),
+                mysql_async::Value::from(v.clone()),
+            ));
+        }
+
+        set_parts.push("updated_at = NOW()");
+        let sql = format!(
+            "UPDATE issues SET {} WHERE id = :id",
+            set_parts.join(", "),
+        );
+
+        let result = conn
+            .exec_iter(sql, mysql_async::Params::from(params_vec))
+            .await
+            .map_err(map_err)?;
+        let affected = result.affected_rows();
+        // Drain the result-set handle before issuing the commit on the same conn.
+        let _ = result.drop_result().await.map_err(map_err)?;
+
+        if affected == 0 {
+            return Err(AppError::NotFound(format!("issue {id}")));
+        }
+
+        let commit_msg = format!("update {id}");
         conn.exec_drop(
             "CALL DOLT_COMMIT('-A', '-m', :msg)",
             mysql_async::params! {

@@ -8,7 +8,7 @@
 
 use mysql_async::prelude::Queryable;
 
-use gt_store_dolt::{DoltIssues, IssueFilter, NewIssue};
+use gt_store_dolt::{DoltIssues, IssueFilter, IssuePatch, NewIssue};
 
 const TEST_DB: &str = "gt_rs_issues_test";
 
@@ -188,5 +188,69 @@ async fn insert_commits_atomic() {
         err.to_string().to_lowercase().contains("duplicate")
             || err.to_string().to_lowercase().contains("primary"),
         "expected duplicate-key error, got `{err}`",
+    );
+}
+
+#[tokio::test]
+async fn update_patches_visible_fields_and_commits() {
+    let Ok(base) = std::env::var("GT_DOLT_URL") else {
+        eprintln!("GT_DOLT_URL unset — skipping DoltIssues.update contract");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    seed(&base).await.expect("seed");
+
+    let repo = DoltIssues::connect(&format!("{base}/{TEST_DB}")).expect("connect");
+
+    let id = format!("hq-update-{}", ulid::Ulid::new());
+    let row = NewIssue {
+        id: id.clone(),
+        title: "before".into(),
+        description: "before-desc".into(),
+        design: String::new(),
+        acceptance_criteria: String::new(),
+        notes: String::new(),
+        priority: 2,
+        issue_type: "task".into(),
+        created_by: "test".into(),
+        external_ref: None,
+        assignee: None,
+        owner: None,
+    };
+    repo.insert(&row).await.expect("seed insert");
+
+    let patch = IssuePatch {
+        title: Some("after".into()),
+        priority: Some(0),
+        assignee: Some("alice".into()),
+        notes: Some("patched".into()),
+        ..Default::default()
+    };
+    repo.update(&id, &patch).await.expect("update");
+
+    let rows = repo
+        .list(&IssueFilter {
+            issue_type: Some("task".into()),
+            ..Default::default()
+        })
+        .await
+        .expect("list after update");
+    let row_after = rows
+        .iter()
+        .find(|r| r.id == id)
+        .expect("row should still be present");
+    assert_eq!(row_after.title, "after");
+    assert_eq!(row_after.priority, 0);
+    assert_eq!(row_after.assignee.as_deref(), Some("alice"));
+
+    // Unknown id surfaces a NotFound — the row never existed.
+    let err = repo
+        .update("hq-missing-zzz", &patch)
+        .await
+        .expect_err("missing id must error");
+    assert!(
+        err.to_string().to_lowercase().contains("not found")
+            || err.to_string().to_lowercase().contains("issue hq-missing"),
+        "expected NotFound, got `{err}`",
     );
 }

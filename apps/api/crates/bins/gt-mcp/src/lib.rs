@@ -15,5 +15,5 @@ pub use audit::{AuditEvent, AuditSink, InMemoryAudit, JsonlAudit, Outcome};
 pub use auth::{Scope, ScopeConfig, ScopeSpec};
 pub use service::{
     CreateBead, CreateIssue, IssuesRead, McpService, RegisterAccount, ReportGap, RetireAccount,
-    SessionsRead,
+    SessionsRead, UpdateIssue,
 };

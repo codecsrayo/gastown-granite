@@ -36,7 +36,7 @@ use gt_agent::{
     TransitionSession,
 };
 use gt_beads::{Bead, BeadStatus};
-use gt_store_dolt::{DoltIssues, DoltSessions, IssueFilter, NewIssue};
+use gt_store_dolt::{DoltIssues, DoltSessions, IssueFilter, IssuePatch, NewIssue};
 use gt_merge::{CompleteMerge, FailMerge, MergeCommand, SubmitMerge};
 use gt_orchestration::{CompleteMember, FailMember, LaunchConvoy, OrchCommand};
 use gt_patrol::{CloseLease, Heartbeat, PatrolCommand, RegisterLease, Tick};
@@ -120,6 +120,15 @@ impl IssuesRead {
     pub async fn insert(&self, row: &NewIssue) -> Result<(), AppError> {
         match &self.inner {
             Some(d) => d.insert(row).await,
+            None => Err(AppError::Other("issues backend not wired".into())),
+        }
+    }
+
+    /// Apply a partial patch through to the Dolt backend (hq-mcp-issues.3).
+    /// Mirrors [`Self::insert`]'s unwired-backend behavior.
+    pub async fn update(&self, id: &str, patch: &IssuePatch) -> Result<(), AppError> {
+        match &self.inner {
+            Some(d) => d.update(id, patch).await,
             None => Err(AppError::Other("issues backend not wired".into())),
         }
     }
@@ -386,6 +395,97 @@ impl CreateIssue {
             external_ref: self.external_ref.clone(),
             assignee: self.assignee.clone(),
             owner: self.owner.clone(),
+        }
+    }
+}
+
+/// Input for the `issues.update` tool (hq-mcp-issues.3). Partial patch over the
+/// editable columns of `hq.issues`; status transitions live on the separate
+/// `issues.transition.*` tool (hq-mcp-issues.4) so scope grants stay separable
+/// ("read + edit-fields" vs "transition").
+///
+/// All fields except `id` are `Option`: `None` leaves the column untouched,
+/// `Some(_)` overwrites. At least one field must be set — an empty patch is
+/// rejected at `validate` so the wire surface fails loud instead of silently
+/// touching only `updated_at`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct UpdateIssue {
+    /// Target bead id. Must be non-empty; the row is matched by primary key.
+    pub id: String,
+    /// New title. Empty rejected — schema marks `title` `NOT NULL`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// New description body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// New design notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design: Option<String>,
+    /// New acceptance criteria.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance_criteria: Option<String>,
+    /// New free-form notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    /// New priority `0..=2` (0 = P0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u8>,
+    /// New `issue_type` (`epic`/`task`/`spike`/...). Empty rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue_type: Option<String>,
+    /// New assignee. Empty string clears to canonical "unassigned".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+    /// New owner. Empty string clears.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// New epic linkage. Empty string clears.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_ref: Option<String>,
+}
+
+impl UpdateIssue {
+    /// Shape-only validation. Existence of `id` is checked at execute by the
+    /// `affected_rows == 0` path in `DoltIssues::update`, mirroring the create
+    /// path that defers uniqueness to the DB layer.
+    fn validate(&self) -> Result<(), AppError> {
+        if self.id.is_empty() {
+            return Err(AppError::Validation("issue id is empty".into()));
+        }
+        if matches!(&self.title, Some(s) if s.is_empty()) {
+            return Err(AppError::Validation("title is empty".into()));
+        }
+        if matches!(&self.issue_type, Some(s) if s.is_empty()) {
+            return Err(AppError::Validation("issue_type is empty".into()));
+        }
+        if let Some(p) = self.priority {
+            if p > 2 {
+                return Err(AppError::Validation(format!(
+                    "priority must be 0..=2, got {p}"
+                )));
+            }
+        }
+        let patch = self.to_patch();
+        if patch.is_empty() {
+            return Err(AppError::Validation(
+                "no fields set; nothing to update".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn to_patch(&self) -> IssuePatch {
+        IssuePatch {
+            title: self.title.clone(),
+            description: self.description.clone(),
+            design: self.design.clone(),
+            acceptance_criteria: self.acceptance_criteria.clone(),
+            notes: self.notes.clone(),
+            priority: self.priority,
+            issue_type: self.issue_type.clone(),
+            assignee: self.assignee.clone(),
+            owner: self.owner.clone(),
+            external_ref: self.external_ref.clone(),
         }
     }
 }
@@ -979,6 +1079,75 @@ impl McpService {
         Parameters(args): Parameters<CreateIssue>,
     ) -> Result<CallToolResult, McpError> {
         self.run_create_issue("issues.create.execute", args, false).await
+    }
+
+    /// Scope check + (validate | UPDATE + DOLT_COMMIT) + audit for `issues.update`
+    /// (hq-mcp-issues.3). Sibling of [`Self::run_create_issue`]: also bypasses the
+    /// bus because the patch lands in Dolt without traversing any domain actor.
+    /// `NotFound` from the backend surfaces verbatim through the audit row so
+    /// dashboards can flag misaddressed updates.
+    pub async fn run_update_issue(
+        &self,
+        tool: &str,
+        args: UpdateIssue,
+        validate_only: bool,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let json = serde_json::to_value(&args).expect("UpdateIssue is Serialize");
+        let domain_result = if validate_only {
+            args.validate()
+        } else {
+            match args.validate() {
+                Ok(()) => self.inner.issues.update(&args.id, &args.to_patch()).await,
+                Err(e) => Err(e),
+            }
+        };
+
+        let outcome = match &domain_result {
+            Ok(()) => Outcome::Ok,
+            Err(e) => Outcome::Failed { error: e.to_string() },
+        };
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments: json,
+            outcome,
+        });
+
+        match domain_result {
+            Ok(()) => Ok(CallToolResult::success(vec![Content::text("ok")])),
+            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "issues.update.validate",
+        description = "Check whether patching hq.issues fields (title/description/design/acceptance_criteria/notes/priority/issue_type/assignee/owner/external_ref) would be accepted. Empty patch rejected. No state change."
+    )]
+    async fn issues_update_validate(
+        &self,
+        Parameters(args): Parameters<UpdateIssue>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_update_issue("issues.update.validate", args, true).await
+    }
+
+    #[tool(
+        name = "issues.update.execute",
+        description = "Patch editable hq.issues columns + atomic Dolt commit. Status transitions go through issues.transition.*."
+    )]
+    async fn issues_update_execute(
+        &self,
+        Parameters(args): Parameters<UpdateIssue>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_update_issue("issues.update.execute", args, false).await
     }
 
     /// Patrol-domain shim around [`Self::run_command`] (hq-fe-api-w.1). The lease tracker

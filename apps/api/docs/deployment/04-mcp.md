@@ -15,7 +15,10 @@ el protocolo MCP (rmcp) en vez de HTTP-REST.
 - **Tools** — pares `validate` / `execute` por dominio:
   `agent.*`, `merge.*`, `orch.launch_convoy.*`, `patrol.*`, `quota.probe.*`, `rig.*`,
   `issues.create.*` (hq-mcp-issues.2: agent inserta bead en `hq.issues` + atomic
-  `CALL DOLT_COMMIT`; cierra el bypass `docker exec dolt sql`).
+  `CALL DOLT_COMMIT`; cierra el bypass `docker exec dolt sql`),
+  `issues.update.*` (hq-mcp-issues.3: patch parcial de campos editables —
+  title/description/design/acceptance_criteria/notes/priority/issue_type/assignee/
+  owner/external_ref; status cambia via `issues.transition.*`).
   `*.validate` = dry-run (sin cambio de estado); `*.execute` = muta vía el actor o
   (issues / scheduling.create_bead) via el repo Dolt.
 - **Resources** — snapshots `gt://*`: `agent/sessions`, `scheduling/queue`, `patrol/leases`,
