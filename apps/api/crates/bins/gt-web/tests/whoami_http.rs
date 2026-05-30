@@ -178,3 +178,47 @@ async fn whoami_jwt_mode_rejects_token_from_other_signer() {
     tokio::time::sleep(Duration::from_millis(10)).await;
     root.shutdown();
 }
+
+#[tokio::test]
+async fn whoami_jwt_mode_surfaces_rbac_roles_and_scopes() {
+    // hq-fe-rbac.2: the issuer minted a token via `sign_for_actor`, which pulls roles
+    // and flattened scopes from the unified RBAC config. `/api/whoami` forwards them to
+    // the dashboard untouched.
+    let rbac = std::sync::Arc::new(
+        gt_web::RbacConfig::from_toml(
+            r#"
+[actors.claude-host]
+allow = ["*"]
+roles = ["sheriff"]
+
+[roles.sheriff]
+scopes = ["beads.write", "merge.read"]
+"#,
+        )
+        .unwrap(),
+    );
+    let issuer = JwtIssuer::from_secret("k").with_rbac(rbac).shared();
+    let (base, root) = boot(AuthConfig::jwt(issuer.clone())).await;
+    let token = issuer.sign_for_actor("claude-host").unwrap();
+    let client = reqwest::Client::new();
+
+    let body: gt_web::dto::WhoamiDto = client
+        .get(format!("{base}/api/whoami"))
+        .header("authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body.actor, "claude-host");
+    assert_eq!(body.mode, "jwt");
+    assert_eq!(body.roles, vec!["sheriff".to_string()]);
+    assert_eq!(
+        body.scopes,
+        vec!["beads.write".to_string(), "merge.read".to_string()]
+    );
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    root.shutdown();
+}

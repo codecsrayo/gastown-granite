@@ -4,7 +4,7 @@
 
 use std::io::Write;
 
-use gt_mcp::ScopeConfig;
+use gt_mcp::{auth::ResolveScope, ScopeConfig};
 
 fn temp_file(name: &str, body: &str) -> std::path::PathBuf {
     let nanos = std::time::SystemTime::now()

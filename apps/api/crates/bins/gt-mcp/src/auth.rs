@@ -3,16 +3,20 @@
 //!
 //! Patterns are exact or trailing-`*` globs over the dotted tool name (e.g. `agent.*`).
 //!
-//! Scopes are **not hardcoded**: the binary loads a per-actor [`ScopeConfig`] from a TOML or
-//! JSON file (`docs/09-llm-integration.md`). An actor with no entry resolves to a closed
+//! Source of truth: [`gt_rbac::RbacConfig`] (hq-fe-rbac.2). Same TOML/JSON file gt-web
+//! reads to mint JWT `roles` + `scopes`, so an actor's MCP allow-list never drifts from
+//! the dashboard's RBAC view. An actor absent from the config resolves to a closed
 //! scope ([`Scope::denied`]) — deny by default, never admin.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-
-use serde::Deserialize;
+use std::collections::BTreeSet;
 
 use gt_events::AppError;
+pub use gt_rbac::{ActorSpec, RbacConfig};
+
+/// Back-compat alias. Pre-rbac code referred to the config as `ScopeConfig`; gt-mcp's
+/// public surface keeps the name so callers that pin to `gt_mcp::ScopeConfig` keep
+/// compiling while the file format upgrades in place to [`gt_rbac::RbacConfig`].
+pub type ScopeConfig = RbacConfig;
 
 #[derive(Debug, Clone)]
 pub struct Scope {
@@ -52,6 +56,20 @@ impl Scope {
         }
     }
 
+    /// Build a `Scope` from the unified RBAC config (hq-fe-rbac.2). Unknown actors
+    /// fold to [`Scope::denied`] so the deny-by-default posture pre-rbac is preserved
+    /// bit-for-bit.
+    pub fn from_rbac(cfg: &RbacConfig, actor: &str) -> Self {
+        match cfg.actor(actor) {
+            Some(spec) => Self {
+                actor: actor.to_string(),
+                allow: spec.allow.clone(),
+                validate_only: spec.validate_only,
+            },
+            None => Self::denied(actor),
+        }
+    }
+
     /// Returns `Ok` if the scope grants this `tool` and the action variant
     /// (`.validate` vs `.execute`) is permitted.
     pub fn check(&self, tool: &str) -> Result<(), AppError> {
@@ -82,64 +100,16 @@ fn matches_pattern(pattern: &str, name: &str) -> bool {
     pattern == name
 }
 
-/// One actor's grant in the config file.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct ScopeSpec {
-    /// Tool patterns the actor may call (exact or trailing-`*` glob). Empty = deny all.
-    #[serde(default)]
-    pub allow: BTreeSet<String>,
-    /// If true, the actor may only call `*.validate` tools.
-    #[serde(default)]
-    pub validate_only: bool,
+/// Convenience trait — `cfg.resolve(actor)` on the unified config returns the gt-mcp
+/// `Scope` directly. Kept as a trait (rather than an inherent method on `RbacConfig`)
+/// so the kernel crate has no knowledge of `Scope`; the bridge lives entirely here.
+pub trait ResolveScope {
+    fn resolve(&self, actor: &str) -> Scope;
 }
 
-/// Per-actor scope configuration, loaded from TOML or JSON. There is **no admin default**:
-/// an actor absent from the table resolves to [`Scope::denied`].
-///
-/// ```toml
-/// [actors.max]
-/// allow = ["*"]
-///
-/// [actors.watcher]
-/// allow = ["*.sessions", "replay"]
-/// validate_only = true
-/// ```
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct ScopeConfig {
-    #[serde(default)]
-    actors: BTreeMap<String, ScopeSpec>,
-}
-
-impl ScopeConfig {
-    pub fn from_toml(s: &str) -> Result<Self, AppError> {
-        toml::from_str(s).map_err(|e| AppError::Validation(format!("scope config (toml): {e}")))
-    }
-
-    pub fn from_json(s: &str) -> Result<Self, AppError> {
-        serde_json::from_str(s).map_err(|e| AppError::Validation(format!("scope config (json): {e}")))
-    }
-
-    /// Load from a file, choosing the parser by extension (`.json` → JSON, otherwise TOML).
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, AppError> {
-        let path = path.as_ref();
-        let raw = std::fs::read_to_string(path)
-            .map_err(|e| AppError::Other(format!("read scope config {}: {e}", path.display())))?;
-        match path.extension().and_then(|e| e.to_str()) {
-            Some("json") => Self::from_json(&raw),
-            _ => Self::from_toml(&raw),
-        }
-    }
-
-    /// Resolve the scope for `actor`. Unknown actor → [`Scope::denied`] (deny by default).
-    pub fn resolve(&self, actor: &str) -> Scope {
-        match self.actors.get(actor) {
-            Some(spec) => Scope {
-                actor: actor.to_string(),
-                allow: spec.allow.clone(),
-                validate_only: spec.validate_only,
-            },
-            None => Scope::denied(actor),
-        }
+impl ResolveScope for RbacConfig {
+    fn resolve(&self, actor: &str) -> Scope {
+        Scope::from_rbac(self, actor)
     }
 }
 
@@ -199,7 +169,7 @@ validate_only = true
 } }
 "#;
 
-    fn assert_resolves(cfg: &ScopeConfig) {
+    fn assert_resolves(cfg: &RbacConfig) {
         // max: full admin via "*".
         let max = cfg.resolve("max");
         assert!(!max.validate_only);
@@ -219,13 +189,33 @@ validate_only = true
 
     #[test]
     fn toml_and_json_configs_resolve_per_actor() {
-        assert_resolves(&ScopeConfig::from_toml(TOML_CFG).unwrap());
-        assert_resolves(&ScopeConfig::from_json(JSON_CFG).unwrap());
+        assert_resolves(&RbacConfig::from_toml(TOML_CFG).unwrap());
+        assert_resolves(&RbacConfig::from_json(JSON_CFG).unwrap());
     }
 
     #[test]
     fn empty_config_denies_all_actors() {
-        let cfg = ScopeConfig::default();
+        let cfg = RbacConfig::default();
         assert!(cfg.resolve("anyone").check("agent.add.validate").is_err());
+    }
+
+    #[test]
+    fn unified_config_with_roles_block_still_resolves_mcp_scope() {
+        // Schema upgrade: same file now carries `[roles.*]`. gt-mcp must ignore the
+        // role table and resolve MCP scope purely from `[actors.*]`.
+        let cfg = RbacConfig::from_toml(
+            r#"
+[actors.claude-host]
+allow = ["*"]
+roles = ["sheriff"]
+
+[roles.sheriff]
+scopes = ["beads.write"]
+"#,
+        )
+        .unwrap();
+        let scope = cfg.resolve("claude-host");
+        scope.check("agent.add.execute").unwrap();
+        scope.check("scheduling.enqueue.execute").unwrap();
     }
 }

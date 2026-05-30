@@ -80,12 +80,37 @@ fn main() {
         //   2. GT_WEB_TOKEN       → AuthConfig::Bearer (single shared secret, legacy)
         //   3. GT_WEB_AUTH=disabled → AuthConfig::Open (dev only, loud warning)
         // Anything else exits non-zero so a misconfigured deploy never lands an open API.
+        // Optional unified RBAC config (hq-fe-rbac.2). Same file gt-mcp reads for its
+        // tool allow-list; gt-web uses it to mint per-actor JWT roles/scopes. Reuses the
+        // `GT_MCP_SCOPE_CONFIG` env var when set so a deploy can point both bins at the
+        // same path without a second variable.
+        let rbac = std::env::var("GT_WEB_RBAC_CONFIG")
+            .or_else(|_| std::env::var("GT_MCP_SCOPE_CONFIG"))
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(|path| match gt_web::RbacConfig::load(&path) {
+                Ok(cfg) => {
+                    eprintln!("[gt-web] rbac config loaded from {path}");
+                    Arc::new(cfg)
+                }
+                Err(e) => {
+                    eprintln!("[gt-web] refusing to start: rbac config {path}: {e}");
+                    std::process::exit(2);
+                }
+            });
+
         let auth = if let Some(secret) = std::env::var("GT_WEB_JWT_SECRET")
             .ok()
             .filter(|s| !s.is_empty())
         {
-            eprintln!("[gt-web] auth: jwt (HS256, GT_WEB_JWT_SECRET)");
-            AuthConfig::jwt(JwtIssuer::from_secret(secret).shared())
+            let mut issuer = JwtIssuer::from_secret(secret);
+            if let Some(cfg) = rbac.clone() {
+                issuer = issuer.with_rbac(cfg);
+                eprintln!("[gt-web] auth: jwt (HS256, GT_WEB_JWT_SECRET) + rbac config");
+            } else {
+                eprintln!("[gt-web] auth: jwt (HS256, GT_WEB_JWT_SECRET); no rbac config bound");
+            }
+            AuthConfig::jwt(issuer.shared())
         } else if let Some(token) = std::env::var("GT_WEB_TOKEN").ok().filter(|s| !s.is_empty()) {
             eprintln!("[gt-web] auth: bearer (legacy GT_WEB_TOKEN)");
             AuthConfig::bearer(token)

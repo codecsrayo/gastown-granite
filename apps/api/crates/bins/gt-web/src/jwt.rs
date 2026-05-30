@@ -34,6 +34,8 @@ use jsonwebtoken::{
 };
 use serde::{Deserialize, Serialize};
 
+use gt_rbac::RbacConfig;
+
 /// Default token lifetime when the issuer is built without an explicit TTL. Sized to a
 /// dashboard session: short enough that a revoked actor stops working within an hour,
 /// long enough that an operator does not re-auth between coffee breaks.
@@ -72,12 +74,17 @@ pub struct Claims {
 /// Issuer + verifier built around a single HS256 secret. Held by `AuthConfig::Jwt` and
 /// cloned per request via the surrounding `Arc`; both keys are owned `Vec<u8>` copies of
 /// the same secret bytes so cloning is cheap (`Arc` does the sharing).
+///
+/// The optional `rbac` is the unified [`gt_rbac::RbacConfig`] (hq-fe-rbac.2). When set,
+/// [`JwtIssuer::sign_for_actor`] looks up the actor's `roles` + flattened `scopes` from
+/// the same file gt-mcp uses for its tool allow-list — no second roles.toml to drift.
 #[derive(Clone)]
 pub struct JwtIssuer {
     encoding: EncodingKey,
     decoding: DecodingKey,
     validation: Validation,
     ttl: Duration,
+    rbac: Option<Arc<RbacConfig>>,
 }
 
 /// Failure modes the verifier surfaces. `Expired` is split out so the audit log can
@@ -94,6 +101,8 @@ pub enum JwtError {
     Malformed(String),
     #[error("issuer mismatch")]
     WrongIssuer,
+    #[error("issuer has no RBAC config bound")]
+    NoRbac,
     #[error("jwt: {0}")]
     Other(String),
 }
@@ -118,7 +127,16 @@ impl JwtIssuer {
             decoding: DecodingKey::from_secret(bytes),
             validation,
             ttl,
+            rbac: None,
         }
+    }
+
+    /// Attach the unified RBAC config (hq-fe-rbac.2). Enables [`JwtIssuer::sign_for_actor`];
+    /// existing call sites that use [`JwtIssuer::sign`] with explicit roles/scopes are
+    /// unaffected.
+    pub fn with_rbac(mut self, rbac: Arc<RbacConfig>) -> Self {
+        self.rbac = Some(rbac);
+        self
     }
 
     /// Wrap the issuer in an `Arc`. Convenience for handing it to `AuthConfig::Jwt` —
@@ -127,8 +145,16 @@ impl JwtIssuer {
         Arc::new(self)
     }
 
+    /// Returns the bound RBAC config if any. Exposed for routes that want to pre-flight
+    /// an actor's grant before minting (e.g. a future `POST /api/login` that rejects an
+    /// actor with no role assignments).
+    pub fn rbac(&self) -> Option<&RbacConfig> {
+        self.rbac.as_deref()
+    }
+
     /// Mint a token for an actor. `roles` and `scopes` are stamped verbatim; the issuer
-    /// does not consult `roles.toml` (that is the caller's job once it exists).
+    /// does not consult [`gt_rbac::RbacConfig`] here — use [`JwtIssuer::sign_for_actor`]
+    /// for that path so the single source of truth flows through.
     pub fn sign(
         &self,
         subject: impl Into<String>,
@@ -146,6 +172,19 @@ impl JwtIssuer {
         };
         encode(&Header::new(Algorithm::HS256), &claims, &self.encoding)
             .map_err(|e| JwtError::Other(e.to_string()))
+    }
+
+    /// Mint a token for `actor`, pulling roles + flattened scopes from the bound
+    /// [`gt_rbac::RbacConfig`]. Requires the issuer to have been built with
+    /// [`JwtIssuer::with_rbac`]; otherwise returns [`JwtError::NoRbac`] so the caller
+    /// can fall back to [`JwtIssuer::sign`] with explicit claim values.
+    pub fn sign_for_actor(&self, actor: impl Into<String>) -> Result<String, JwtError> {
+        let Some(rbac) = self.rbac.as_ref() else {
+            return Err(JwtError::NoRbac);
+        };
+        let actor = actor.into();
+        let grant = rbac.web_grant(&actor);
+        self.sign(actor, grant.roles, grant.scopes)
     }
 
     /// Verify a token against the issuer's secret. Returns the typed claims on success
@@ -230,6 +269,53 @@ mod tests {
         let issuer = JwtIssuer::from_secret("k");
         let err = issuer.verify("not-a-jwt").unwrap_err();
         assert!(matches!(err, JwtError::Malformed(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn sign_for_actor_pulls_roles_scopes_from_rbac() {
+        let rbac = Arc::new(
+            RbacConfig::from_toml(
+                r#"
+[actors.claude-host]
+allow = ["*"]
+roles = ["sheriff"]
+
+[roles.sheriff]
+scopes = ["beads.write", "merge.read"]
+"#,
+            )
+            .unwrap(),
+        );
+        let issuer = JwtIssuer::from_secret("k").with_rbac(rbac);
+        let token = issuer.sign_for_actor("claude-host").unwrap();
+        let claims = issuer.verify(&token).unwrap();
+        assert_eq!(claims.sub, "claude-host");
+        assert_eq!(claims.roles, vec!["sheriff".to_string()]);
+        assert_eq!(
+            claims.scopes,
+            vec!["beads.write".to_string(), "merge.read".to_string()]
+        );
+    }
+
+    #[test]
+    fn sign_for_actor_without_rbac_returns_no_rbac() {
+        let issuer = JwtIssuer::from_secret("k");
+        let err = issuer.sign_for_actor("anyone").unwrap_err();
+        assert!(matches!(err, JwtError::NoRbac), "got {err:?}");
+    }
+
+    #[test]
+    fn sign_for_unknown_actor_mints_empty_grant_token() {
+        // Deny-by-default does not apply at issuance — gt-web's posture is "actor
+        // identified, but no roles/scopes in config." A future login route may reject
+        // empty grants; the issuer itself stays mechanical.
+        let rbac = Arc::new(RbacConfig::default());
+        let issuer = JwtIssuer::from_secret("k").with_rbac(rbac);
+        let token = issuer.sign_for_actor("ghost").unwrap();
+        let claims = issuer.verify(&token).unwrap();
+        assert_eq!(claims.sub, "ghost");
+        assert!(claims.roles.is_empty());
+        assert!(claims.scopes.is_empty());
     }
 
     #[test]

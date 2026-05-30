@@ -1,0 +1,19 @@
+[package]
+name = "gt-rbac"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+# Unified RBAC config shared by gt-mcp (per-actor tool allow-list) and gt-web (per-actor
+# JWT roles + scopes). One TOML/JSON file, two consumers — hq-fe-rbac.2 closes the
+# "two sources of truth" gap between mcp-scope.toml and a planned roles.toml.
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+gt-events = { path = "../gt-events" }
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+thiserror.workspace = true

@@ -28,6 +28,9 @@ gt-agent = { path = "../../domain/lifecycle/gt-agent" }
 gt-merge = { path = "../../domain/orchestration/gt-merge" }
 gt-patrol = { path = "../../domain/orchestration/gt-patrol" }
 gt-orchestration = { path = "../../domain/orchestration/gt-orchestration" }
+# hq-fe-rbac.2 — unified RBAC config (shared with gt-mcp). Used by JwtIssuer to
+# stamp roles/scopes onto minted tokens from a single source of truth.
+gt-rbac = { path = "../../kernel/gt-rbac" }
 # hq-fe-api-w.6: DELETE /api/sessions/:id wraps `gt_polecat::Tmux` for the tmux kill.
 gt-polecat = { path = "../../domain/lifecycle/gt-polecat" }
 # hq-fe-api-w.10: POST /api/quota/accounts/:n/{rotate,retire} dispatches QuotaCommand.

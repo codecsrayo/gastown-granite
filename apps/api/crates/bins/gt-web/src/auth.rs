@@ -134,7 +134,9 @@ fn jwt_audit_reason(err: &JwtError) -> &'static str {
         JwtError::InvalidSignature => "invalid jwt signature",
         JwtError::Malformed(_) => "malformed jwt",
         JwtError::WrongIssuer => "jwt issuer mismatch",
-        JwtError::Other(_) => "invalid jwt",
+        // `NoRbac` is an issuance-side error (sign_for_actor without bound config); the
+        // verifier path never produces it. Folded into the catch-all for completeness.
+        JwtError::NoRbac | JwtError::Other(_) => "invalid jwt",
     }
 }
 

@@ -14,7 +14,7 @@ pub mod service;
 pub mod taxonomy;
 
 pub use audit::{AuditEvent, AuditSink, InMemoryAudit, JsonlAudit, Outcome};
-pub use auth::{Scope, ScopeConfig, ScopeSpec};
+pub use auth::{ActorSpec, RbacConfig, ResolveScope, Scope, ScopeConfig};
 pub use service::{
     CloseIssue, CreateBead, CreateIssue, IssuesRead, McpService, RegisterAccount, ReportGap,
     RetireAccount, SessionsRead, TransitionIssue, UpdateIssue,

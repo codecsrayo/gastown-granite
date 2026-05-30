@@ -22,7 +22,9 @@ use gt_store_pg::PgAudit;
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 
 use gt_mcp::{
-    audit::AuditSink, auth::Scope, IssuesRead, JsonlAudit, McpService, ScopeConfig, SessionsRead,
+    audit::AuditSink,
+    auth::{ResolveScope, Scope},
+    IssuesRead, JsonlAudit, McpService, ScopeConfig, SessionsRead,
 };
 
 #[tokio::main]

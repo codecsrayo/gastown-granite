@@ -37,6 +37,9 @@ use gt_merge::MergeRepository;
 pub use audit::{InMemoryWebAudit, JsonlWebAudit, WebAuditEvent, WebAuditSink};
 pub use auth::{Actor, AuthClaims, AuthConfig, AuthLayer};
 pub use jwt::{Claims, JwtError, JwtIssuer, DEFAULT_TTL, ISSUER};
+// hq-fe-rbac.2 — re-export the unified RBAC config so callers (tests, future login
+// route) don't have to depend on gt-rbac directly.
+pub use gt_rbac::{ActorSpec, RbacConfig, RoleSpec, WebGrant};
 pub use health::{HydrationHandle, ReadinessGate, ReadinessGateBuilder};
 pub use idempotency::{idempotency_middleware, IdempotencyStore};
 pub use rate_limit::{rate_limit_middleware, RateLimitStore};

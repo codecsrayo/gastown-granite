@@ -14,6 +14,9 @@ members = [
     "crates/kernel/gt-telemetry",
     "crates/kernel/gt-store-dolt",
     "crates/kernel/gt-store-pg",
+    # hq-fe-rbac.2 — unified RBAC config (per-actor MCP allow-list + per-actor JWT
+    # roles/scopes). Replaces gt-mcp's standalone ScopeConfig + the planned `roles.toml`.
+    "crates/kernel/gt-rbac",
     "crates/domain/lifecycle/gt-agent",
     "crates/domain/orchestration/gt-scheduling",
     "crates/domain/orchestration/gt-patrol",

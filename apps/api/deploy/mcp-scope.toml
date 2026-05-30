@@ -1,6 +1,27 @@
-# gt-mcp per-actor scope. No hardcoded admin: an actor absent here is denied.
-# `mcp-local` (the default GT_MCP_ACTOR) gets full access for development/testing.
-# Tighten per-actor (e.g. allow = ["scheduling.*", "patrol.tick.execute"]) before any
-# multi-client / production exposure — `*` grants every execute tool.
+# Unified RBAC config (hq-fe-rbac.2). Sourced by:
+#   - gt-mcp: per-actor MCP tool allow-list (`[actors.*].allow`/`validate_only`).
+#   - gt-web: per-actor JWT roles + scopes (`[actors.*].roles` + `[roles.*].scopes`).
+# Both bins read this file (env var `GT_MCP_SCOPE_CONFIG` for gt-mcp;
+# `GT_WEB_RBAC_CONFIG` or the same `GT_MCP_SCOPE_CONFIG` for gt-web), so a deploy never
+# splits "who can call which MCP tool" from "what scopes ride in this actor's JWT".
+#
+# Deny-by-default: an actor absent from `[actors.*]` resolves to a closed MCP scope and
+# an empty JWT grant. There is no hardcoded admin — tighten or relax per actor below
+# before any multi-client / production exposure.
+
 [actors.mcp-local]
+# Default GT_MCP_ACTOR for local development; full MCP access. No roles attached so
+# the matching JWT (when issued) carries no scopes — dev override happens via
+# GT_WEB_AUTH=disabled, not via this entry.
 allow = ["*"]
+
+# --- Sample non-admin actor + role bundle (commented for opt-in). -------------------
+# [actors.claude-host]
+# allow = ["scheduling.*", "patrol.tick.execute", "issues.*"]
+# roles = ["sheriff"]
+#
+# [roles.sheriff]
+# scopes = ["beads.write", "merge.read", "merge.submit"]
+#
+# [roles.reader]
+# scopes = ["beads.read", "merge.read"]
