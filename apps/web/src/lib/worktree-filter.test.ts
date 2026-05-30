@@ -13,6 +13,8 @@ function mk(overrides: Partial<Worktree>): Worktree {
     ahead: 0,
     behind: 0,
     dirty: [],
+    head_subject: null,
+    head_author: null,
     ...overrides,
   };
 }

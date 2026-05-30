@@ -133,6 +133,14 @@ pub struct WorktreeDto {
     pub behind: u32,
     /// Working-tree changes (porcelain v2 lines), one entry per dirty path. Empty when clean.
     pub dirty: Vec<DirtyFileDto>,
+    /// Subject line of the HEAD commit (`git log -1 --format=%s`). `None` when the worktree
+    /// has no commits or the lookup failed — the row still renders, just without the hint.
+    /// hq-fe-api-r.10.
+    pub head_subject: Option<String>,
+    /// Author name of the HEAD commit (`git log -1 --format=%an`). Same nullability rule as
+    /// `head_subject`; the two are populated by the same `git log` call so they're either
+    /// both present or both absent.
+    pub head_author: Option<String>,
 }
 
 /// One dirty path inside a worktree. Mirrors `git status --porcelain=v2` shape — the `xy`

@@ -17,4 +17,9 @@ export interface Worktree {
   ahead: number;
   behind: number;
   dirty: DirtyFile[];
+  // hq-fe-api-r.10: HEAD commit context — surfaced under the branch line in the panel so the
+  // operator can read "what was last done here" without opening the repo. Both fields are
+  // populated from the same `git log -1 --format=%s%n%an` call; null when HEAD is unreadable.
+  head_subject: string | null;
+  head_author: string | null;
 }

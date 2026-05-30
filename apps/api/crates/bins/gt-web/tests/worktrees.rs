@@ -203,4 +203,11 @@ async fn lists_main_and_worktree_with_dirty_and_divergence() {
         .find(|d| d.path == "loose.txt")
         .unwrap();
     assert_eq!(untracked.xy, "??");
+
+    // hq-fe-api-r.10: HEAD commit subject + author surfaced per row. The fixture commit on
+    // the branch worktree is "add tracked"; the test git config sets author name to "test".
+    assert_eq!(branch_row.head_subject.as_deref(), Some("add tracked"));
+    assert_eq!(branch_row.head_author.as_deref(), Some("test"));
+    assert_eq!(main_row.head_subject.as_deref(), Some("init"));
+    assert_eq!(main_row.head_author.as_deref(), Some("test"));
 }

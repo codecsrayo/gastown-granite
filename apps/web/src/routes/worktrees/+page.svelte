@@ -188,6 +188,19 @@
           </span>
         </button>
 
+        {#if wt.head_subject}
+          <p
+            class="ml-16 mt-1 truncate text-xs"
+            style="color: var(--ink-faint)"
+            title={wt.head_subject}
+          >
+            <span style="color: var(--ink-soft)">{wt.head_subject}</span>
+            {#if wt.head_author}
+              <span class="ml-2">— {wt.head_author}</span>
+            {/if}
+          </p>
+        {/if}
+
         {#if open && wt.dirty.length > 0}
           <ul class="mt-2 ml-16 space-y-1 text-xs">
             {#each wt.dirty as f (f.path)}
