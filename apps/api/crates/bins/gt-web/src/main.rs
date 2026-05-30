@@ -48,9 +48,9 @@ use gt_store_dolt::{DoltBeads, DoltMerge, DoltOrch, DoltPatrol, DoltSessions};
 use gt_store_pg::PgAudit;
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 use gt_web::{
-    router, AppState, AuthConfig, JsonlWebAudit, ReadinessGate, ReadinessGateBuilder,
-    WebAuditSink,
+    AppState, AuthConfig, JsonlWebAudit, ReadinessGate, ReadinessGateBuilder, WebAuditSink,
 };
+
 
 fn main() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -260,7 +260,15 @@ async fn serve<R, SQ, MR, PR, OR>(
         town_root,
     };
 
-    let app = router(state, auth, audit, gate);
+    // Idempotency-Key cache (hq-fe-api-w.2). TTL overridable via
+    // `GT_WEB_IDEMPOTENCY_TTL_SECS`; the bead pins the default at 10 minutes.
+    let idem_ttl = std::env::var("GT_WEB_IDEMPOTENCY_TTL_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(gt_web::idempotency::DEFAULT_TTL);
+    let idem_store = gt_web::IdempotencyStore::new(idem_ttl, gt_web::idempotency::DEFAULT_MAX_ENTRIES);
+    let app = gt_web::router_with_idempotency(state, auth, audit, gate, idem_store);
     let listener = tokio::net::TcpListener::bind(bind).await.expect("bind gt-web");
     eprintln!(
         "[gt-web] up on {bind} — event log: {}",

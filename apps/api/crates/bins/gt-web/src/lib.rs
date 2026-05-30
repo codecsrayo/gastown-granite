@@ -16,6 +16,7 @@ pub mod audit;
 pub mod auth;
 pub mod dto;
 pub mod health;
+pub mod idempotency;
 pub mod routes;
 pub mod state;
 pub mod stream;
@@ -31,6 +32,7 @@ use gt_beads::BeadRepository;
 pub use audit::{InMemoryWebAudit, JsonlWebAudit, WebAuditEvent, WebAuditSink};
 pub use auth::{AuthConfig, AuthLayer};
 pub use health::{HydrationHandle, ReadinessGate, ReadinessGateBuilder};
+pub use idempotency::{idempotency_middleware, IdempotencyStore};
 pub use state::AppState;
 
 /// Build the router around an [`AppState`].
@@ -54,6 +56,23 @@ where
     R: BeadRepository + Send + Sync + 'static,
     SQ: SessionQueries + Send + Sync + 'static,
 {
+    router_with_idempotency(state, auth, audit, readiness, IdempotencyStore::with_defaults())
+}
+
+/// `router` variant that lets the caller inject a pre-built idempotency store. Production
+/// boot in `main.rs` uses [`router`]; tests reuse this so they can run with a tighter TTL
+/// or assert directly on the cache state.
+pub fn router_with_idempotency<R, SQ>(
+    state: AppState<R, SQ>,
+    auth: AuthConfig,
+    audit: Arc<dyn WebAuditSink>,
+    readiness: ReadinessGate,
+    idempotency: IdempotencyStore,
+) -> Router
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
     let layer = AuthLayer { config: auth, audit };
     let api = Router::new()
         .route("/api/sessions", get(routes::list_sessions::<R, SQ>))
@@ -62,6 +81,13 @@ where
         .route("/api/nudge", post(routes::nudge::<R, SQ>))
         .route("/api/stream", get(routes::stream::<R, SQ>))
         .with_state(state)
+        // Idempotency-Key middleware (hq-fe-api-w.2). Layered between routes and auth so
+        // an unauthorised retry never poisons the cache (auth runs first); replays still
+        // re-enter the auth middleware so revoked tokens fail every retry.
+        .layer(axum::middleware::from_fn_with_state(
+            idempotency,
+            idempotency_middleware,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             layer,
             auth::auth_middleware,

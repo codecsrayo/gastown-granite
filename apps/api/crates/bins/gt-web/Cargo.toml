@@ -45,3 +45,6 @@ sha2 = "0.10"
 ulid.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
 tokio = { workspace = true, features = ["signal", "net", "macros", "rt-multi-thread"] }
+# `tower::ServiceExt::oneshot` is the standard way to exercise an `axum::Router` in
+# isolation without binding to a port (hq-fe-api-w.2 idempotency middleware tests).
+tower = { version = "0.5", features = ["util"] }
