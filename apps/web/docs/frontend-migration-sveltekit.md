@@ -67,7 +67,7 @@ Docs hermanos (lectura obligada antes de tocar nada):
 | **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
 | **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | PLANEADO · spike obligatorio |
 | **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | PLANEADO |
-| **hq-fe-view** | Vistas + componentes (UI) | 14 | hq-fe-build + hq-fe-api-r | PLANEADO |
+| **hq-fe-view** | Vistas + componentes (UI) | 14 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.14 merged |
 | **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | PLANEADO |
 | **hq-mcp-issues** | MCP `issues.*` CRUD (cerrar bypass docker exec) | 5 | hq-fe-api-w.1 | PLANEADO |
 | **hq-mcp-onboard** | MCP agent onboarding + discoverability (slogan-feedback gaps) | 10 | parcial hq-mcp-issues.2 + hq-fe-api-w.1 | DONE · claude-host-onboard |
@@ -159,6 +159,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-api-r.5 | `GET /api/feed?since=` activity histórico | P2 | open | — | PG projection |
 | hq-fe-api-r.6 | `?rig=` filter en `/api/sessions` | P2 | open | — | trivial, junto con r.1 |
 | hq-fe-api-r.7 | `GET /api/mayor/status` ATTACHED/DETACHED | P3 | open | — | semántica TBD con mayor |
+| hq-fe-api-r.8 | `GET /api/worktrees` snapshot (live branch tracking) | P1 | merged (open until issues.transition) | claude-host | shell `git worktree list` + `status --porcelain=v2` + `rev-list main...HEAD`; backs hq-fe-view.14 |
 
 ### Epic `hq-fe-api-w` — write-side commands
 
