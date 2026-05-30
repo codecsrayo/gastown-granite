@@ -1,12 +1,39 @@
 # Agent onboarding — Gas Town MCP
 
-> **Estado:** WIP · primera sección landed por `hq-mcp-onboard.1`.
-> Doc canónica consolidada en `hq-mcp-onboard.9`. Las secciones se rellenan
-> conforme cierran los beads `.1`–`.5`.
+> **Estado:** consolidado por `hq-mcp-onboard.9` (`.1`–`.6`, `.10` cerrados).
+> `.7` (tool `help`) y `.8` (tool `report_gap`) pendientes — sus secciones
+> aterrizan cuando los tools shipen.
 
 Esta guía cubre lo que un agente nuevo necesita saber para operar en Gas Town
-vía MCP: descubrir tools, leer estado, mutar, y reportar huecos. Si algo no
-está aquí, probablemente todavía es un bead abierto en `hq-mcp-onboard`.
+vía MCP: descubrir tools, leer estado, mutar, reportar huecos, y mantener
+memoria sana entre sesiones. Si algo no está aquí y no parece derivable, es
+un hueco — ver §4.
+
+## Punto de entrada rápido
+
+Si vienes fresco a Gas Town y solo tienes 60 segundos:
+
+1. Todo lo que un agente puede *hacer* y *leer* en Gas Town pasa por el
+   server MCP `gt-mcp` en `http://127.0.0.1:8765/mcp`. No hay APIs paralelas.
+2. Discovery: `ToolSearch` (in-session) o `gt-mcp-cli tools` (CLI). Recursos:
+   `ListMcpResourcesTool` / `ReadMcpResourceTool` o `gt-mcp-cli resources`.
+3. Mutaciones son `<dominio>.<accion>.execute` (con validate opcional).
+   Runtime los expone como `mcp__gt-mcp__<dominio>_<accion>_<fase>`.
+4. Si el tool no existe: **abre bead**, no bypasses por `docker exec`.
+5. Operador (humano) tiene escape hatch; tú no.
+
+El resto del doc desarrolla cada uno de esos puntos.
+
+## Índice
+
+- [1. Descubrir tools y recursos](#1-descubrir-tools-y-recursos-hq-mcp-onboard1)
+- [2. Patrón validate → execute y convención `.` ↔ `_`](#2-patrón-validate--execute-y-convención---_-hq-mcp-onboard2)
+- [3. Why-rationale: por qué todo pasa por MCP](#3-why-rationale-por-qué-todo-pasa-por-mcp-hq-mcp-onboard3)
+- [4. Gap discipline: qué hacer cuando el tool no existe](#4-gap-discipline-qué-hacer-cuando-el-tool-no-existe-hq-mcp-onboard4)
+- [5. In-session vs out-of-session](#5-in-session-vs-out-of-session-hq-mcp-onboard5)
+- [6. Memory frontmatter: version/status field](#6-memory-frontmatter-versionstatus-field-hq-mcp-onboard6)
+- [Glosario rápido](#glosario-rápido)
+- [Apéndice: referencias cruzadas](#apéndice-referencias-cruzadas)
 
 ---
 
@@ -590,9 +617,63 @@ el cambio a la entry nueva.
 
 ---
 
-## Secciones pendientes
+## Glosario rápido
 
-- `hq-mcp-onboard.7` — tool `help` (índice + URIs + version inline)
-- `hq-mcp-onboard.8` — tool `report_gap`
-- `hq-mcp-onboard.9` — consolidación + índice + cross-links
-- `hq-mcp-onboard.10` — CLAUDE.md global + proyecto apuntan acá
+| Término | Definición corta |
+|---|---|
+| **gt-mcp** | Server MCP de Gas Town. HTTP `:8765/mcp`. Único canal de mutación / lectura canónica para agentes. |
+| **actor** | Tarea Rust que owns el estado de un dominio (scheduling, patrol, merge, ...). Procesa comandos por mailbox serializada. |
+| **tool** | Operación MCP. Llega como par `<tool>.validate` + `<tool>.execute`. |
+| **recurso** | Snapshot read-only de un dominio. URI `gt://*`. Versionado por evento. |
+| **scope** | Permiso definido en `mcp-scope.toml`. Server lo chequea contra el rol del caller antes de despachar. |
+| **bead** | Unidad de trabajo (issue) en la tabla `issues`. Prefijo `hq-` para HQ. |
+| **rig** | Catálogo de origen de beads (prefix + git remote + default branch). |
+| **escape hatch** | `docker exec dolt sql` u otra vía fuera de MCP. Operator-only, prohibido para agentes salvo autorización explícita. |
+| **event-log** | Log append-only de comandos `execute`. Fuente de verdad para audit + replay. |
+| **convoy** | Grupo coordinado de members procesando sub-beads relacionados. |
+| **lease** | Reserva temporal de un worker sobre un bead. Expira si el worker no heartbeat. |
+
+## Apéndice: referencias cruzadas
+
+Mapa de qué sección cubre qué tema, para grep rápido:
+
+| Pregunta | Sección |
+|---|---|
+| ¿Cómo descubro qué tools hay? | §1.2 |
+| ¿Qué recursos puedo leer? | §1.3 |
+| ¿Necesito correr `validate`? | §2.1 / §2.2 |
+| ¿Cómo paso del nombre runtime al canónico? | §2.3 |
+| ¿Por qué no `docker exec` directo? | §3.1, §3.4, §4.2 |
+| ¿Qué hago si falta un tool? | §1.5 (corto) → §4 (detalle) |
+| ¿Soy host o polecat? | §5 |
+| ¿Cómo actualizo una memoria? | §6.3 / §6.4 |
+| ¿Una memoria está obsoleta? | §6.2 / §6.5 |
+| ¿Qué consume mi rol? | §3.2 |
+| ¿Qué pasa si dos agentes mutan el mismo recurso? | §3.3 |
+
+### Beads relacionados
+
+- [`hq-mcp-issues`](https://github.com) — abre `issues.*` CRUD vía MCP
+  (cierra el bypass `docker exec` para beads de shape completa).
+- `hq-mcp-onboard.7` — pendiente · tool `help` (índice + URIs + version
+  inline). Una vez que ship, §1.2 podrá apuntar a `gt-mcp-cli call help`
+  como atajo de discovery.
+- `hq-mcp-onboard.8` — pendiente · tool `report_gap`. Cierra el loop del §4:
+  el agente reporta dominio/acción faltante y el server abre el bead.
+- `hq-mcp-onboard.10` — cerrado · `CLAUDE.md` apunta acá como entry point
+  operacional (`internal/templates/townroot/claude.md`).
+
+### Memorias relevantes
+
+(Aplica al usuario host con auto-memory activo — ver §5.1.)
+
+- `MCP canonical for agents` — versión corta de §3.
+- `Dolt SQL for hq beads` — versión corta de §4.2.
+- `MCP persistence via HTTP` — config esencial del cliente MCP.
+- `gt-mcp-cli repo` — dónde vive el CLI de §5.2.
+- `Check parallel bead before claim` — coordinación con co-agentes.
+
+---
+
+> Stub deliberado mientras `.7` y `.8` no shipen — esas secciones se
+> adjuntan al final, no rompen la numeración existente.
