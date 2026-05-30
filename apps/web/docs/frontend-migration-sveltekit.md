@@ -225,7 +225,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | Bead | Título | Pri | Estado | Agente | Notas |
 |---|---|---|---|---|---|
 | hq-fe-build.1 | Scaffold `apps/web/` (svelte5 + adapter-static + tailwind + pnpm) | P1 | **closed** | codecsrayo | landed 2a76dffc; pnpm install/check/build verdes |
-| hq-fe-build.2 | `lib/api` client wrapper (fetch + bearer + idem-key) | P1 | open | — | |
+| hq-fe-build.2 | `lib/api` client wrapper (fetch + bearer + idem-key) | P1 | closed | claude-host | `lib/api/client.ts` (apiGet/apiSend/apiRequest + ApiError + setOn401); inyecta Bearer (skip dev sentinel), Idempotency-Key auto en non-GET, 401 → +layout.svelte hook (clearBearer+goto /login); refactor de issues/sessions/worktrees/beads (10 vitest) |
 | hq-fe-build.3 | `lib/sse` stream + router (fan-out por kind) | P1 | open | — | reconnect con Last-Event-ID |
 | hq-fe-build.4 | `lib/stores` base con runes (auth, sessions, beads, activity, quota) | P1 | open | — | `.svelte.ts` singletons |
 | hq-fe-build.5 | `lib/types` DTOs manuales desde frontend-api-surface | P1 | open | — | regenerar de JsonSchema si crece |

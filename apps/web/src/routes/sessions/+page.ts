@@ -11,7 +11,7 @@ export const load: PageLoad = async ({ fetch }) => {
   let initial: Session[] = [];
   let error: string | null = null;
   try {
-    initial = await fetchSessions(undefined, fetch);
+    initial = await fetchSessions(undefined, { fetchFn: fetch });
   } catch (e) {
     error = e instanceof Error ? e.message : String(e);
   }

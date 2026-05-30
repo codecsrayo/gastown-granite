@@ -1,37 +1,28 @@
 // Thin client for the `/api/beads` surface shipped by gt-web (hq-fe-api-w.3 + .4).
 // `listBeads` returns one column at a time; `transitionBead` POSTs the target status
 // and lets the server's operator matrix reject illegal moves (caller surfaces the
-// AppError text 1:1).
+// ApiError text 1:1). Uses the shared client (hq-fe-build.2).
 
 import type { Bead } from '$lib/types/bead';
 import type { BeadStatus } from '$lib/kanban';
+import { apiGet, apiSend, type ApiRequestOpts } from './client';
 
-export async function listBeads(
+export function listBeads(
   status: BeadStatus,
-  fetchFn: typeof fetch = fetch
+  opts?: Omit<ApiRequestOpts, 'method' | 'body'>
 ): Promise<Bead[]> {
-  const url = `/api/beads?status=${encodeURIComponent(status)}`;
-  const res = await fetchFn(url, { headers: { accept: 'application/json' } });
-  if (!res.ok) {
-    throw new Error(`GET ${url}: ${res.status} ${res.statusText}`);
-  }
-  return (await res.json()) as Bead[];
+  return apiGet<Bead[]>(`/api/beads?status=${encodeURIComponent(status)}`, opts);
 }
 
-export async function transitionBead(
+export function transitionBead(
   id: string,
   to: BeadStatus,
-  fetchFn: typeof fetch = fetch
+  opts?: Omit<ApiRequestOpts, 'method' | 'body'>
 ): Promise<Bead> {
-  const url = `/api/beads/${encodeURIComponent(id)}/transition`;
-  const res = await fetchFn(url, {
-    method: 'POST',
-    headers: { accept: 'application/json', 'content-type': 'application/json' },
-    body: JSON.stringify({ to })
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`POST ${url}: ${res.status} ${res.statusText} ${body}`.trim());
-  }
-  return (await res.json()) as Bead;
+  return apiSend<Bead>(
+    'POST',
+    `/api/beads/${encodeURIComponent(id)}/transition`,
+    { to },
+    opts
+  );
 }

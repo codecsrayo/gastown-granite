@@ -1,18 +1,22 @@
-// Thin client for `GET /api/sessions[?role=<role>]` (hq-fe-view.4). The endpoint snapshots
-// the live polecat/dog/mayor registry; the dashboard polls it (no SSE channel for sessions
-// yet — agent.* events flow through `/api/stream` but are noisy + need projection that the
-// FE doesn't have plumbed yet).
+// Thin client for `GET /api/sessions[?role=<role>]` (hq-fe-view.4). Uses the
+// shared client (hq-fe-build.2) so bearer + idem-key + 401 hook stay
+// consistent across every domain wrapper.
 
 import type { Session } from '$lib/types/session';
+import { apiGet, apiSend, type ApiRequestOpts } from './client';
 
-export async function fetchSessions(
+export function fetchSessions(
   role?: string,
-  fetchFn: typeof fetch = fetch
+  opts?: Omit<ApiRequestOpts, 'method' | 'body'>
 ): Promise<Session[]> {
   const url = role ? `/api/sessions?role=${encodeURIComponent(role)}` : '/api/sessions';
-  const res = await fetchFn(url, { headers: { accept: 'application/json' } });
-  if (!res.ok) {
-    throw new Error(`GET ${url}: ${res.status} ${res.statusText}`);
-  }
-  return (await res.json()) as Session[];
+  return apiGet<Session[]>(url, opts);
+}
+
+/** `DELETE /api/sessions/:id` — polecat e-stop (hq-fe-api-w.6). */
+export function killSession(
+  id: string,
+  opts?: Omit<ApiRequestOpts, 'method' | 'body'>
+): Promise<unknown> {
+  return apiSend<unknown>('DELETE', `/api/sessions/${encodeURIComponent(id)}`, undefined, opts);
 }

@@ -14,8 +14,8 @@ import type { Issue } from '$lib/types/issue';
 
 export const load: PageLoad = async ({ fetch }) => {
   const [wtResult, issuesResult] = await Promise.allSettled([
-    fetchWorktrees(fetch),
-    fetchIssues('open,working', fetch)
+    fetchWorktrees({ fetchFn: fetch }),
+    fetchIssues('open,working', { fetchFn: fetch })
   ]);
 
   const worktrees: Worktree[] = wtResult.status === 'fulfilled' ? wtResult.value : [];
