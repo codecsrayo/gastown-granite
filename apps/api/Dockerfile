@@ -13,7 +13,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cp target/release/gt-web target/release/gt target/release/gt-mcp /usr/local/bin/
 
 FROM debian:bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+# git: required by gt-web's `GET /api/worktrees` (hq-fe-api-r.8), which shells
+# `git worktree list` / `status --porcelain=v2` / `rev-list main...HEAD` against the
+# town root bind-mounted at `GT_TOWN_ROOT` (compose wires it for the gt-api service).
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --create-home --home-dir /var/lib/gastown --shell /usr/sbin/nologin gastown
 COPY --from=builder /usr/local/bin/gt-web /usr/local/bin/gt-web

@@ -69,6 +69,11 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4318/v1/traces}
       OTEL_SERVICE_NAME: gt-api
+      # GT_TOWN_ROOT (hq-fe-api-r.8) intentionally unset in compose: enabling
+      # `/api/worktrees` against the host repo needs a `/home/nixos:/home/nixos:ro`
+      # bind plus a UID switch (container user is gastown 999; host repo is 0700
+      # nixos:1000) — both deploy-edge decisions deferred. Run gt-web host-side
+      # (`GT_TOWN_ROOT=/home/nixos/gastown gt-web`) for live worktree data today.
     volumes:
       - gt-eventlog:/var/lib/gastown
     expose:
