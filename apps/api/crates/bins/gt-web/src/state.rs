@@ -14,6 +14,7 @@ use gt_merge::MergeRepository;
 use gt_root::CommandBus;
 use gt_store_dolt::DoltIssues;
 
+use crate::comments::IssueCommenter;
 use crate::control::{PolecatControl, PolecatRespawner};
 use crate::dto::WorktreeDto;
 
@@ -70,6 +71,13 @@ where
     /// same harness". `None` in test setups not exercising this route; the handler
     /// returns 500 ("polecat respawner not wired") if invoked.
     pub respawner: Option<Arc<dyn PolecatRespawner>>,
+    /// Issue commenter port (hq-fe-api-w.5). Backs `POST /api/beads/:id/comments`.
+    /// Production cables [`crate::DoltIssueCommenter`] over the same
+    /// [`gt_store_dolt::DoltIssues`] handle `GET /api/issues` reads. `None` in
+    /// test setups not exercising this route; the handler returns 500
+    /// ("issue commenter not wired") if invoked, mirroring the posture for the
+    /// other gateway ports.
+    pub commenter: Option<Arc<dyn IssueCommenter>>,
 }
 
 impl<R, SQ, M> Clone for AppState<R, SQ, M>
@@ -91,6 +99,7 @@ where
             worktrees_stream: self.worktrees_stream.clone(),
             control: self.control.clone(),
             respawner: self.respawner.clone(),
+            commenter: self.commenter.clone(),
         }
     }
 }

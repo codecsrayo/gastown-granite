@@ -106,6 +106,33 @@ pub struct BulkBeadCreateResponse {
     pub created: Vec<BeadDto>,
 }
 
+/// Body of `POST /api/beads/:id/comments` (hq-fe-api-w.5). Appends a free-text
+/// comment to `hq.issues.notes`. The route formats a canonical fragment
+/// (timestamp + author tag + body + newline) so the column stays parseable
+/// even though the storage is flat text; a future migration to a structured
+/// `issue_comments` table can split fragments on the same separators.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BeadCommentRequest {
+    /// Comment body. Non-empty; the route rejects whitespace-only payloads so
+    /// audit / SSE always carry context for the append.
+    pub body: String,
+    /// Optional author tag. Empty / absent stores as `@anon`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+}
+
+/// Response of `POST /api/beads/:id/comments`. Echoes the formatted fragment
+/// the route appended so the dashboard can render the new note inline without
+/// re-fetching the row.
+#[derive(Debug, Clone, Serialize)]
+pub struct BeadCommentResponse {
+    pub id: String,
+    pub appended: String,
+    /// RFC3339 timestamp embedded in `appended`. Surfaced separately so the
+    /// dashboard can sort comments without re-parsing the fragment.
+    pub ts: String,
+}
+
 /// Body of `PATCH /api/beads/:id` (hq-fe-api-w.3). Every editable field is `Option`:
 /// `None` leaves it alone, `Some(_)` overwrites. Status is deliberately absent — status
 /// transitions live on the dispatcher reactor (claim / release / done / failed events).

@@ -525,6 +525,49 @@ impl DoltIssues {
         Ok(())
     }
 
+    /// Atomically append `fragment` to `hq.issues.notes` for `id` (hq-fe-api-w.5).
+    /// Single `UPDATE ... CONCAT(...)` statement so a concurrent comment never
+    /// reads a stale `notes` and clobbers a parallel append — the SQL is the
+    /// merge point. `fragment` is concatenated verbatim; the frontier owns the
+    /// formatting (timestamp prefix, author tag, separator) so the schema stays
+    /// agnostic to the dashboard's comment shape.
+    ///
+    /// Returns `AppError::NotFound` when no row matches `id`. Atomic Dolt commit
+    /// on success — mirrors the same `CALL DOLT_COMMIT('-A','-m',...)` recipe
+    /// the other write paths use.
+    pub async fn append_notes(&self, id: &str, fragment: &str) -> Result<(), AppError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        let sql = "UPDATE issues
+             SET notes = CONCAT(IFNULL(notes, ''), :fragment),
+                 updated_at = NOW()
+             WHERE id = :id";
+        let result = conn
+            .exec_iter(
+                sql,
+                mysql_async::params! {
+                    "id" => id,
+                    "fragment" => fragment,
+                },
+            )
+            .await
+            .map_err(map_err)?;
+        let affected = result.affected_rows();
+        let _ = result.drop_result().await.map_err(map_err)?;
+        if affected == 0 {
+            return Err(AppError::NotFound(format!("issue {id}")));
+        }
+        let commit_msg = format!("comment {id}");
+        conn.exec_drop(
+            "CALL DOLT_COMMIT('-A', '-m', :msg)",
+            mysql_async::params! {
+                "msg" => commit_msg,
+            },
+        )
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
     /// Read the current status of `id`. `None` when the row does not exist.
     /// Used by [`Self::transition`] to distinguish `NotFound` from
     /// `InvalidTransition` after a status-guarded UPDATE fails to match.

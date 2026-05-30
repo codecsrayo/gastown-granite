@@ -61,6 +61,7 @@ async fn boot(auth: AuthConfig, gate: ReadinessGate) -> String {
         worktrees_stream: None,
         control: None,
         respawner: None,
+        commenter: None,
     };
 
     let audit = InMemoryWebAudit::new();

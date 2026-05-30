@@ -17,6 +17,7 @@ pub mod auth;
 pub mod dto;
 pub mod health;
 pub mod idempotency;
+pub mod comments;
 pub mod control;
 pub mod rate_limit;
 pub mod routes;
@@ -37,6 +38,7 @@ pub use auth::{AuthConfig, AuthLayer};
 pub use health::{HydrationHandle, ReadinessGate, ReadinessGateBuilder};
 pub use idempotency::{idempotency_middleware, IdempotencyStore};
 pub use rate_limit::{rate_limit_middleware, RateLimitStore};
+pub use comments::{DoltIssueCommenter, InMemoryIssueCommenter, IssueCommenter};
 pub use control::{
     InMemoryPolecatControl, InMemoryPolecatRespawner, LifecyclePolecatRespawner, PolecatControl,
     PolecatRespawner, RespawnInfo, TmuxPolecatControl,
@@ -157,6 +159,14 @@ where
         .route(
             "/api/beads/:id/transition",
             post(routes::transition_bead::<R, SQ, M>),
+        )
+        // hq-fe-api-w.5 — append-only operator comments. Writes to the
+        // `hq.issues.notes` column via `AppState.commenter`; the route formats
+        // a canonical fragment so the column stays parseable for a future
+        // migration to a structured `issue_comments` table.
+        .route(
+            "/api/beads/:id/comments",
+            post(routes::comment_bead::<R, SQ, M>),
         )
         .route("/api/issues", get(routes::list_issues::<R, SQ, M>))
         // hq-fe-api-r.7 — derived snapshot of mayor attach state. Read-only over the

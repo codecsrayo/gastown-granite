@@ -45,6 +45,7 @@ async fn boot(sessions: Vec<Session>) -> (String, RootHandle<Arc<InMemoryBeads>>
         worktrees_stream: None,
         control: None,
         respawner: None,
+        commenter: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

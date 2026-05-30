@@ -48,8 +48,9 @@ use gt_store_dolt::{DoltBeads, DoltIssues, DoltMerge, DoltOrch, DoltPatrol, Dolt
 use gt_store_pg::PgAudit;
 use gt_telemetry::{init as init_telemetry, TelemetryConfig};
 use gt_web::{
-    AppState, AuthConfig, JsonlWebAudit, LifecyclePolecatRespawner, PolecatControl,
-    PolecatRespawner, ReadinessGate, ReadinessGateBuilder, TmuxPolecatControl, WebAuditSink,
+    AppState, AuthConfig, DoltIssueCommenter, IssueCommenter, JsonlWebAudit,
+    LifecyclePolecatRespawner, PolecatControl, PolecatRespawner, ReadinessGate,
+    ReadinessGateBuilder, TmuxPolecatControl, WebAuditSink,
 };
 
 
@@ -311,6 +312,13 @@ async fn serve<R, SQ, MR, PR, OR>(
         Arc::new(LifecyclePolecatRespawner::new(tmux.clone(), lifecycle))
     };
 
+    // hq-fe-api-w.5: production issue commenter. Shares the same `Arc<DoltIssues>`
+    // the `/api/issues` reader uses so a comment appended via HTTP is visible to
+    // the next snapshot without a separate connection pool.
+    let commenter: Option<Arc<dyn IssueCommenter>> = issues
+        .clone()
+        .map(|i| Arc::new(DoltIssueCommenter::new(i)) as Arc<dyn IssueCommenter>);
+
     let state = AppState {
         beads,
         sessions,
@@ -325,6 +333,7 @@ async fn serve<R, SQ, MR, PR, OR>(
         worktrees_stream,
         control: Some(control),
         respawner: Some(respawner),
+        commenter,
     };
 
     // Idempotency-Key cache (hq-fe-api-w.2). TTL overridable via

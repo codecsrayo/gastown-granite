@@ -56,6 +56,7 @@ async fn boot(rate_limit: RateLimitStore) -> (String, gt_root::RootHandle<Arc<In
         worktrees_stream: None,
         control: None,
         respawner: None,
+        commenter: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

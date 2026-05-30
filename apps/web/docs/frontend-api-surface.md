@@ -216,7 +216,7 @@ to the old API; pick the cleanest contract per feature.
 | `Idempotency-Key` middleware en gt-web | **gap** | hq-fe-api-w.2 |
 | `POST /api/beads` (create) · `PATCH /api/beads/:id` (update) | **gap** (solo gt-mcp tools) | hq-fe-api-w.3 |
 | `POST /api/beads/:id/transition` (state machine) | **done** (gt-web) | hq-fe-api-w.4 |
-| `POST /api/beads/:id/comments` | **gap** | hq-fe-api-w.5 |
+| `POST /api/beads/:id/comments` | **done** (gt-web · append to notes) | hq-fe-api-w.5 |
 | `DELETE /api/sessions/:id` (kill via gt-polecat SIGTERM) | **done** (gt-web) | hq-fe-api-w.6 |
 | `POST /api/sessions/:id/restart` | **done** (gt-web) | hq-fe-api-w.7 |
 | `POST /api/sessions/:id/interrupt` (tmux send-keys ESC) | **done** (gt-web) | hq-fe-api-w.8 |

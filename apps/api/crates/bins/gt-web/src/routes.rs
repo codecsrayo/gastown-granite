@@ -19,11 +19,11 @@ use gt_root::RootCommand;
 use gt_store_dolt::{IssueFilter, IssueRow};
 
 use crate::dto::{
-    BeadCreateRequest, BeadDto, BeadTransitionRequest, BeadUpdateRequest, BeadsQuery,
-    BulkBeadCreateRequest, BulkBeadCreateResponse, ConvoyCreateRequest, ConvoyCreateResponse,
-    DirtyFileDto, IssueDto, IssuesQuery, MayorStatusDto, MemberFailRequest, MergeSlotDto,
-    NudgeRequest, NudgeResponse, QuotaRetireResponse, QuotaRotateRequest, SessionDto,
-    SessionsQuery, WorktreeDto,
+    BeadCommentRequest, BeadCommentResponse, BeadCreateRequest, BeadDto, BeadTransitionRequest,
+    BeadUpdateRequest, BeadsQuery, BulkBeadCreateRequest, BulkBeadCreateResponse,
+    ConvoyCreateRequest, ConvoyCreateResponse, DirtyFileDto, IssueDto, IssuesQuery,
+    MayorStatusDto, MemberFailRequest, MergeSlotDto, NudgeRequest, NudgeResponse,
+    QuotaRetireResponse, QuotaRotateRequest, SessionDto, SessionsQuery, WorktreeDto,
 };
 use crate::state::AppState;
 use crate::stream::{sse_from_json_receiver, sse_from_receiver};
@@ -423,6 +423,96 @@ where
 /// Forbidden: self-transitions, `pending → dispatched` (scheduler-owned), and crossing
 /// `done` ↔ `failed` directly (must round-trip through `pending` so the re-open is
 /// explicit in the audit log).
+/// Maximum comment body length in characters (hq-fe-api-w.5). Operators write
+/// per-row context, not log dumps; the cap stops a runaway script from
+/// hammering Dolt with multi-MiB notes that would blow the row-size budget.
+pub const COMMENT_BODY_MAX_CHARS: usize = 4096;
+
+/// `POST /api/beads/:id/comments` — append a free-text comment to
+/// `hq.issues.notes` (hq-fe-api-w.5). The handler formats a canonical fragment
+/// (`\n[YYYY-MM-DDTHH:MM:SSZ] @author: body`) so the column stays parseable
+/// downstream even though storage is flat text. Returns the appended fragment
+/// + the UTC timestamp the route embedded so the dashboard can render the new
+/// note inline without re-fetching the row.
+pub async fn comment_bead<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
+    Path(id): Path<String>,
+    Json(req): Json<BeadCommentRequest>,
+) -> Result<(StatusCode, Json<BeadCommentResponse>), AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
+{
+    if id.is_empty() {
+        return Err(AppError::bad_request("bead id is empty"));
+    }
+    let body = req.body.trim();
+    if body.is_empty() {
+        return Err(AppError::bad_request("comment body is empty"));
+    }
+    if body.chars().count() > COMMENT_BODY_MAX_CHARS {
+        return Err(AppError::bad_request(format!(
+            "comment body exceeds cap of {COMMENT_BODY_MAX_CHARS} chars"
+        )));
+    }
+    let author = req
+        .author
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("anon");
+    let commenter = state
+        .commenter
+        .as_ref()
+        .ok_or_else(|| AppError::internal("issue commenter not wired"))?;
+
+    let ts = epoch_to_rfc3339(epoch_now());
+    let fragment = format!("\n[{ts}] @{author}: {body}");
+    commenter
+        .append(&id, &fragment)
+        .await
+        .map_err(|e| match e {
+            gt_events::AppError::NotFound(msg) => AppError::not_found(msg),
+            other => AppError::internal(format!("{other}")),
+        })?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(BeadCommentResponse {
+            id,
+            appended: fragment,
+            ts,
+        }),
+    ))
+}
+
+/// Format a Unix-seconds timestamp as RFC3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`).
+/// Kept local so the comments handler does not pull in `chrono` for one
+/// formatting call; the calculation is a deterministic ymd-from-days
+/// breakdown (Howard Hinnant's algorithm) that has no leap-second edge cases.
+fn epoch_to_rfc3339(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let secs_of_day = secs % 86_400;
+    let hour = secs_of_day / 3_600;
+    let minute = (secs_of_day % 3_600) / 60;
+    let second = secs_of_day % 60;
+    // Howard Hinnant's days-from-Unix-epoch -> civil date conversion.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097) as i64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{year:04}-{m:02}-{d:02}T{hour:02}:{minute:02}:{second:02}Z"
+    )
+}
+
 pub async fn transition_bead<R, SQ, M>(
     State(state): State<AppState<R, SQ, M>>,
     Path(id): Path<String>,
