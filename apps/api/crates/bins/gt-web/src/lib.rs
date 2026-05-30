@@ -22,6 +22,7 @@ pub mod comments;
 pub mod control;
 pub mod rate_limit;
 pub mod routes;
+pub mod scope;
 pub mod state;
 pub mod stream;
 
@@ -43,6 +44,7 @@ pub use gt_rbac::{ActorSpec, RbacConfig, RoleSpec, WebGrant};
 pub use health::{HydrationHandle, ReadinessGate, ReadinessGateBuilder};
 pub use idempotency::{idempotency_middleware, IdempotencyStore};
 pub use rate_limit::{rate_limit_middleware, RateLimitStore};
+pub use scope::{scope_middleware, ScopeGuard};
 pub use comments::{DoltIssueCommenter, InMemoryIssueCommenter, IssueCommenter};
 pub use control::{
     InMemoryPolecatControl, InMemoryPolecatRespawner, LifecyclePolecatRespawner, PolecatControl,
@@ -125,22 +127,37 @@ where
     M: MergeRepository + Send + Sync + 'static,
 {
     let layer = AuthLayer { config: auth, audit };
+    // hq-fe-rbac.3 — per-route scope guards. Each closure builds a fresh `from_fn_with_state`
+    // layer carrying the audit sink + a static scope string; only JWT-mode requests carry
+    // `AuthClaims` so Bearer/Open posture grandfathers through (see `scope` module doc).
+    let req = |scope: &'static str| {
+        axum::middleware::from_fn_with_state(
+            ScopeGuard {
+                audit: layer.audit.clone(),
+                scope,
+            },
+            scope_middleware,
+        )
+    };
     let api = Router::new()
-        .route("/api/sessions", get(routes::list_sessions::<R, SQ, M>))
+        .route(
+            "/api/sessions",
+            get(routes::list_sessions::<R, SQ, M>).route_layer(req("sessions.read")),
+        )
         // hq-fe-api-w.6 — operator e-stop on a runaway polecat. Tmux-side kill goes
         // through `AppState.control` (a thin port over `gt_polecat::Tmux`); the registry
         // close happens via the existing `AgentEvent::Killed` projector path so SSE
         // subscribers see the same `agent.killed` record the in-process reactor produces.
         .route(
             "/api/sessions/:id",
-            delete(routes::delete_session::<R, SQ, M>),
+            delete(routes::delete_session::<R, SQ, M>).route_layer(req("sessions.write")),
         )
         // hq-fe-api-w.8 — softer e-stop: `tmux send-keys Escape` cancels the agent's
         // in-flight turn without killing the polecat. The same `PolecatControl` port
         // handles both ops so the production wiring stays a single shared `TmuxCli`.
         .route(
             "/api/sessions/:id/interrupt",
-            post(routes::interrupt_session::<R, SQ, M>),
+            post(routes::interrupt_session::<R, SQ, M>).route_layer(req("sessions.write")),
         )
         // hq-fe-api-w.7 — cold-restart: respawn a stuck polecat with the same hook
         // bead + convoy by reading env from the dying session before tearing it down.
@@ -148,22 +165,28 @@ where
         // restart so SSE subscribers + projector see a single atomic transition.
         .route(
             "/api/sessions/:id/restart",
-            post(routes::restart_session::<R, SQ, M>),
+            post(routes::restart_session::<R, SQ, M>).route_layer(req("sessions.write")),
         )
         // hq-fe-api-w.3: write surface on the dispatcher's bead table — POST mints a
         // `pending` row (wrapping scheduling.create_bead), PATCH partially updates
         // title/priority/assignee. Status transitions stay on the reactor.
         .route(
             "/api/beads",
-            get(routes::list_beads::<R, SQ, M>).post(routes::create_bead::<R, SQ, M>),
+            get(routes::list_beads::<R, SQ, M>)
+                .route_layer(req("beads.read"))
+                .post(routes::create_bead::<R, SQ, M>)
+                .route_layer(req("beads.write")),
         )
-        .route("/api/beads/:id", patch(routes::update_bead::<R, SQ, M>))
+        .route(
+            "/api/beads/:id",
+            patch(routes::update_bead::<R, SQ, M>).route_layer(req("beads.write")),
+        )
         // hq-fe-api-w.4 — operator override for the bead state machine. Not a reactor:
         // dispatcher capacity stays unchanged so a real worker's lifecycle is not double-
         // counted. See [`routes::transition_bead`] for the allowed transition matrix.
         .route(
             "/api/beads/:id/transition",
-            post(routes::transition_bead::<R, SQ, M>),
+            post(routes::transition_bead::<R, SQ, M>).route_layer(req("beads.write")),
         )
         // hq-fe-api-w.5 — append-only operator comments. Writes to the
         // `hq.issues.notes` column via `AppState.commenter`; the route formats
@@ -171,54 +194,81 @@ where
         // migration to a structured `issue_comments` table.
         .route(
             "/api/beads/:id/comments",
-            post(routes::comment_bead::<R, SQ, M>),
+            post(routes::comment_bead::<R, SQ, M>).route_layer(req("beads.write")),
         )
-        .route("/api/issues", get(routes::list_issues::<R, SQ, M>))
+        .route(
+            "/api/issues",
+            get(routes::list_issues::<R, SQ, M>).route_layer(req("beads.read")),
+        )
         // hq-fe-api-r.7 — derived snapshot of mayor attach state. Read-only over the
         // active-session registry; heartbeat freshness deferred (see dto).
-        .route("/api/mayor/status", get(routes::mayor_status::<R, SQ, M>))
+        .route(
+            "/api/mayor/status",
+            get(routes::mayor_status::<R, SQ, M>).route_layer(req("sessions.read")),
+        )
         // hq-fe-api-r.4 — snapshot of the merge slot board (ready/merging/merged/failed).
         // Read-only; backed by the same `MergeRepository` the actor upserts on each
         // transition. Deltas flow on the existing SSE `merge.*` channel.
-        .route("/api/merges", get(routes::list_merges::<R, SQ, M>))
-        // hq-fe-rbac.4 — identity bootstrap for the dashboard. Actor + mode today;
-        // roles/scopes empty until hq-fe-rbac.{1,2,3} land. The contract is shaped
-        // so populating them later doesn't require a client recompile.
+        .route(
+            "/api/merges",
+            get(routes::list_merges::<R, SQ, M>).route_layer(req("merge.read")),
+        )
+        // hq-fe-rbac.4 — identity bootstrap for the dashboard. No scope guard: every
+        // authenticated actor needs to learn its own `actor/mode/roles/scopes`, and the
+        // route never returns anything beyond the request's own claims.
         .route("/api/whoami", get(routes::whoami::<R, SQ, M>))
-        .route("/api/worktrees", get(routes::list_worktrees::<R, SQ, M>))
+        .route(
+            "/api/worktrees",
+            get(routes::list_worktrees::<R, SQ, M>).route_layer(req("worktrees.read")),
+        )
         .route(
             "/api/worktrees/stream",
-            get(routes::worktrees_stream::<R, SQ, M>),
+            get(routes::worktrees_stream::<R, SQ, M>).route_layer(req("worktrees.read")),
         )
-        .route("/api/nudge", post(routes::nudge::<R, SQ, M>))
+        .route(
+            "/api/nudge",
+            post(routes::nudge::<R, SQ, M>).route_layer(req("nudge.write")),
+        )
         // hq-fe-api-w.9 — convoy write surface. POST creates + launches; the per-member
         // fail route halts a stuck convoy with an operator-supplied reason. `pause` /
         // `resume` are deferred — domain has no Pause/Resume commands today.
         .route(
             "/api/convoys",
-            get(routes::list_convoys::<R, SQ, M>).post(routes::create_convoy::<R, SQ, M>),
+            get(routes::list_convoys::<R, SQ, M>)
+                .route_layer(req("convoys.read"))
+                .post(routes::create_convoy::<R, SQ, M>)
+                .route_layer(req("convoys.write")),
         )
         .route(
             "/api/convoys/:convoy/members/:member/fail",
-            post(routes::fail_convoy_member::<R, SQ, M>),
+            post(routes::fail_convoy_member::<R, SQ, M>).route_layer(req("convoys.write")),
         )
         // hq-fe-api-w.10 — promote quota.rotate / quota.retire from MCP-only to HTTP.
         .route(
             "/api/quota/accounts/:id/rotate",
-            post(routes::quota_rotate::<R, SQ, M>),
+            post(routes::quota_rotate::<R, SQ, M>).route_layer(req("quota.write")),
         )
         .route(
             "/api/quota/accounts/:id/retire",
-            post(routes::quota_retire::<R, SQ, M>),
+            post(routes::quota_retire::<R, SQ, M>).route_layer(req("quota.write")),
         )
         // hq-fe-api-r.2 — composite snapshot for the rotation panel: live Cooldown
         // accounts (`waiting_unlock`) joined with the tail of `quota.rotated` records
         // pulled from the shared `events.jsonl` (`recent_rotations`).
-        .route("/api/quota/rotation", get(routes::quota_rotation::<R, SQ, M>))
-        .route("/api/stream", get(routes::stream::<R, SQ, M>))
+        .route(
+            "/api/quota/rotation",
+            get(routes::quota_rotation::<R, SQ, M>).route_layer(req("quota.read")),
+        )
+        .route(
+            "/api/stream",
+            get(routes::stream::<R, SQ, M>).route_layer(req("feed.read")),
+        )
         // hq-fe-api-r.5 — historical replay of the same events.jsonl `/api/stream` ships;
         // dashboard seeds its activity store from this before subscribing to SSE.
-        .route("/api/feed", get(routes::feed::<R, SQ, M>))
+        .route(
+            "/api/feed",
+            get(routes::feed::<R, SQ, M>).route_layer(req("feed.read")),
+        )
         .with_state(state.clone());
 
     // hq-fe-api-w.11 — rate-limited bulk-create surface. The per-actor counter sits on
@@ -226,7 +276,10 @@ where
     // /api surface is unchanged. Merged into `api` *before* idempotency + auth so the
     // global layers still wrap every request.
     let bulk = Router::new()
-        .route("/api/beads/bulk", post(routes::create_beads_bulk::<R, SQ, M>))
+        .route(
+            "/api/beads/bulk",
+            post(routes::create_beads_bulk::<R, SQ, M>).route_layer(req("beads.write")),
+        )
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(
             rate_limit,

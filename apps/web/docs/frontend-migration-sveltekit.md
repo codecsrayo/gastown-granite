@@ -62,7 +62,7 @@ Docs hermanos (lectura obligada antes de tocar nada):
 | **hq-fe-svelte** | Master · dashboard reconstruction | (todas abajo) | — | PLANEADO |
 | **hq-fe-api-r** | Read-side gaps (snapshots por dominio) | 12 | — | EN PROGRESO · r.2-.12 CLOSED (11/12) · r.1 working |
 | **hq-fe-api-w** | Write-side commands (HTTP routes) | 11 | hq-fe-api-w.1 (bus) | DONE · 11/11 CLOSED |
-| **hq-fe-rbac** | RBAC · JWT · whoami · scopes | 5 | hq-fe-api-w.1 | EN PROGRESO · .1/.2/.4 CLOSED (3/5) |
+| **hq-fe-rbac** | RBAC · JWT · whoami · scopes | 5 | hq-fe-api-w.1 | EN PROGRESO · .1/.2/.3/.4 CLOSED (4/5) |
 | **hq-fe-auth** | Account auth (Claude `/login` pty driver) | 5 | hq-fe-api-w (idem) | PLANEADO |
 | **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
 | **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | PLANEADO · spike obligatorio |
@@ -187,7 +187,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 |---|---|---|---|---|---|
 | hq-fe-rbac.1 | JWT signing en gt-api (HS256 decidido) | P1 | closed | claude-host | HS256 (single binary issues+verifies; RS256 deferred a multi-verifier); `jwt.rs` (`Claims{sub,iss,iat,exp,roles,scopes}` + `JwtIssuer{sign,verify}`); `AuthConfig::Jwt{issuer}` + `AuthClaims` request ext; middleware verifica firma/exp/iss y propaga claims; `/api/whoami` ahora reporta `mode=jwt` + roles/scopes desde claims; main.rs prioridad `GT_WEB_JWT_SECRET` > `GT_WEB_TOKEN` > `GT_WEB_AUTH=disabled`; 5 cargo tests (jwt module) + 4 middleware tests + 2 whoami integration tests |
 | hq-fe-rbac.2 | `roles.toml` unificado con `mcp-scope.toml` | P1 | closed | claude-host | nuevo crate kernel `gt-rbac` con `RbacConfig{actors, roles}` (TOML/JSON); gt-mcp `ScopeConfig` = alias de `RbacConfig` (back-compat via `ResolveScope` trait); gt-web re-exporta `RbacConfig` + `JwtIssuer::with_rbac()/sign_for_actor(actor)`; main.rs lee `GT_WEB_RBAC_CONFIG` (fallback `GT_MCP_SCOPE_CONFIG`); `deploy/mcp-scope.toml` extendido con sample `[roles.*]`; 7 gt-rbac tests + 3 jwt sign_for_actor + 1 whoami integration |
-| hq-fe-rbac.3 | Middleware per-scope en gt-web | P1 | open | — | reemplaza single bearer check |
+| hq-fe-rbac.3 | Middleware per-scope en gt-web | P1 | closed | claude-host | nuevo módulo `scope.rs` (`ScopeGuard` + `scope_middleware`) en `gt-web`; `route_layer(from_fn_with_state(...))` por ruta en `router_with_stores` con scopes (`sessions.{read,write}`, `beads.{read,write}`, `merge.read`, `worktrees.read`, `nudge.write`, `convoys.{read,write}`, `quota.{read,write}`, `feed.read`); JWT mode gateado contra `AuthClaims.scopes`, Bearer/Open mode grandfathered (sin claims); `WebAuditEvent::Forbidden{actor,method,path,scope}` + `web.forbidden` audit kind; `/api/whoami` sin guard (identity bootstrap); 4 scope tests cubren pass/deny/audit/empty + grandfather paths |
 | hq-fe-rbac.4 | `GET /api/whoami` (actor + roles + scopes) | P1 | closed | claude-host | `Actor` newtype en request ext via auth middleware (open=`web:open`, bearer=`actor_tag`); `WhoamiDto {actor, mode, roles, scopes}` (roles/scopes empty hasta rbac.{1,2,3}); 3 cargo tests; `lib/{types,api}/whoami.ts` + `+layout.svelte` hidrata `auth.hydrate(whoami)` con skip401Hook |
 | hq-fe-rbac.5 | Enriquecer `web.invoked` con command+target | P2 | open | — | audit feed útil |
 

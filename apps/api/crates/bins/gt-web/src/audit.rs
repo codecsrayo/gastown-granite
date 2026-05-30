@@ -27,6 +27,15 @@ pub enum WebAuditEvent {
         path: String,
         reason: String,
     },
+    /// The actor authenticated successfully but lacks the route's required scope
+    /// (hq-fe-rbac.3). Distinct from [`WebAuditEvent::Unauthorized`] so dashboards can
+    /// split "who is even trying" from "who is allowed in but reaching beyond their grant".
+    Forbidden {
+        actor: String,
+        method: String,
+        path: String,
+        scope: String,
+    },
 }
 
 impl EventKind for WebAuditEvent {
@@ -34,6 +43,7 @@ impl EventKind for WebAuditEvent {
         match self {
             WebAuditEvent::Invoked { .. } => "web.invoked",
             WebAuditEvent::Unauthorized { .. } => "web.unauthorized",
+            WebAuditEvent::Forbidden { .. } => "web.forbidden",
         }
     }
 }
