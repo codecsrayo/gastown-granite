@@ -11,7 +11,8 @@
     { href: '/convoys', title: 'Convoys', bead: 'hq-fe-view.6', status: 'stub' },
     { href: '/merge', title: 'Merge Q', bead: 'hq-fe-view.7', status: 'stub' },
     { href: '/crew', title: 'Crew', bead: 'hq-fe-view.8', status: 'stub' },
-    { href: '/rigs', title: 'Rigs', bead: 'hq-fe-view.9', status: 'stub' }
+    { href: '/rigs', title: 'Rigs', bead: 'hq-fe-view.9', status: 'stub' },
+    { href: '/design', title: 'Design', bead: 'hq-fe-view.12', status: 'live' }
   ];
 </script>
 
