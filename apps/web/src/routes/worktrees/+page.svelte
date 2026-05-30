@@ -20,7 +20,6 @@
   // wrap this route via +layout.svelte once that bead lands.
 
   import { onDestroy, onMount } from 'svelte';
-  import { fetchWorktrees } from '$lib/api/worktrees';
   import { fetchIssues } from '$lib/api/issues';
   import type { Worktree } from '$lib/types/worktree';
   import type { Issue } from '$lib/types/issue';
@@ -52,29 +51,44 @@
   let activeRows = $derived(rows.filter(isActive).toSorted(byRecency));
   let idleCount = $derived(rows.length - activeRows.length);
   let expanded = $state<Record<string, boolean>>({});
-  let timer: ReturnType<typeof setInterval> | undefined;
+  // hq-fe-view.19: live updates come from the SSE feed (`/api/worktrees/stream`,
+  // hq-fe-api-r.12); the client no longer polls. Issues still poll (12s) because the bus
+  // doesn't broadcast hq.issues mutations to gt-web yet — when that lands, drop the
+  // interval and subscribe via SSE too.
+  let evtSource: EventSource | undefined;
+  let issuesTimer: ReturnType<typeof setInterval> | undefined;
 
-  async function refresh() {
-    // Parallel + independent: issues failing must not drop the worktrees view. Same posture
-    // as the +page.ts loader so the polled state machine matches the first-paint contract.
-    const [wtResult, issuesResult] = await Promise.allSettled([
-      fetchWorktrees(),
-      fetchIssues('open,working'),
-    ]);
-    if (wtResult.status === 'fulfilled') {
-      rows = wtResult.value;
-      error = null;
-    } else {
-      error = wtResult.reason instanceof Error ? wtResult.reason.message : String(wtResult.reason);
+  async function refreshIssues() {
+    try {
+      issues = await fetchIssues('open,working');
+    } catch (e) {
+      // Issues are enrichment — never overwrite the worktrees error with an issues failure.
+      console.warn('issues refresh failed', e);
     }
-    if (issuesResult.status === 'fulfilled') issues = issuesResult.value;
   }
 
   onMount(() => {
-    timer = setInterval(refresh, 2000);
+    // EventSource opens with `withCredentials: false`; the vite proxy + gt-api are
+    // same-origin so cookies/bearer ride through normally once IAM lands.
+    evtSource = new EventSource('/api/worktrees/stream');
+    evtSource.onmessage = (msg) => {
+      try {
+        rows = JSON.parse(msg.data) as Worktree[];
+        error = null;
+      } catch (e) {
+        console.warn('worktrees SSE parse failed', e);
+      }
+    };
+    evtSource.onerror = () => {
+      // The browser auto-reconnects on its own; surface the disconnect transiently so the
+      // operator knows the live feed went quiet without nuking the last good snapshot.
+      error = 'live feed disconnected — reconnecting';
+    };
+    issuesTimer = setInterval(refreshIssues, 12_000);
   });
   onDestroy(() => {
-    if (timer) clearInterval(timer);
+    evtSource?.close();
+    if (issuesTimer) clearInterval(issuesTimer);
   });
 
   function toggle(path: string) {

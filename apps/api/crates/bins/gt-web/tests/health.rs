@@ -56,6 +56,7 @@ async fn boot(auth: AuthConfig, gate: ReadinessGate) -> String {
         town_root: None,
         issues: None,
         bus: None,
+        worktrees_stream: None,
     };
 
     let audit = InMemoryWebAudit::new();

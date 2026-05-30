@@ -63,6 +63,7 @@ async fn boot_with_auth(
         town_root: None,
         issues: None,
         bus: None,
+        worktrees_stream: None,
     };
 
     let audit = InMemoryWebAudit::new();

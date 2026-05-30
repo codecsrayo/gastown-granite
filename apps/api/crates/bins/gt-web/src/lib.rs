@@ -33,6 +33,7 @@ pub use audit::{InMemoryWebAudit, JsonlWebAudit, WebAuditEvent, WebAuditSink};
 pub use auth::{AuthConfig, AuthLayer};
 pub use health::{HydrationHandle, ReadinessGate, ReadinessGateBuilder};
 pub use idempotency::{idempotency_middleware, IdempotencyStore};
+pub use routes::collect_worktrees;
 pub use state::AppState;
 
 /// Build the router around an [`AppState`].
@@ -86,6 +87,10 @@ where
         .route("/api/beads/:id", patch(routes::update_bead::<R, SQ>))
         .route("/api/issues", get(routes::list_issues::<R, SQ>))
         .route("/api/worktrees", get(routes::list_worktrees::<R, SQ>))
+        .route(
+            "/api/worktrees/stream",
+            get(routes::worktrees_stream::<R, SQ>),
+        )
         .route("/api/nudge", post(routes::nudge::<R, SQ>))
         // hq-fe-api-w.10 — promote quota.rotate / quota.retire from MCP-only to HTTP.
         .route(

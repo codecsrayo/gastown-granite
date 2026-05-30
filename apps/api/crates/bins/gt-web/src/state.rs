@@ -13,6 +13,8 @@ use gt_events::Envelope;
 use gt_root::CommandBus;
 use gt_store_dolt::DoltIssues;
 
+use crate::dto::WorktreeDto;
+
 /// Read-side composition root. Keep it `Clone` (Arc-backed) so axum can hand a fresh handle
 /// to each request without locks. `R`/`SQ` are the bead / session ports.
 pub struct AppState<R, SQ>
@@ -40,6 +42,12 @@ where
     /// AppState without a live `RootHandle`; those tests exercise routes that don't need
     /// the bus.
     pub bus: Option<CommandBus>,
+    /// Live worktree-snapshot broadcast (hq-fe-api-r.12). The bin spawns a single polling
+    /// task per process when `town_root` is set; that task shells `git` every 2s and sends
+    /// the snapshot into this channel. `GET /api/worktrees/stream` subscribes per
+    /// connection. `None` when there is no town root configured — the SSE endpoint then
+    /// short-circuits, mirroring the `/api/worktrees` empty-list posture.
+    pub worktrees_stream: Option<broadcast::Sender<Vec<WorktreeDto>>>,
 }
 
 impl<R, SQ> Clone for AppState<R, SQ>
@@ -56,6 +64,7 @@ where
             town_root: self.town_root.clone(),
             issues: self.issues.clone(),
             bus: self.bus.clone(),
+            worktrees_stream: self.worktrees_stream.clone(),
         }
     }
 }

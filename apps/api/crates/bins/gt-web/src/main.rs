@@ -265,6 +265,33 @@ async fn serve<R, SQ, MR, PR, OR>(
         .filter(|s| !s.is_empty())
         .map(|s| Arc::new(std::path::PathBuf::from(s)));
 
+    // hq-fe-api-r.12: shared worktree-snapshot broadcast for `GET /api/worktrees/stream`.
+    // One polling task per process shells `git worktree list` + `status` + `log` every 2s
+    // and fans the snapshot out to every connected client. Skipped when no town root is
+    // configured so the SSE endpoint responds 503 instead of hanging.
+    let worktrees_stream = town_root.as_ref().map(|root| {
+        let (tx, _rx) = tokio::sync::broadcast::channel::<Vec<gt_web::dto::WorktreeDto>>(8);
+        let root = root.clone();
+        let tx_for_task = tx.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(2));
+            loop {
+                ticker.tick().await;
+                match gt_web::collect_worktrees(root.as_path()).await {
+                    Ok(snap) => {
+                        // `send` returns Err when there are no receivers; that's expected
+                        // before any client connects, and harmless — we just drop the frame.
+                        let _ = tx_for_task.send(snap);
+                    }
+                    Err(e) => {
+                        eprintln!("[gt-web] worktrees poll failed: {}", e.message);
+                    }
+                }
+            }
+        });
+        tx
+    });
+
     let state = AppState {
         beads,
         sessions,
@@ -275,6 +302,7 @@ async fn serve<R, SQ, MR, PR, OR>(
         // hq-fe-api-w.10: share the running root's CommandBus so HTTP write routes
         // dispatch through the same actors gt-mcp drives.
         bus: Some(root.commands()),
+        worktrees_stream,
     };
 
     // Idempotency-Key cache (hq-fe-api-w.2). TTL overridable via

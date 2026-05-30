@@ -22,7 +22,7 @@ use crate::dto::{
     SessionDto, SessionsQuery, WorktreeDto,
 };
 use crate::state::AppState;
-use crate::stream::sse_from_receiver;
+use crate::stream::{sse_from_json_receiver, sse_from_receiver};
 
 /// `GET /api/sessions[?role=polecat]` — snapshot of active sessions, optionally filtered by
 /// role (hq-8iur.7). The reader port lives in `gt-agent`; the dashboard fetches this once and
@@ -331,7 +331,35 @@ where
     Ok(Json(dtos))
 }
 
-async fn collect_worktrees(root: &std::path::Path) -> Result<Vec<WorktreeDto>, AppError> {
+/// `GET /api/worktrees/stream` — SSE feed of full snapshots (hq-fe-api-r.12). The bin
+/// spawns one polling task per process that shells `git` every 2s and broadcasts the
+/// snapshot; this handler subscribes per connection and serializes each broadcast frame as
+/// one SSE event. When `worktrees_stream` is unset (no `GT_TOWN_ROOT`) the connection
+/// short-circuits with 503 so clients fall back to the snapshot endpoint instead of
+/// hanging on a never-firing channel.
+pub async fn worktrees_stream<R, SQ>(
+    State(state): State<AppState<R, SQ>>,
+) -> Result<axum::response::Response, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
+    let Some(tx) = state.worktrees_stream.clone() else {
+        return Err(AppError {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: "worktrees stream not wired (set GT_TOWN_ROOT)".into(),
+        });
+    };
+    Ok(sse_from_json_receiver(tx.subscribe()).into_response())
+}
+
+/// Snapshot the town root's worktrees + per-worktree git state. Shared between the
+/// `GET /api/worktrees` handler (one-shot fetch) and the SSE poller in `main.rs`
+/// (hq-fe-api-r.12). `pub(crate)` rather than `pub` because no consumer outside this bin
+/// has a reason to shell git on its behalf.
+pub async fn collect_worktrees(
+    root: &std::path::Path,
+) -> Result<Vec<WorktreeDto>, AppError> {
     let list_out = run_git(root, &["worktree", "list", "--porcelain"]).await?;
     let entries = parse_worktree_list(&list_out);
 

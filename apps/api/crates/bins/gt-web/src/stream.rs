@@ -38,3 +38,22 @@ fn into_sse_stream(
         }
     })
 }
+
+/// Generic helper for SSE feeds whose payload is a plain `Serialize` type with no replay
+/// identity (the `/api/worktrees/stream` feed, hq-fe-api-r.12). Same Lagged-skip posture as
+/// [`sse_from_receiver`]; clients resync via the snapshot endpoint when they reconnect.
+pub fn sse_from_json_receiver<T>(rx: Receiver<T>) -> impl IntoResponse
+where
+    T: Clone + serde::Serialize + Send + 'static,
+{
+    let stream = BroadcastStream::new(rx).filter_map(|res| async move {
+        match res {
+            Ok(payload) => match Event::default().json_data(&payload) {
+                Ok(ev) => Some(Ok::<Event, Infallible>(ev)),
+                Err(_) => None,
+            },
+            Err(_) => None,
+        }
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}

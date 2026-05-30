@@ -74,6 +74,7 @@ async fn boot(town_root: std::path::PathBuf) -> String {
         town_root: Some(Arc::new(town_root)),
         issues: None,
         bus: None,
+        worktrees_stream: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -113,6 +114,7 @@ async fn empty_when_town_root_unset() {
         town_root: None,
         issues: None,
         bus: None,
+        worktrees_stream: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -219,5 +221,143 @@ async fn lists_main_and_worktree_with_dirty_and_divergence() {
     assert!(
         branch_time >= main_time,
         "branch commit must not pre-date init: branch={branch_time} main={main_time}"
+    );
+}
+
+/// hq-fe-api-r.12 gate: when `AppState.worktrees_stream` is unset, the SSE endpoint must
+/// fail-fast with 503 instead of hanging — clients can fall back to the snapshot endpoint
+/// or surface the disabled state.
+#[tokio::test]
+async fn worktrees_stream_503_when_unwired() {
+    let beads = Arc::new(InMemoryBeads::default());
+    let sessions = Arc::new(InMemorySessions::default());
+    let log = {
+        let mut p = std::env::temp_dir();
+        p.push(format!("gt-web-worktrees-log-{}.jsonl", ulid::Ulid::new()));
+        p
+    };
+    let root = spawn(
+        beads.clone(),
+        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
+        Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
+        NoopEffects,
+        SystemClock,
+        log,
+        RootConfig::default(),
+    );
+    let state = AppState {
+        beads,
+        sessions,
+        agent_events: root.agent_events.clone(),
+        events: root.events_sender(),
+        town_root: None,
+        issues: None,
+        bus: None,
+        worktrees_stream: None,
+    };
+    let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = router(state, AuthConfig::open(), sink, ReadinessGate::ready());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let resp = reqwest::Client::new()
+        .get(format!("http://{addr}/api/worktrees/stream"))
+        .header("accept", "text/event-stream")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 503);
+}
+
+/// hq-fe-api-r.12 happy path: when the broadcast channel is wired, a connected SSE client
+/// receives the next snapshot the test pushes into it. Uses a hand-built channel rather
+/// than the real polling task so the test doesn't sleep waiting for a 2s tick.
+#[tokio::test]
+async fn worktrees_stream_delivers_snapshot() {
+    use futures::StreamExt;
+    let repo = tempdir("stream");
+    init_repo(&repo);
+
+    // Build AppState by hand with a fresh broadcast channel; bypass the production poller
+    // and push the snapshot ourselves so the test is deterministic.
+    let beads = Arc::new(InMemoryBeads::default());
+    let sessions = Arc::new(InMemorySessions::default());
+    let log = {
+        let mut p = std::env::temp_dir();
+        p.push(format!("gt-web-worktrees-log-{}.jsonl", ulid::Ulid::new()));
+        p
+    };
+    let root = spawn(
+        beads.clone(),
+        Arc::new(gt_merge::InMemoryMergeRepo::default()),
+        Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
+        Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
+        NoopEffects,
+        SystemClock,
+        log,
+        RootConfig::default(),
+    );
+    let (tx, _rx) = tokio::sync::broadcast::channel::<Vec<WorktreeDto>>(8);
+    let state = AppState {
+        beads,
+        sessions,
+        agent_events: root.agent_events.clone(),
+        events: root.events_sender(),
+        town_root: Some(Arc::new(repo.clone())),
+        issues: None,
+        bus: None,
+        worktrees_stream: Some(tx.clone()),
+    };
+    let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = router(state, AuthConfig::open(), sink, ReadinessGate::ready());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let resp = reqwest::Client::new()
+        .get(format!("http://{addr}/api/worktrees/stream"))
+        .header("accept", "text/event-stream")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let mut stream = resp.bytes_stream();
+
+    // Wait for the broadcast to register a receiver before pushing, otherwise `send`
+    // returns Err(NoSubscribers) and the event is dropped.
+    for _ in 0..50 {
+        if tx.receiver_count() >= 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let snap = gt_web::collect_worktrees(&repo).await.unwrap();
+    tx.send(snap).expect("broadcast send");
+
+    let mut buf = Vec::<u8>::new();
+    let saw_main = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while let Some(chunk) = stream.next().await {
+            buf.extend_from_slice(&chunk.unwrap());
+            if let Ok(s) = std::str::from_utf8(&buf) {
+                if s.contains("\"is_main\":true") {
+                    return true;
+                }
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+
+    assert!(
+        saw_main,
+        "no main-worktree SSE frame received; got: {}",
+        String::from_utf8_lossy(&buf)
     );
 }
