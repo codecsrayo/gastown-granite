@@ -171,7 +171,9 @@ Estado del epic `hq-fe-rbac`:
 
 - `hq-fe-rbac.1` JWT signing en gt-api — **CLOSED** (HS256, `bins/gt-web/src/jwt.rs`).
 - `hq-fe-rbac.2` Config RBAC unificada — **CLOSED** (crate `gt-rbac`).
-- `hq-fe-rbac.3` Middleware **per-scope** en gt-web (reemplaza el single bearer check).
+- `hq-fe-rbac.3` Middleware **per-scope** en gt-web — **CLOSED**
+  (`bins/gt-web/src/scope.rs`: `ScopeGuard` por ruta gateado contra `AuthClaims.scopes`;
+  Bearer/Open mode grandfathered; emite `web.forbidden` al audit).
 - `hq-fe-rbac.4` `GET /api/whoami` → `{ actor, mode, roles[], scopes[] }` — **CLOSED**
   (poblado desde claims JWT cuando `mode=jwt`).
 - `hq-fe-rbac.5` Enriquecer `web.invoked` con `command` + `target` para el audit feed
