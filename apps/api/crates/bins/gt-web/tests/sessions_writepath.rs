@@ -68,6 +68,7 @@ async fn boot(
         sessions,
         agent_events: root.agent_events.clone(),
         events: root.events_sender(),
+        town_root: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

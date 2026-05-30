@@ -1,6 +1,7 @@
 //! Shared state carried by every handler. Generic over the ports so the bin plugs in real
 //! adapters and tests plug in in-memory ones; `Arc`s give cheap clones for axum's State.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::{broadcast, mpsc};
@@ -21,6 +22,10 @@ where
     pub sessions: Arc<SQ>,
     pub agent_events: mpsc::Sender<Envelope<AgentEvent>>,
     pub events: broadcast::Sender<EventRecord>,
+    /// Town root absolute path. `GET /api/worktrees` shells `git -C <root>` to enumerate
+    /// worktrees the agents have branched off (hq-fe-api-r.8). Optional: when unset the
+    /// endpoint reports an empty list — the gateway does not invent a default rig location.
+    pub town_root: Option<Arc<PathBuf>>,
 }
 
 impl<R, SQ> Clone for AppState<R, SQ>
@@ -34,6 +39,7 @@ where
             sessions: self.sessions.clone(),
             agent_events: self.agent_events.clone(),
             events: self.events.clone(),
+            town_root: self.town_root.clone(),
         }
     }
 }

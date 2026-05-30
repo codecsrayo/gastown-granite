@@ -93,3 +93,38 @@ pub struct NudgeRequest {
 pub struct NudgeResponse {
     pub accepted: bool,
 }
+
+/// One row of `GET /api/worktrees` (hq-fe-api-r.8). Mirrors what VSCode's SCM panel renders
+/// per-repo: the worktree path, its current branch and HEAD, the divergence vs. the rig's
+/// default branch (`main` in hq), and the dirty file list. The dashboard joins this against
+/// `GET /api/sessions` to label each row with the agent on it (branch convention
+/// `claim/<bead-id>` per `apps/web/docs/frontend-features.md`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorktreeDto {
+    /// Absolute path of the worktree on disk (matches `git worktree list --porcelain` output).
+    pub path: String,
+    /// Branch name, or `None` for a detached HEAD (porcelain emits `detached` then).
+    pub branch: Option<String>,
+    /// 40-char object id at HEAD (porcelain emits `HEAD <sha>`).
+    pub head: String,
+    /// `true` for the main worktree (porcelain emits `bare` or no `worktree` parent flag).
+    pub is_main: bool,
+    /// Commits this branch has that `main` does not (right side of `main...HEAD`).
+    pub ahead: u32,
+    /// Commits `main` has that this branch does not (left side of `main...HEAD`).
+    pub behind: u32,
+    /// Working-tree changes (porcelain v2 lines), one entry per dirty path. Empty when clean.
+    pub dirty: Vec<DirtyFileDto>,
+}
+
+/// One dirty path inside a worktree. Mirrors `git status --porcelain=v2` shape — the `xy`
+/// 2-char code carries staged (`x`) + unstaged (`y`) state so the frontend can render the
+/// same `M`/`U`/`A`/`?` glyphs VSCode does without re-parsing rules client-side.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DirtyFileDto {
+    /// Path relative to the worktree root (matches porcelain v2 final column).
+    pub path: String,
+    /// Two-letter status code: index state + worktree state. `??` for untracked, `M.` for
+    /// staged modify, `.M` for unstaged modify, `A.` for staged add, `UU` for unmerged.
+    pub xy: String,
+}

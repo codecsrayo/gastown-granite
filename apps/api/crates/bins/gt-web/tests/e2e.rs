@@ -60,6 +60,7 @@ async fn boot_with_auth(
         sessions,
         agent_events: root.agent_events.clone(),
         events: root.events_sender(),
+        town_root: None,
     };
 
     let audit = InMemoryWebAudit::new();

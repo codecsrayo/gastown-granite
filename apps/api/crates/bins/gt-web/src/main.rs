@@ -244,11 +244,20 @@ async fn serve<R, SQ, MR, PR, OR>(
         Arc::new(JsonlWriter::new(root.log_path()));
     let audit: Arc<dyn WebAuditSink> = Arc::new(JsonlWebAudit::new(writer));
 
+    // Town root for `GET /api/worktrees` (hq-fe-api-r.8). Optional: when `GT_TOWN_ROOT` is
+    // unset (e.g. CI, in-tree tests) the handler short-circuits to an empty list rather than
+    // probing the current working directory — the gateway must not invent a default rig path.
+    let town_root = std::env::var("GT_TOWN_ROOT")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(|s| Arc::new(std::path::PathBuf::from(s)));
+
     let state = AppState {
         beads,
         sessions,
         agent_events: root.agent_events.clone(),
         events: root.events_sender(),
+        town_root,
     };
 
     let app = router(state, auth, audit, gate);
