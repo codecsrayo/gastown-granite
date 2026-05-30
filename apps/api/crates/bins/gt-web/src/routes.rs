@@ -12,14 +12,16 @@ use axum::response::{IntoResponse, Json};
 use gt_agent::{AgentEvent, SessionQueries};
 use gt_beads::{Bead, BeadRepository, BeadStatus};
 use gt_events::Envelope;
+use gt_orchestration::{FailMember, LaunchConvoy, OrchCommand};
 use gt_quota::{QuotaCommand, RotateAccount};
 use gt_root::RootCommand;
 use gt_store_dolt::{IssueFilter, IssueRow};
 
 use crate::dto::{
     BeadCreateRequest, BeadDto, BeadTransitionRequest, BeadUpdateRequest, BeadsQuery,
-    DirtyFileDto, IssueDto, IssuesQuery, NudgeRequest, NudgeResponse, QuotaRetireResponse,
-    QuotaRotateRequest, SessionDto, SessionsQuery, WorktreeDto,
+    ConvoyCreateRequest, ConvoyCreateResponse, DirtyFileDto, IssueDto, IssuesQuery,
+    MemberFailRequest, NudgeRequest, NudgeResponse, QuotaRetireResponse, QuotaRotateRequest,
+    SessionDto, SessionsQuery, WorktreeDto,
 };
 use crate::state::AppState;
 use crate::stream::{sse_from_json_receiver, sse_from_receiver};
@@ -311,6 +313,91 @@ fn is_operator_transition_allowed(from: BeadStatus, to: BeadStatus) -> bool {
         (Done, Pending) | (Failed, Pending) => true,
         _ => false,
     }
+}
+
+/// `POST /api/convoys` — create + launch a convoy (hq-fe-api-w.9). Thin HTTP wrapper
+/// around `OrchCommand::Launch`: same edge op `orch.launch_convoy` drives, so audit and
+/// idempotency-key replay flow uniformly. A successful response means the convoy is
+/// live and its first member already dispatched (the orchestrator does both atomically).
+///
+/// `pause` / `resume` are deliberately absent: the orchestration domain has no Pause /
+/// Resume commands today (`gap parcial` in the migration plan). `members/:m/fail` ships
+/// on [`fail_convoy_member`] in the same epic.
+pub async fn create_convoy<R, SQ>(
+    State(state): State<AppState<R, SQ>>,
+    Json(req): Json<ConvoyCreateRequest>,
+) -> Result<(StatusCode, Json<ConvoyCreateResponse>), AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
+    if req.convoy.is_empty() {
+        return Err(AppError::bad_request("convoy id is empty"));
+    }
+    if req.members.is_empty() {
+        return Err(AppError::bad_request("convoy has no members"));
+    }
+    if req.members.iter().any(|m| m.is_empty()) {
+        return Err(AppError::bad_request("convoy member id is empty"));
+    }
+    let bus = state
+        .bus
+        .as_ref()
+        .ok_or_else(|| AppError::internal("command bus not wired"))?;
+    let cmd = RootCommand::Orch(OrchCommand::Launch(LaunchConvoy {
+        convoy: req.convoy.clone(),
+        members: req.members.clone(),
+    }));
+    bus.dispatch(cmd, None).await.map_err(AppError::from)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(ConvoyCreateResponse {
+            convoy: req.convoy,
+            members: req.members,
+            launched: true,
+        }),
+    ))
+}
+
+/// `POST /api/convoys/:convoy/members/:member/fail` — halt a convoy at the failing
+/// member (hq-fe-api-w.9). Wraps `OrchCommand::Fail` so the same `MemberFailed` /
+/// `ConvoyFailed` event chain the MCP tool produces flows through the audit log and
+/// SSE. The body carries the human-readable reason (operator's "why"); path params
+/// disambiguate the target so the URL itself is a self-describing audit entry.
+pub async fn fail_convoy_member<R, SQ>(
+    State(state): State<AppState<R, SQ>>,
+    Path((convoy, member)): Path<(String, String)>,
+    Json(req): Json<MemberFailRequest>,
+) -> Result<Json<serde_json::Value>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
+    if convoy.is_empty() {
+        return Err(AppError::bad_request("convoy id is empty"));
+    }
+    if member.is_empty() {
+        return Err(AppError::bad_request("member id is empty"));
+    }
+    if req.reason.trim().is_empty() {
+        return Err(AppError::bad_request("reason is empty"));
+    }
+    let bus = state
+        .bus
+        .as_ref()
+        .ok_or_else(|| AppError::internal("command bus not wired"))?;
+    let cmd = RootCommand::Orch(OrchCommand::Fail(FailMember {
+        convoy: convoy.clone(),
+        member: member.clone(),
+        reason: req.reason.clone(),
+    }));
+    bus.dispatch(cmd, None).await.map_err(AppError::from)?;
+    Ok(Json(serde_json::json!({
+        "failed": true,
+        "convoy": convoy,
+        "member": member,
+        "reason": req.reason,
+    })))
 }
 
 /// `POST /api/quota/accounts/:id/rotate` — promote `quota.rotate` from MCP-only to an

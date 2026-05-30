@@ -138,6 +138,37 @@ impl BeadsQuery {
     }
 }
 
+/// Body of `POST /api/convoys` (hq-fe-api-w.9). Launches a fresh convoy with an ordered
+/// member list; the orchestrator dispatches members one at a time as each completes.
+/// Mirrors `gt_orchestration::LaunchConvoy` so the route is a thin HTTP transport over
+/// `OrchCommand::Launch` — pause/resume stay deferred until the domain ships them
+/// (`gap parcial` in the migration plan).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConvoyCreateRequest {
+    pub convoy: String,
+    pub members: Vec<String>,
+}
+
+/// Response of `POST /api/convoys`. Echoes the convoy id + members so the dashboard can
+/// render the new row without a follow-up `GET /api/convoys`. `launched: true` is a
+/// fixed marker — `OrchCommand::Launch` either succeeds (and the first member is already
+/// dispatched) or returns a 4xx, so a successful response always means the convoy is live.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConvoyCreateResponse {
+    pub convoy: String,
+    pub members: Vec<String>,
+    pub launched: bool,
+}
+
+/// Body of `POST /api/convoys/:convoy/members/:member/fail` (hq-fe-api-w.9). Halts the
+/// convoy with an operator-supplied reason. Path params carry the identifiers so a
+/// curl smoke test can omit the body entirely when `reason` is optional — but we keep
+/// it required here so audit / SSE always carry context for the failure.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MemberFailRequest {
+    pub reason: String,
+}
+
 /// Body of `POST /api/nudge` — a write-side command, not an event. The handler turns it into
 /// an `AgentEvent::Heartbeat` on the agent relay; the actor records it and replay sees it.
 #[derive(Debug, Clone, Deserialize)]

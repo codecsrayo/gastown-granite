@@ -220,7 +220,8 @@ to the old API; pick the cleanest contract per feature.
 | `DELETE /api/sessions/:id` (kill via gt-polecat SIGTERM) | **done** (gt-web) | hq-fe-api-w.6 |
 | `POST /api/sessions/:id/restart` | **gap** | hq-fe-api-w.7 |
 | `POST /api/sessions/:id/interrupt` (tmux send-keys ESC) | **done** (gt-web) | hq-fe-api-w.8 |
-| `POST /api/convoys` · `pause` · `resume` · `members/:m/fail` (e-stop) | **gap parcial** | hq-fe-api-w.9 |
+| `POST /api/convoys` · `members/:m/fail` (e-stop) | **done** (gt-web) | hq-fe-api-w.9 |
+| `pause` · `resume` (convoy lifecycle) | **gap** (no domain ops) | hq-fe-api-w.9 follow-up |
 | `POST /api/quota/accounts/:n/rotate` · `retire` | **gap (HTTP)** (existe MCP) | hq-fe-api-w.10 |
 | `POST /api/beads/bulk` + rate-limit | **gap** | hq-fe-api-w.11 |
 | `POST /api/roles/:role/skills` (toggle) | **gap (new domain)** | hq-fe-skills.3 |

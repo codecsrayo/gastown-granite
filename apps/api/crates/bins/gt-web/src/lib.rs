@@ -116,6 +116,14 @@ where
             get(routes::worktrees_stream::<R, SQ>),
         )
         .route("/api/nudge", post(routes::nudge::<R, SQ>))
+        // hq-fe-api-w.9 — convoy write surface. POST creates + launches; the per-member
+        // fail route halts a stuck convoy with an operator-supplied reason. `pause` /
+        // `resume` are deferred — domain has no Pause/Resume commands today.
+        .route("/api/convoys", post(routes::create_convoy::<R, SQ>))
+        .route(
+            "/api/convoys/:convoy/members/:member/fail",
+            post(routes::fail_convoy_member::<R, SQ>),
+        )
         // hq-fe-api-w.10 — promote quota.rotate / quota.retire from MCP-only to HTTP.
         .route(
             "/api/quota/accounts/:id/rotate",
