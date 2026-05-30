@@ -67,7 +67,7 @@ Docs hermanos (lectura obligada antes de tocar nada):
 | **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
 | **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | PLANEADO · spike obligatorio |
 | **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | PLANEADO |
-| **hq-fe-view** | Vistas + componentes (UI) | 15 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.14 + view.15 CLOSED |
+| **hq-fe-view** | Vistas + componentes (UI) | 16 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.14 + .15 + .16 CLOSED |
 | **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | PLANEADO |
 | **hq-mcp-issues** | MCP `issues.*` CRUD (cerrar bypass docker exec) | 5 | hq-fe-api-w.1 | PLANEADO |
 | **hq-mcp-onboard** | MCP agent onboarding + discoverability (slogan-feedback gaps) | 10 | parcial hq-mcp-issues.2 + hq-fe-api-w.1 | DONE · claude-host-onboard |
@@ -249,7 +249,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-view.13 | Profile menu topbar (whoami + read-only toggle + logout) | P1 | open | — | |
 | hq-fe-view.14 | Worktrees view (SCM-like panel: branches+dirty+ahead/behind por agente) | P1 | closed | claude-host | route `/worktrees` + `lib/{api,types,claim-branch}` + vitest; bead badge desde `claim/<bead-id>` convención |
 | hq-fe-view.15 | Worktrees panel cross-link real: bead title+assignee desde /api/issues | P1 | closed | claude-host | `Promise.allSettled([worktrees,issues])`; `issuesById` derived map; `open,working` slice; badge tooltip = título |
-| hq-fe-view.16 | Worktrees panel: ocultar idle por default (clean + no claim/ + no main) | P2 | open | — | counter `X active · Y idle hidden` en header |
+| hq-fe-view.16 | Worktrees panel: ocultar idle por default (clean + no claim/ + no main) | P2 | closed | claude-host | `lib/worktree-filter.ts::isActive` + 5 vitest cases; counter `X active · Y idle hidden` en header |
 
 ### Epic `hq-fe-cut` — cutover
 
