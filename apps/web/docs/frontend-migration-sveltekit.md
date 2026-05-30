@@ -60,14 +60,14 @@ Docs hermanos (lectura obligada antes de tocar nada):
 | Epic | Descripción | Beads | Bloqueada por | Estado |
 |---|---|---|---|---|
 | **hq-fe-svelte** | Master · dashboard reconstruction | (todas abajo) | — | PLANEADO |
-| **hq-fe-api-r** | Read-side gaps (snapshots por dominio) | 9 | — | EN PROGRESO · r.8 + r.9 CLOSED |
+| **hq-fe-api-r** | Read-side gaps (snapshots por dominio) | 10 | — | EN PROGRESO · r.8 + r.9 + r.10 CLOSED |
 | **hq-fe-api-w** | Write-side commands (HTTP routes) | 11 | hq-fe-api-w.1 (bus) | PLANEADO |
 | **hq-fe-rbac** | RBAC · JWT · whoami · scopes | 5 | hq-fe-api-w.1 | PLANEADO |
 | **hq-fe-auth** | Account auth (Claude `/login` pty driver) | 5 | hq-fe-api-w (idem) | PLANEADO |
 | **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
 | **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | PLANEADO · spike obligatorio |
 | **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | PLANEADO |
-| **hq-fe-view** | Vistas + componentes (UI) | 16 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.14 + .15 + .16 CLOSED |
+| **hq-fe-view** | Vistas + componentes (UI) | 17 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.14 + .15 + .16 + .17 CLOSED |
 | **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | PLANEADO |
 | **hq-mcp-issues** | MCP `issues.*` CRUD (cerrar bypass docker exec) | 5 | hq-fe-api-w.1 | PLANEADO |
 | **hq-mcp-onboard** | MCP agent onboarding + discoverability (slogan-feedback gaps) | 10 | parcial hq-mcp-issues.2 + hq-fe-api-w.1 | DONE · claude-host-onboard |
@@ -161,6 +161,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-api-r.7 | `GET /api/mayor/status` ATTACHED/DETACHED | P3 | open | — | semántica TBD con mayor |
 | hq-fe-api-r.8 | `GET /api/worktrees` snapshot (live branch tracking) | P1 | closed | claude-host | shell `git worktree list` + `status --porcelain=v2` + `rev-list main...HEAD`; backs hq-fe-view.14 |
 | hq-fe-api-r.9 | `GET /api/issues` snapshot (hq.issues mirror) | P1 | closed | claude-host | DoltIssues reader; filters status/assignee/external_ref/limit; mirror del `gt://issues` MCP; backs hq-fe-view.15 |
+| hq-fe-api-r.10 | Extend `/api/worktrees` con HEAD subject + author | P2 | closed | claude-host | `git log -1 --format=%s%n%an` per wt; null gracefully; backs hq-fe-view.17 |
 
 ### Epic `hq-fe-api-w` — write-side commands
 
@@ -250,6 +251,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-view.14 | Worktrees view (SCM-like panel: branches+dirty+ahead/behind por agente) | P1 | closed | claude-host | route `/worktrees` + `lib/{api,types,claim-branch}` + vitest; bead badge desde `claim/<bead-id>` convención |
 | hq-fe-view.15 | Worktrees panel cross-link real: bead title+assignee desde /api/issues | P1 | closed | claude-host | `Promise.allSettled([worktrees,issues])`; `issuesById` derived map; `open,working` slice; badge tooltip = título |
 | hq-fe-view.16 | Worktrees panel: ocultar idle por default (clean + no claim/ + no main) | P2 | closed | claude-host | `lib/worktree-filter.ts::isActive` + 5 vitest cases; counter `X active · Y idle hidden` en header |
+| hq-fe-view.17 | Worktrees panel: HEAD subject + author bajo branch | P2 | closed | claude-host | render `subject — author` faint line; truncate + tooltip full text |
 
 ### Epic `hq-fe-cut` — cutover
 
