@@ -10,6 +10,7 @@ use gt_agent::{AgentEvent, SessionQueries};
 use gt_audit::EventRecord;
 use gt_beads::BeadRepository;
 use gt_events::Envelope;
+use gt_root::CommandBus;
 use gt_store_dolt::DoltIssues;
 
 /// Read-side composition root. Keep it `Clone` (Arc-backed) so axum can hand a fresh handle
@@ -33,6 +34,12 @@ where
     /// mode keeps working without a Dolt connection. Concrete type by design — `DoltIssues`
     /// is the only reader; introducing a port would add a generic for no current consumer.
     pub issues: Option<Arc<DoltIssues>>,
+    /// `gt-root::CommandBus` clone (hq-fe-api-w.10). Write-side HTTP routes dispatch
+    /// through here instead of carrying per-domain handles; first consumer is
+    /// `POST /api/quota/accounts/:n/{rotate,retire}`. `None` in test setups that build
+    /// AppState without a live `RootHandle`; those tests exercise routes that don't need
+    /// the bus.
+    pub bus: Option<CommandBus>,
 }
 
 impl<R, SQ> Clone for AppState<R, SQ>
@@ -48,6 +55,7 @@ where
             events: self.events.clone(),
             town_root: self.town_root.clone(),
             issues: self.issues.clone(),
+            bus: self.bus.clone(),
         }
     }
 }

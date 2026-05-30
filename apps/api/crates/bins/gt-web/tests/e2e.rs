@@ -62,6 +62,7 @@ async fn boot_with_auth(
         events: root.events_sender(),
         town_root: None,
         issues: None,
+        bus: None,
     };
 
     let audit = InMemoryWebAudit::new();

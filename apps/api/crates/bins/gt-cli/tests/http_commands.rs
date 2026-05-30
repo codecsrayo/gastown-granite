@@ -55,6 +55,8 @@ async fn boot(auth: AuthConfig) -> (String, RootHandle<Arc<InMemoryBeads>>) {
         // hq-fe-api-r.8 added `town_root` to `AppState`; tests that don't exercise
         // `/api/worktrees` pass `None` so the endpoint returns an empty list.
         town_root: None,
+        issues: None,
+        bus: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
 

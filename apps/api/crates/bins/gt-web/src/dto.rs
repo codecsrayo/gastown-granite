@@ -94,6 +94,24 @@ pub struct NudgeResponse {
     pub accepted: bool,
 }
 
+/// Body of `POST /api/quota/accounts/:id/rotate` (hq-fe-api-w.10). The source account
+/// is the path segment; the body carries the healthy target. `now_secs` is optional —
+/// when absent the route stamps `SystemTime::now()` so curl smoke tests stay one-liners.
+#[derive(Debug, Clone, Deserialize)]
+pub struct QuotaRotateRequest {
+    pub to_account: String,
+    #[serde(default)]
+    pub now_secs: Option<u64>,
+}
+
+/// Response of `POST /api/quota/accounts/:id/retire`. `removed = false` when the id was
+/// already absent — the route is idempotent.
+#[derive(Debug, Clone, Serialize)]
+pub struct QuotaRetireResponse {
+    pub account: String,
+    pub removed: bool,
+}
+
 /// One row of `GET /api/worktrees` (hq-fe-api-r.8). Mirrors what VSCode's SCM panel renders
 /// per-repo: the worktree path, its current branch and HEAD, the divergence vs. the rig's
 /// default branch (`main` in hq), and the dirty file list. The dashboard joins this against

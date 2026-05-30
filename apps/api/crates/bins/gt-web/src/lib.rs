@@ -80,6 +80,15 @@ where
         .route("/api/issues", get(routes::list_issues::<R, SQ>))
         .route("/api/worktrees", get(routes::list_worktrees::<R, SQ>))
         .route("/api/nudge", post(routes::nudge::<R, SQ>))
+        // hq-fe-api-w.10 — promote quota.rotate / quota.retire from MCP-only to HTTP.
+        .route(
+            "/api/quota/accounts/:id/rotate",
+            post(routes::quota_rotate::<R, SQ>),
+        )
+        .route(
+            "/api/quota/accounts/:id/retire",
+            post(routes::quota_retire::<R, SQ>),
+        )
         .route("/api/stream", get(routes::stream::<R, SQ>))
         .with_state(state)
         // Idempotency-Key middleware (hq-fe-api-w.2). Layered between routes and auth so

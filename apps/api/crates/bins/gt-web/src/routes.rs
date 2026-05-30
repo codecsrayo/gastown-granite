@@ -3,19 +3,22 @@
 //! production bin plugs in Dolt/Postgres — same isolation rule as `bins/gt`.
 
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
 
 use gt_agent::{AgentEvent, SessionQueries};
 use gt_beads::{BeadRepository, BeadStatus};
 use gt_events::Envelope;
+use gt_quota::{QuotaCommand, RotateAccount};
+use gt_root::RootCommand;
 use gt_store_dolt::{IssueFilter, IssueRow};
 
 use crate::dto::{
     BeadDto, BeadsQuery, DirtyFileDto, IssueDto, IssuesQuery, NudgeRequest, NudgeResponse,
-    SessionDto, SessionsQuery, WorktreeDto,
+    QuotaRetireResponse, QuotaRotateRequest, SessionDto, SessionsQuery, WorktreeDto,
 };
 use crate::state::AppState;
 use crate::stream::sse_from_receiver;
@@ -74,6 +77,78 @@ where
         .await
         .map_err(|_| AppError::internal("agent relay closed"))?;
     Ok(Json(NudgeResponse { accepted: true }))
+}
+
+/// `POST /api/quota/accounts/:id/rotate` — promote `quota.rotate` from MCP-only to an
+/// HTTP route (hq-fe-api-w.10). Dispatches through the same [`gt_root::CommandBus`] the
+/// gt-mcp tools drive, so audit and scope flow uniformly. Path `:id` is the source
+/// account (the one being rotated *away from*); the body carries the healthy target.
+pub async fn quota_rotate<R, SQ>(
+    State(state): State<AppState<R, SQ>>,
+    Path(id): Path<String>,
+    Json(req): Json<QuotaRotateRequest>,
+) -> Result<Json<serde_json::Value>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
+    if id.is_empty() {
+        return Err(AppError::bad_request("account id is empty"));
+    }
+    if req.to_account.trim().is_empty() {
+        return Err(AppError::bad_request("to_account is empty"));
+    }
+    if req.to_account == id {
+        return Err(AppError::bad_request(
+            "to_account must differ from the source",
+        ));
+    }
+    let bus = state
+        .bus
+        .as_ref()
+        .ok_or_else(|| AppError::internal("command bus not wired"))?;
+    let cmd = RootCommand::Quota(QuotaCommand::Rotate(RotateAccount {
+        from_account: id.clone(),
+        to_account: req.to_account.clone(),
+        now_secs: req.now_secs.unwrap_or_else(epoch_now),
+    }));
+    bus.dispatch(cmd, None).await.map_err(AppError::from)?;
+    Ok(Json(serde_json::json!({
+        "rotated": true,
+        "from": id,
+        "to": req.to_account,
+    })))
+}
+
+/// `POST /api/quota/accounts/:id/retire` — drop an account from the live registry
+/// (hq-fe-api-w.10). Mirrors `quota.retire` (the edge op that bypasses `QuotaCommand`
+/// because account-registration is not event-logged in the domain — see
+/// [`gt_mcp::RetireAccount`]). Idempotent: a missing account returns `removed: false`
+/// with HTTP 200 so callers can drive retire-loops without conditional logic.
+pub async fn quota_retire<R, SQ>(
+    State(state): State<AppState<R, SQ>>,
+    Path(id): Path<String>,
+) -> Result<Json<QuotaRetireResponse>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
+    if id.is_empty() {
+        return Err(AppError::bad_request("account id is empty"));
+    }
+    let bus = state
+        .bus
+        .as_ref()
+        .ok_or_else(|| AppError::internal("command bus not wired"))?;
+    let removed = bus.quota().remove_account(id.clone()).await;
+    Ok(Json(QuotaRetireResponse { account: id, removed }))
+}
+
+fn epoch_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// `GET /api/stream` — SSE feed of the running root's broadcast.

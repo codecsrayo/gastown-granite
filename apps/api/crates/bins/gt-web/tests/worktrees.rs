@@ -73,6 +73,7 @@ async fn boot(town_root: std::path::PathBuf) -> String {
         events: root.events_sender(),
         town_root: Some(Arc::new(town_root)),
         issues: None,
+        bus: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -111,6 +112,7 @@ async fn empty_when_town_root_unset() {
         events: root.events_sender(),
         town_root: None,
         issues: None,
+        bus: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

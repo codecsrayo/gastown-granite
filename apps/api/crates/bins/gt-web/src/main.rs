@@ -272,6 +272,9 @@ async fn serve<R, SQ, MR, PR, OR>(
         events: root.events_sender(),
         town_root,
         issues,
+        // hq-fe-api-w.10: share the running root's CommandBus so HTTP write routes
+        // dispatch through the same actors gt-mcp drives.
+        bus: Some(root.commands()),
     };
 
     // Idempotency-Key cache (hq-fe-api-w.2). TTL overridable via
