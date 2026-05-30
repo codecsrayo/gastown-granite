@@ -55,19 +55,19 @@ Docs hermanos (lectura obligada antes de tocar nada):
 
 ## Estado global
 
-**Estado: PLANEADO · no iniciado** (2026-05-29).
+**Estado: EN PROGRESO** (snapshot 2026-05-30).
 
 | Epic | Descripción | Beads | Bloqueada por | Estado |
 |---|---|---|---|---|
 | **hq-fe-svelte** | Master · dashboard reconstruction | (todas abajo) | — | PLANEADO |
-| **hq-fe-api-r** | Read-side gaps (snapshots por dominio) | 12 | — | EN PROGRESO · r.3/.4/.6/.7/.8-.12 CLOSED (9/12) |
-| **hq-fe-api-w** | Write-side commands (HTTP routes) | 11 | hq-fe-api-w.1 (bus) | EN PROGRESO · w.1/.2/.3/.4/.10 CLOSED · w.6 working |
-| **hq-fe-rbac** | RBAC · JWT · whoami · scopes | 5 | hq-fe-api-w.1 | EN PROGRESO · .1/.4 CLOSED (2/5) |
+| **hq-fe-api-r** | Read-side gaps (snapshots por dominio) | 12 | — | EN PROGRESO · r.2-.12 CLOSED (11/12) · r.1 working |
+| **hq-fe-api-w** | Write-side commands (HTTP routes) | 11 | hq-fe-api-w.1 (bus) | DONE · 11/11 CLOSED |
+| **hq-fe-rbac** | RBAC · JWT · whoami · scopes | 5 | hq-fe-api-w.1 | EN PROGRESO · .1/.4 CLOSED (2/5) · .2 working |
 | **hq-fe-auth** | Account auth (Claude `/login` pty driver) | 5 | hq-fe-api-w (idem) | PLANEADO |
 | **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
 | **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | PLANEADO · spike obligatorio |
 | **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | EN PROGRESO · .1-.4 + .6 + .8 CLOSED (6/8) |
-| **hq-fe-view** | Vistas + componentes (UI) | 19 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.1/.2/.3/.4/.12/.13/.14-19 CLOSED (10/19) |
+| **hq-fe-view** | Vistas + componentes (UI) | 19 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.1-.6/.12/.13/.14-.19 CLOSED (14/19) |
 | **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | PLANEADO |
 | **hq-mcp-issues** | MCP `issues.*` CRUD (cerrar bypass docker exec) | 5 | hq-fe-api-w.1 | DONE · 5/5 closed |
 | **hq-mcp-onboard** | MCP agent onboarding + discoverability (slogan-feedback gaps) | 10 | parcial hq-mcp-issues.2 + hq-fe-api-w.1 | DONE · claude-host-onboard |
@@ -153,7 +153,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | Bead | Título | Pri | Estado | Agente | Notas |
 |---|---|---|---|---|---|
 | hq-fe-api-r.1 | `GET /api/quota/accounts` snapshot completo | P1 | open | — | tags por sesión, /upgrade pending |
-| hq-fe-api-r.2 | `GET /api/quota/rotation` waiting_unlock + recent | P1 | open | — | derivado de SSE quota.* + estado |
+| hq-fe-api-r.2 | `GET /api/quota/rotation` waiting_unlock + recent | P1 | closed | claude-host | snapshot 7fb78241 (commit en main); derivado de SSE quota.* + estado |
 | hq-fe-api-r.3 | `GET /api/convoys` snapshot por estado | P2 | closed | claude-host | `ConvoyDto`+`ConvoyMemberDto`; `bus.orch().snapshot()`; `?state=` filter permissive; 10 cargo test; FE `lib/{types,api}/convoy*` |
 | hq-fe-api-r.4 | `GET /api/merges` slots snapshot | P2 | closed | claude-host | `AppState<R,SQ,M>` add `M: MergeRepository` (14 fixtures patched); `MergeSlotDto {bead,branch,state}` flat strings; `routes::list_merges`; tests `merges_http` 2/2 (sorted seeded + empty). 12 fixtures gain `merges` field |
 | hq-fe-api-r.5 | `GET /api/feed?since=&limit=` activity histórico | P2 | closed | claude-host | `gt-audit::since` reader sobre `events.jsonl` + `gt-web::routes::feed`; `since` strict-greater-than RFC3339, `limit` default 500/cap 2000; `AppState.event_log` cabled desde `root.log_path()`; tests `feed_http` 4/4 (tail/since/limit/unwired) |

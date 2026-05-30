@@ -136,3 +136,4 @@ without spawning a host binary.
 | SSE silent for 30s+ | proxy buffering / WS upgrade dropped | reload the page (the singleton router auto-reconnects via the browser); confirm `ws: true` in `vite.config.ts` is still set. |
 | `pnpm test` errors `Cannot find package 'jsdom'` | dev dep missing | `pnpm add -D jsdom` (vite config pins `environment: 'jsdom'`). |
 | `pnpm lint` errors `getVisitorKeys is not a function` | prettier 3.8 + plugin 3.5 incompat | use `pnpm exec eslint .`; CI does the same. |
+| `[vite:import-analysis] Failed to resolve import "<pkg>"` | `package.json` + lockfile updated but `node_modules/` stale (agent forgot `pnpm install`) | `cd apps/web && pnpm install`, then `pnpm exec vite build` to confirm. Agents must always run install + build/check after touching deps — see project `.claude/CLAUDE.md`. |
