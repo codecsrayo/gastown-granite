@@ -67,7 +67,7 @@ Docs hermanos (lectura obligada antes de tocar nada):
 | **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
 | **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | PLANEADO · spike obligatorio |
 | **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | EN PROGRESO · .1-.4 + .6 + .8 CLOSED (6/8) |
-| **hq-fe-view** | Vistas + componentes (UI) | 19 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.1-.6/.12/.13/.14-.19 CLOSED (14/19) |
+| **hq-fe-view** | Vistas + componentes (UI) | 19 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.1-.7/.12/.13/.14-.19 CLOSED (15/19) |
 | **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | PLANEADO |
 | **hq-mcp-issues** | MCP `issues.*` CRUD (cerrar bypass docker exec) | 5 | hq-fe-api-w.1 | DONE · 5/5 closed |
 | **hq-mcp-onboard** | MCP agent onboarding + discoverability (slogan-feedback gaps) | 10 | parcial hq-mcp-issues.2 + hq-fe-api-w.1 | DONE · claude-host-onboard |
@@ -173,13 +173,13 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-api-w.2 | `Idempotency-Key` middleware en gt-web | P1 | closed | claude-host | TTL configurable via `GT_WEB_IDEMPOTENCY_TTL_SECS` |
 | hq-fe-api-w.3 | `POST /api/beads` + `PATCH /api/beads/:id` | P1 | closed | claude-host | dispatch via CommandBus |
 | hq-fe-api-w.4 | `POST /api/beads/:id/transition` state machine | P1 | closed | — | guard ilegales → 409 |
-| hq-fe-api-w.5 | `POST /api/beads/:id/comments` | P2 | open | — | |
-| hq-fe-api-w.6 | `DELETE /api/sessions/:id` kill via gt-polecat | P1 | working | — | SIGTERM con timeout → SIGKILL |
-| hq-fe-api-w.7 | `POST /api/sessions/:id/restart` | P2 | open | — | kill + respawn con misma crew |
-| hq-fe-api-w.8 | `POST /api/sessions/:id/interrupt` (tmux ESC) | P2 | open | — | send-keys; documentar risk |
-| hq-fe-api-w.9 | `POST /api/convoys` + pause/resume/fail-member | P2 | open | — | nuevo dominio eventos pause/resume |
+| hq-fe-api-w.5 | `POST /api/beads/:id/comments` | P2 | closed | claude-host | append-only notes column via `IssueCommenter` port (`DoltIssueCommenter` shares `Arc<DoltIssues>` con reader); canonical fragment `ts/author/body`; commit 9b522879 |
+| hq-fe-api-w.6 | `DELETE /api/sessions/:id` kill via gt-polecat | P1 | closed | — | `PolecatControl::kill` port (`TmuxPolecatControl` over `gt_polecat::TmuxCli`); tmux kill BEFORE emit so fatal edge errors return 500 sin row half-closed; emits `AgentEvent::Killed` so projector + SSE see lifecycle close |
+| hq-fe-api-w.7 | `POST /api/sessions/:id/restart` | P2 | closed | claude-host | `PolecatRespawner` port + `LifecyclePolecatRespawner` over `PolecatLifecycle`; reads dying session env (`GT_HOOK_BEAD`/`GT_CONVOY`) y respawn con misma crew; emits `Killed`+`Spawned` pair so projector flips in single tick |
+| hq-fe-api-w.8 | `POST /api/sessions/:id/interrupt` (tmux ESC) | P2 | closed | — | shared `PolecatControl` port (`interrupt = send-keys Escape`); softer e-stop que no mata polecat; misma shape que kill (404 if missing, 500 if control unwired) |
+| hq-fe-api-w.9 | `POST /api/convoys` + pause/resume/fail-member | P2 | closed | — | `POST /api/convoys` (LaunchConvoy via CommandBus, atomic launch + dispatch primer member) + `POST /api/convoys/:c/members/:m/fail` (`FailMember{convoy,member,reason}`); pause/resume deferred (domain no tiene Pause/Resume hoy) |
 | hq-fe-api-w.10 | `POST /api/quota/accounts/:n/{rotate,retire}` HTTP | P2 | closed | claude-host | dispatch via CommandBus |
-| hq-fe-api-w.11 | `POST /api/beads/bulk` + rate-limit | P3 | open | — | follow-up para drag masivo |
+| hq-fe-api-w.11 | `POST /api/beads/bulk` + rate-limit | P3 | closed | — | atomic bulk-create con per-actor rate-limit middleware en sub-router; valida ítems contra mismas reglas que `POST /api/beads`; refusa todo el batch on primer fallo |
 
 ### Epic `hq-fe-rbac` — perfiles, JWT, scopes
 
