@@ -60,14 +60,14 @@ Docs hermanos (lectura obligada antes de tocar nada):
 | Epic | Descripción | Beads | Bloqueada por | Estado |
 |---|---|---|---|---|
 | **hq-fe-svelte** | Master · dashboard reconstruction | (todas abajo) | — | PLANEADO |
-| **hq-fe-api-r** | Read-side gaps (snapshots por dominio) | 7 | — | PLANEADO |
+| **hq-fe-api-r** | Read-side gaps (snapshots por dominio) | 8 | — | EN PROGRESO · r.8 worktrees merged |
 | **hq-fe-api-w** | Write-side commands (HTTP routes) | 11 | hq-fe-api-w.1 (bus) | PLANEADO |
 | **hq-fe-rbac** | RBAC · JWT · whoami · scopes | 5 | hq-fe-api-w.1 | PLANEADO |
 | **hq-fe-auth** | Account auth (Claude `/login` pty driver) | 5 | hq-fe-api-w (idem) | PLANEADO |
 | **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
 | **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | PLANEADO · spike obligatorio |
 | **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | PLANEADO |
-| **hq-fe-view** | Vistas + componentes (UI) | 13 | hq-fe-build + hq-fe-api-r | PLANEADO |
+| **hq-fe-view** | Vistas + componentes (UI) | 14 | hq-fe-build + hq-fe-api-r | PLANEADO |
 | **hq-fe-cut** | Cutover: gt-api sirve el build · borrar Go | 4 | hq-fe-view 80% | PLANEADO |
 | **hq-mcp-issues** | MCP `issues.*` CRUD (cerrar bypass docker exec) | 5 | hq-fe-api-w.1 | PLANEADO |
 | **hq-mcp-onboard** | MCP agent onboarding + discoverability (slogan-feedback gaps) | 10 | parcial hq-mcp-issues.2 + hq-fe-api-w.1 | DONE · claude-host-onboard |
