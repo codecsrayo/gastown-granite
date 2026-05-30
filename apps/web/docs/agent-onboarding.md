@@ -479,9 +479,119 @@ del runtime no se cargó. Diagnostica antes de codificar el atajo.
 
 ---
 
+## 6. Memory frontmatter: version/status field (`hq-mcp-onboard.6`)
+
+Las memorias de auto-memory (`~/.claude/projects/<proj>/memory/*.md`) son
+fundamentales pero **se vuelven obsoletas en silencio**. Un agente futuro
+las lee como verdad, y si la realidad cambió (tool shipped, archivo
+movido, decisión revisada), actúa sobre información muerta.
+
+Esta sección define el contrato para mantener memorias sanas en el tiempo.
+
+### 6.1 Frontmatter extendido
+
+Hasta hoy:
+
+```yaml
+---
+name: my-memory
+description: ...
+metadata:
+  type: feedback | project | user | reference
+---
+```
+
+A partir de este bead, agregamos dos campos opcionales en `metadata`:
+
+```yaml
+---
+name: my-memory
+description: ...
+metadata:
+  type: feedback | project | user | reference
+  status: current | historical | superseded
+  superseded_by: name-of-replacement-memory   # solo si status=superseded
+---
+```
+
+### 6.2 Estados
+
+| Estado | Significado | Cuándo aplica |
+|---|---|---|
+| `current` (default si ausente) | Cierto al día de hoy, accionable. | Memoria nueva, o vieja pero todavía verificable. |
+| `historical` | Cierto en su momento, sigue útil como contexto, **no** accionable. | Decisiones pasadas, snapshots de estado superados pero referenciados. |
+| `superseded` | Reemplazada por otra memoria. **No leer**, ir a `superseded_by`. | Refactor de memoria, fix de error, división en submemorias. |
+
+Reglas:
+
+- **`current`** es default. Si la frontmatter no tiene `status`, asume
+  `current`. Migración no requerida — la ausencia es válida.
+- **`historical`** se usa para preservar contexto sin guiar acción. Ejemplo:
+  "X se decidió en marzo, después se revirtió en abril" — la decisión de
+  marzo es historical, la de abril es current.
+- **`superseded`** apunta a `superseded_by` (slug de otra memoria). El
+  reader debe seguir el enlace y leer la nueva. Mantener la superseded
+  evita romper backlinks `[[old-name]]` y conserva trazabilidad.
+
+### 6.3 Transiciones
+
+Cuándo cambiar el status:
+
+- **`current` → `historical`** cuando la condición que motivó la memoria
+  cambia pero el contexto sigue importando. Ejemplo: memoria
+  `bd-export-after-create` se marcó `historical` cuando MCP reemplazó a
+  `bd via docker exec` — sigue útil para entender el flujo Go-era.
+- **`current` → `superseded`** cuando una memoria nueva reemplaza
+  completamente la vieja. Crea la nueva, marca la vieja como `superseded`,
+  llena `superseded_by`. **No la borres** — preserva backlinks.
+- **`historical` → `superseded`** raro; pasa cuando una memoria histórica
+  se reescribe como contexto consolidado.
+- **`superseded` → cualquier otro** nunca; superseded es terminal.
+
+### 6.4 Quién marca y cuándo
+
+- Cuando ediTAS una memoria existente porque la realidad cambió, evalúa si
+  es un **update in-place** (mantener `current`, cambiar el body) o un
+  **supersede** (memoria nueva + marcar vieja `superseded`).
+  - In-place: corrección menor, ajuste de fecha, fix de typo.
+  - Supersede: cambio de premisa, división en varias memorias, fusión con
+    otra.
+- Cuando observas que una memoria `current` ya no aplica (por ejemplo:
+  describe un archivo que ya no existe, o un tool que cambió de nombre):
+  - Si la información histórica sigue útil: márcala `historical` y agrega
+    una nota corta al body indicando qué la reemplaza.
+  - Si no aporta nada: bórrala (la regla `What NOT to save` aplica
+    retroactivamente).
+
+### 6.5 Cómo lo usa el reader
+
+Cuando cargas memorias al inicio de una sesión (índice en `MEMORY.md`):
+
+1. Si la entry está en `MEMORY.md`, leela.
+2. Al abrirla, mira `metadata.status`:
+   - `current` o ausente: trátala como fuente de verdad operativa.
+   - `historical`: úsala como contexto, **no** bases acción inmediata sin
+     verificar contra el estado actual del repo / Dolt / MCP.
+   - `superseded`: salta a `superseded_by` y léela. Si la nueva no existe,
+     es un dangling pointer — registra como hueco.
+
+Antes de actuar sobre una memoria que menciona un archivo, tool, o flag
+específico, verifica que sigue existiendo (regla `Before recommending from
+memory`). El status field es **anuncio**, no garantía: una memoria
+`current` puede igual estar desactualizada si nadie la revisó.
+
+### 6.6 Migración del índice
+
+`MEMORY.md` no necesita migración. Las entries ahí son one-liners; el
+status vive en la memoria misma. Si un entry apunta a una memoria
+`superseded`, mantenlo (los backlinks de otras memorias todavía pueden
+seguir el slug); cuando edites el índice por otra razón, puedes inlining
+el cambio a la entry nueva.
+
+---
+
 ## Secciones pendientes
 
-- `hq-mcp-onboard.6` — memory frontmatter version/status
 - `hq-mcp-onboard.7` — tool `help` (índice + URIs + version inline)
 - `hq-mcp-onboard.8` — tool `report_gap`
 - `hq-mcp-onboard.9` — consolidación + índice + cross-links
