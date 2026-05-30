@@ -23,7 +23,7 @@ pub mod stream;
 
 use std::sync::Arc;
 
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::Router;
 
 use gt_agent::SessionQueries;
@@ -76,7 +76,14 @@ where
     let layer = AuthLayer { config: auth, audit };
     let api = Router::new()
         .route("/api/sessions", get(routes::list_sessions::<R, SQ>))
-        .route("/api/beads", get(routes::list_beads::<R, SQ>))
+        // hq-fe-api-w.3: write surface on the dispatcher's bead table — POST mints a
+        // `pending` row (wrapping scheduling.create_bead), PATCH partially updates
+        // title/priority/assignee. Status transitions stay on the reactor.
+        .route(
+            "/api/beads",
+            get(routes::list_beads::<R, SQ>).post(routes::create_bead::<R, SQ>),
+        )
+        .route("/api/beads/:id", patch(routes::update_bead::<R, SQ>))
         .route("/api/issues", get(routes::list_issues::<R, SQ>))
         .route("/api/worktrees", get(routes::list_worktrees::<R, SQ>))
         .route("/api/nudge", post(routes::nudge::<R, SQ>))

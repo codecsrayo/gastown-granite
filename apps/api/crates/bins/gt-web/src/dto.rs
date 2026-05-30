@@ -64,6 +64,45 @@ impl From<Bead> for BeadDto {
     }
 }
 
+/// Body of `POST /api/beads` (hq-fe-api-w.3). Mints a `pending` bead in the dispatcher.
+/// Status is fixed by the handler so the kanban can never spawn a bead mid-lifecycle.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BeadCreateRequest {
+    pub id: String,
+    pub title: String,
+    /// `0..=2` (0 = P0). Defaults to `2`.
+    #[serde(default = "default_bead_priority")]
+    pub priority: u8,
+    /// Optional initial assignee. Empty string clears.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+}
+
+fn default_bead_priority() -> u8 {
+    2
+}
+
+/// Body of `PATCH /api/beads/:id` (hq-fe-api-w.3). Every editable field is `Option`:
+/// `None` leaves it alone, `Some(_)` overwrites. Status is deliberately absent — status
+/// transitions live on the dispatcher reactor (claim / release / done / failed events).
+/// `is_empty` is the route's check that the caller had something to update.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct BeadUpdateRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u8>,
+    /// `Some("")` clears the assignee to "unassigned"; `None` leaves the column alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+}
+
+impl BeadUpdateRequest {
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none() && self.priority.is_none() && self.assignee.is_none()
+    }
+}
+
 /// Query for `GET /api/beads?status=pending`. Default = pending (the operator-visible queue).
 #[derive(Debug, Clone, Deserialize)]
 pub struct BeadsQuery {

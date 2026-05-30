@@ -10,15 +10,16 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
 
 use gt_agent::{AgentEvent, SessionQueries};
-use gt_beads::{BeadRepository, BeadStatus};
+use gt_beads::{Bead, BeadRepository, BeadStatus};
 use gt_events::Envelope;
 use gt_quota::{QuotaCommand, RotateAccount};
 use gt_root::RootCommand;
 use gt_store_dolt::{IssueFilter, IssueRow};
 
 use crate::dto::{
-    BeadDto, BeadsQuery, DirtyFileDto, IssueDto, IssuesQuery, NudgeRequest, NudgeResponse,
-    QuotaRetireResponse, QuotaRotateRequest, SessionDto, SessionsQuery, WorktreeDto,
+    BeadCreateRequest, BeadDto, BeadUpdateRequest, BeadsQuery, DirtyFileDto, IssueDto,
+    IssuesQuery, NudgeRequest, NudgeResponse, QuotaRetireResponse, QuotaRotateRequest,
+    SessionDto, SessionsQuery, WorktreeDto,
 };
 use crate::state::AppState;
 use crate::stream::sse_from_receiver;
@@ -77,6 +78,100 @@ where
         .await
         .map_err(|_| AppError::internal("agent relay closed"))?;
     Ok(Json(NudgeResponse { accepted: true }))
+}
+
+/// `POST /api/beads` — mint a `pending` bead in the dispatcher queue (hq-fe-api-w.3).
+/// Thin HTTP wrapper around `scheduling.create_bead`: same edge op the MCP tool drives,
+/// so audit and idempotency-key replay flow uniformly. Returns the persisted row so the
+/// dashboard can append it to the kanban without a follow-up `GET /api/beads`.
+pub async fn create_bead<R, SQ>(
+    State(state): State<AppState<R, SQ>>,
+    Json(req): Json<BeadCreateRequest>,
+) -> Result<(StatusCode, Json<BeadDto>), AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
+    if req.id.is_empty() {
+        return Err(AppError::bad_request("bead id is empty"));
+    }
+    if req.title.is_empty() {
+        return Err(AppError::bad_request("bead title is empty"));
+    }
+    if req.priority > 2 {
+        return Err(AppError::bad_request(format!(
+            "priority must be 0..=2, got {}",
+            req.priority
+        )));
+    }
+    let bus = state
+        .bus
+        .as_ref()
+        .ok_or_else(|| AppError::internal("command bus not wired"))?;
+    let mut bead = Bead::new(&req.id, &req.title, BeadStatus::Pending, req.priority);
+    bead.assignee = req
+        .assignee
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    bus.sched()
+        .create_bead(bead.clone())
+        .await
+        .map_err(AppError::from)?;
+    Ok((StatusCode::CREATED, Json(BeadDto::from(bead))))
+}
+
+/// `PATCH /api/beads/:id` — partial update of `title`, `priority`, or `assignee`
+/// (hq-fe-api-w.3). Status changes go through the dispatcher reactor — the route refuses
+/// `status` in the body so the kanban can't bypass the lifecycle. Reads-then-upserts
+/// because `BeadRepository` does not ship a `Patch` method; the write races a concurrent
+/// CAS claim, in which case the next claim's reducer wins (the field changes are visible
+/// on the next snapshot read).
+pub async fn update_bead<R, SQ>(
+    State(state): State<AppState<R, SQ>>,
+    Path(id): Path<String>,
+    Json(req): Json<BeadUpdateRequest>,
+) -> Result<Json<BeadDto>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+{
+    if id.is_empty() {
+        return Err(AppError::bad_request("bead id is empty"));
+    }
+    if req.is_empty() {
+        return Err(AppError::bad_request(
+            "patch is empty (nothing to update)",
+        ));
+    }
+    if let Some(p) = req.priority {
+        if p > 2 {
+            return Err(AppError::bad_request(format!(
+                "priority must be 0..=2, got {p}"
+            )));
+        }
+    }
+    if matches!(&req.title, Some(s) if s.is_empty()) {
+        return Err(AppError::bad_request("title is empty"));
+    }
+    let existing = state
+        .beads
+        .get(&id)
+        .await
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::not_found(format!("bead {id}")))?;
+    let mut updated = existing;
+    if let Some(t) = req.title {
+        updated.title = t;
+    }
+    if let Some(p) = req.priority {
+        updated.priority = p;
+    }
+    if let Some(a) = req.assignee {
+        updated.assignee = if a.is_empty() { None } else { Some(a) };
+    }
+    state.beads.upsert(&updated).await.map_err(AppError::from)?;
+    Ok(Json(BeadDto::from(updated)))
 }
 
 /// `POST /api/quota/accounts/:id/rotate` — promote `quota.rotate` from MCP-only to an
@@ -453,6 +548,12 @@ impl AppError {
     pub fn internal(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: msg.into(),
+        }
+    }
+    pub fn not_found(msg: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
             message: msg.into(),
         }
     }
