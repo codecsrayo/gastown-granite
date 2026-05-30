@@ -242,7 +242,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-view.3 | Activity view (feed + cat filter + rig filter + recent peek) | P1 | closed | claude-host | `routes/activity/+page.svelte` + `lib/event-category.ts` (5 buckets · 6 vitest); SSE subscribe '*' → `activity` store; cat/rig/text filters + auto-scroll + status pill; hidrato hist pendiente api-r.5 |
 | hq-fe-view.4 | Sessions view (table + filters + kill DangerButton) | P1 | closed | claude-host | `lib/{types,api}/session*` + tabla con role/rig/state filters + per-role tint; Kill DangerButton disabled hasta api-w.6 |
 | hq-fe-view.5 | Work view (kanban 5 cols + drag-drop + DangerZone close) | P1 | closed | claude-host | `lib/{types/bead,api/beads,kanban}.ts` + `routes/work/+page.svelte`; `svelte-dnd-action@0.9.69` + optimistic drag → POST transition → revert+refresh on 4xx; close via DangerZone typed-name → `done` (4 vitest cubren operator matrix 1:1 con gt-web) |
-| hq-fe-view.6 | Convoys view (list + e-stop DangerZone) | P2 | open | — | |
+| hq-fe-view.6 | Convoys view (list + e-stop DangerZone) | P2 | closed | claude-host | `routes/convoys/+page.svelte` + `lib/api/convoys.failConvoyMember`; agrupa por convoy con state filter; per-member Fail abre `DangerZone` typed-name + reason input → `POST /api/convoys/:c/members/:m/fail` (hq-fe-api-w.9); SSE `orch.*` dispara refetch debounceado (in-flight + pending flag). 4 vitest cubren GET path/encoding + POST body/idem-key/path-encoding |
 | hq-fe-view.7 | Merge Q view | P2 | open | — | |
 | hq-fe-view.8 | Crew view (RoleList + RolePanel + SkillToggle + ScopeMatrix) | P2 | open | — | depende hq-fe-skills |
 | hq-fe-view.9 | Rigs view | P3 | open | — | |
