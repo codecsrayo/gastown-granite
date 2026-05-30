@@ -289,6 +289,51 @@ pub struct QuotaRetireResponse {
     pub removed: bool,
 }
 
+/// One row of `waiting_unlock` on `GET /api/quota/rotation` (hq-fe-api-r.2). An account
+/// currently parked in [`gt_quota::AccountQuotaStatus::Cooldown`] (typically the source
+/// of a recent rotation) plus the best-effort wall time the dashboard can use to render
+/// a countdown chip. The `unlock_at_secs` mirrors `account.window.resets_at_secs` — the
+/// rolling-5h boundary the cooldown expires against; `None` when the account has no live
+/// window yet (`upsert_account` happened but `WindowReset` did not).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QuotaWaitingUnlockDto {
+    pub account: String,
+    pub status: String,
+    pub unlock_at_secs: Option<u64>,
+}
+
+/// One row of `recent_rotations` on `GET /api/quota/rotation` (hq-fe-api-r.2). Surfaces a
+/// `quota.rotated` record from the shared `events.jsonl` (same source the SSE feed ships)
+/// flattened to the three columns the dashboard renders in the rotation banner.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QuotaRotationEntryDto {
+    pub from: String,
+    pub to: String,
+    /// Wall time of the rotation, as RFC3339 (copied from `EventRecord.ts`).
+    pub ts: String,
+}
+
+/// Response of `GET /api/quota/rotation` (hq-fe-api-r.2). Composite snapshot for the
+/// dashboard's rotation panel: live `waiting_unlock` (Cooldown accounts) joined with the
+/// last N `quota.rotated` log entries. Empty arrays — never a 404 — when no accounts are
+/// in cooldown or no rotations have been logged, so the dashboard can render a stable
+/// shell without conditional rendering on the wire shape.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QuotaRotationDto {
+    pub waiting_unlock: Vec<QuotaWaitingUnlockDto>,
+    pub recent_rotations: Vec<QuotaRotationEntryDto>,
+}
+
+/// Query for `GET /api/quota/rotation?since=<rfc3339>&limit=<n>` (hq-fe-api-r.2).
+/// `since` filters `recent_rotations` to events strictly newer than the timestamp; `limit`
+/// caps the response (default 50, max 500). `waiting_unlock` ignores both — it is always
+/// the current live snapshot.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct QuotaRotationQuery {
+    pub since: Option<String>,
+    pub limit: Option<usize>,
+}
+
 /// One row of `GET /api/worktrees` (hq-fe-api-r.8). Mirrors what VSCode's SCM panel renders
 /// per-repo: the worktree path, its current branch and HEAD, the divergence vs. the rig's
 /// default branch (`main` in hq), and the dirty file list. The dashboard joins this against

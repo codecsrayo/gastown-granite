@@ -54,6 +54,7 @@ Every request lands in `events.jsonl` as `web.invoked` / `web.unauthorized`
 | POST | `/api/nudge` | [`nudge`](../../api/crates/bins/gt-web/src/routes.rs) | `NudgeRequest { session: String }` | `NudgeResponse { accepted: bool }` |
 | GET | `/api/stream` | [`stream`](../../api/crates/bins/gt-web/src/routes.rs) | — | SSE of `EventRecord` |
 | GET | `/api/feed` | [`feed`](../../api/crates/bins/gt-web/src/routes.rs) | `?since=<rfc3339>` (optional), `?limit=<n>` (default 500, max 2000) | `Vec<EventRecord>` (historical replay over `events.jsonl`) |
+| GET | `/api/quota/rotation` | [`quota_rotation`](../../api/crates/bins/gt-web/src/routes.rs) | `?since=<rfc3339>` (optional), `?limit=<n>` (default 50, max 500) | `QuotaRotationDto { waiting_unlock[], recent_rotations[] }` |
 | GET | `/health` | [`health`](../../api/crates/bins/gt-web/src/health.rs) | — | 200 `"ok"` (liveness) |
 | GET | `/readyz` | [`readyz`](../../api/crates/bins/gt-web/src/health.rs) | — | 200/503 + JSON probe report |
 | GET | `/metrics` | [`metrics`](../../api/crates/bins/gt-web/src/routes.rs) | — | Prometheus text |
@@ -197,7 +198,7 @@ to the old API; pick the cleanest contract per feature.
 | Need | Status | Bead anchor |
 |---|---|---|
 | `GET /api/quota/accounts` — snapshot (live/limited, slots, reset_at, tags por sesión, /upgrade pending) | **gap** | hq-fe-api-r.1 |
-| `GET /api/quota/rotation` — `waiting_unlock[]` + `recent_rotations[since=]` | **gap** | hq-fe-api-r.2 |
+| `GET /api/quota/rotation` — `waiting_unlock[]` + `recent_rotations[since=]` | **live** | hq-fe-api-r.2 |
 | `GET /api/convoys` — snapshot por estado | **gap** (solo SSE `orch.*`) | hq-fe-api-r.3 |
 | `GET /api/merges` — slots snapshot | **live** | hq-fe-api-r.4 |
 | `GET /api/feed?since=&limit=` — activity feed con histórico (jsonl `events.jsonl`) | **live** | hq-fe-api-r.5 |

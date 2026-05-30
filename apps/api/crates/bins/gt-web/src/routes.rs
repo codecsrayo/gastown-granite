@@ -24,7 +24,8 @@ use crate::dto::{
     ConvoyCreateRequest, ConvoyCreateResponse, ConvoyDto, ConvoyMemberDto, ConvoysQuery,
     DirtyFileDto, FeedQuery, IssueDto, IssuesQuery,
     MayorStatusDto, MemberFailRequest, MergeSlotDto, NudgeRequest, NudgeResponse,
-    QuotaRetireResponse, QuotaRotateRequest, SessionDto, SessionsQuery, WhoamiDto, WorktreeDto,
+    QuotaRetireResponse, QuotaRotateRequest, QuotaRotationDto, QuotaRotationEntryDto,
+    QuotaRotationQuery, QuotaWaitingUnlockDto, SessionDto, SessionsQuery, WhoamiDto, WorktreeDto,
 };
 use crate::state::AppState;
 use crate::stream::{sse_from_json_receiver, sse_from_receiver};
@@ -757,6 +758,81 @@ where
         .ok_or_else(|| AppError::internal("command bus not wired"))?;
     let removed = bus.quota().remove_account(id.clone()).await;
     Ok(Json(QuotaRetireResponse { account: id, removed }))
+}
+
+/// `GET /api/quota/rotation?since=<rfc3339>&limit=<n>` — composite snapshot for the
+/// dashboard rotation panel (hq-fe-api-r.2):
+///
+/// - `waiting_unlock` is the current live registry filtered to `Cooldown` (typically the
+///   sources of recent rotations). The `unlock_at_secs` mirrors `account.window.resets_at_secs`
+///   — the rolling-5h boundary the cooldown expires against, so the dashboard renders a
+///   countdown without inventing a separate timer.
+/// - `recent_rotations` re-reads the shared `events.jsonl` (the same source `/api/feed`
+///   ships) and surfaces every `quota.rotated` record. `since` is strict-greater-than on
+///   the record `ts`; `limit` caps the response at the tail end so the dashboard's
+///   first-page paint stays bounded (default 50, max 500).
+///
+/// Returns empty arrays — never 404 — when the bus is unwired, the event log is unset, or
+/// either source is empty. Same posture as `/api/feed` + `/api/worktrees`.
+pub async fn quota_rotation<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
+    Query(q): Query<QuotaRotationQuery>,
+) -> Result<Json<QuotaRotationDto>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
+{
+    let waiting_unlock = match state.bus.as_ref() {
+        Some(bus) => bus
+            .quota()
+            .accounts()
+            .await
+            .into_iter()
+            .filter(|a| matches!(a.status, gt_quota::AccountQuotaStatus::Cooldown))
+            .map(|a| QuotaWaitingUnlockDto {
+                account: a.id,
+                status: "cooldown".to_string(),
+                unlock_at_secs: a.window.map(|w| w.resets_at_secs),
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+
+    let recent_rotations = match state.event_log.as_ref() {
+        Some(path) => {
+            // Cap is on the response shape, not the file scan: we read every quota.rotated
+            // record once (bounded by the log itself) and take the tail. The log is the same
+            // bounded file `/api/feed` scans, so the cost is symmetric with that route.
+            let limit = q.limit.unwrap_or(50).min(500);
+            let records = gt_audit::since(path.as_path(), q.since.as_deref(), usize::MAX)?;
+            let rotations: Vec<QuotaRotationEntryDto> = records
+                .into_iter()
+                .filter(|r| r.kind == "quota.rotated")
+                .filter_map(|r| {
+                    let from = r
+                        .payload
+                        .get("from_account")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)?;
+                    let to = r
+                        .payload
+                        .get("to_account")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)?;
+                    Some(QuotaRotationEntryDto { from, to, ts: r.ts })
+                })
+                .collect();
+            let start = rotations.len().saturating_sub(limit);
+            rotations[start..].to_vec()
+        }
+        None => Vec::new(),
+    };
+
+    Ok(Json(QuotaRotationDto {
+        waiting_unlock,
+        recent_rotations,
+    }))
 }
 
 fn epoch_now() -> u64 {

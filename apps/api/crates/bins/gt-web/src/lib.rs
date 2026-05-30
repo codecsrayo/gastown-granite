@@ -208,6 +208,10 @@ where
             "/api/quota/accounts/:id/retire",
             post(routes::quota_retire::<R, SQ, M>),
         )
+        // hq-fe-api-r.2 — composite snapshot for the rotation panel: live Cooldown
+        // accounts (`waiting_unlock`) joined with the tail of `quota.rotated` records
+        // pulled from the shared `events.jsonl` (`recent_rotations`).
+        .route("/api/quota/rotation", get(routes::quota_rotation::<R, SQ, M>))
         .route("/api/stream", get(routes::stream::<R, SQ, M>))
         // hq-fe-api-r.5 — historical replay of the same events.jsonl `/api/stream` ships;
         // dashboard seeds its activity store from this before subscribing to SSE.

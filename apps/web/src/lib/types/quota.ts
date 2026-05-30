@@ -16,3 +16,29 @@ export interface QuotaAccount {
   /** Sessions currently pinned to this account (debug + ops display). */
   sessions: string[];
 }
+
+// Wire shapes for `GET /api/quota/rotation` (hq-fe-api-r.2). Composite snapshot for the
+// rotation panel: every account currently in cooldown plus the tail of `quota.rotated`
+// log records. Mirrors `QuotaRotationDto` in `gt-web::dto`.
+
+/** One row of `waiting_unlock`. `unlock_at_secs` is the rolling-5h boundary the cooldown
+ *  expires against (mirror of `account.window.resets_at_secs`); `null` when the account
+ *  has no live window yet. */
+export interface QuotaWaitingUnlock {
+  account: string;
+  status: string;
+  unlock_at_secs: number | null;
+}
+
+/** One row of `recent_rotations`. `ts` is the RFC3339 timestamp of the source
+ *  `quota.rotated` `EventRecord`. */
+export interface QuotaRotationEntry {
+  from: string;
+  to: string;
+  ts: string;
+}
+
+export interface QuotaRotation {
+  waiting_unlock: QuotaWaitingUnlock[];
+  recent_rotations: QuotaRotationEntry[];
+}
