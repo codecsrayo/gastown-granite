@@ -288,6 +288,77 @@ impl DoltIssues {
             .map_err(map_err)?;
         }
 
+        // hq-taxon.6 — backfill live root epics so the dependency-graph
+        // resources have meaningful anchor points the first time they are
+        // queried. Idempotent by construction: the `WHERE` clause only
+        // touches rows whose `domain_json` is still the default empty array
+        // (or the legacy empty-string case Dolt occasionally hands us).
+        //
+        // Coverage chosen per `apps/api/docs/14-bead-taxonomy.md` §8 — the
+        // well-known root epics that already exist plus the hq-taxon family
+        // itself (minted via the legacy tool before `domain[]` was a field).
+        // Ordinary tasks continue to backfill on their next `issues.update`.
+        let backfill: &[(&str, &str)] = &[
+            ("hq-fe-svelte", r#"["fe.web","fe.docs"]"#),
+            ("hq-fe-api-w", r#"["kernel.root","bin.gt-web"]"#),
+            ("hq-fe-api-r", r#"["bin.gt-web"]"#),
+            ("hq-fe-cut", r#"["fe.web","bin.gt-web"]"#),
+            ("hq-fe-build", r#"["fe.web"]"#),
+            ("hq-fe-view", r#"["fe.web"]"#),
+            ("hq-fe-auth", r#"["fe.web","bin.gt-web"]"#),
+            ("hq-fe-rbac", r#"["fe.web","bin.gt-web"]"#),
+            (
+                "hq-fe-skills",
+                r#"["fe.web","role.sheriff","role.deacon","role.refinery","role.witness","role.mayor"]"#,
+            ),
+            ("hq-fe-term", r#"["fe.web","bin.gt-web"]"#),
+            ("hq-mcp-issues", r#"["bin.gt-mcp","store.dolt"]"#),
+            ("hq-oap5", r#"["deploy.compose","lifecycle.polecat"]"#),
+            ("hq-63az", r#"["lifecycle.polecat"]"#),
+            ("hq-03aw", r#"["store.dolt","store.pg"]"#),
+            ("hq-mc72", r#"["bin.gt"]"#),
+            ("hq-taxon", r#"["docs.spec","bin.gt-mcp","store.dolt"]"#),
+            ("hq-taxon.1", r#"["bin.gt-mcp"]"#),
+            ("hq-taxon.2", r#"["bin.gt-mcp"]"#),
+            ("hq-taxon.3", r#"["store.dolt"]"#),
+            ("hq-taxon.4", r#"["bin.gt-mcp"]"#),
+            ("hq-taxon.5", r#"["bin.gt-mcp"]"#),
+            ("hq-taxon.6", r#"["store.dolt"]"#),
+        ];
+
+        let mut backfilled_any = false;
+        for (id, domain) in backfill {
+            let result = conn
+                .exec_iter(
+                    "UPDATE issues
+                     SET domain_json = :domain
+                     WHERE id = :id
+                       AND (domain_json = '[]' OR domain_json = '' OR domain_json IS NULL)",
+                    mysql_async::params! {
+                        "domain" => *domain,
+                        "id" => *id,
+                    },
+                )
+                .await
+                .map_err(map_err)?;
+            let affected = result.affected_rows();
+            let _ = result.drop_result().await.map_err(map_err)?;
+            if affected > 0 {
+                backfilled_any = true;
+            }
+        }
+
+        if backfilled_any {
+            conn.exec_drop(
+                "CALL DOLT_COMMIT('-A', '-m', :msg)",
+                mysql_async::params! {
+                    "msg" => "hq-taxon.6: backfill live root epics with domain[]".to_string(),
+                },
+            )
+            .await
+            .map_err(map_err)?;
+        }
+
         Ok(())
     }
 
