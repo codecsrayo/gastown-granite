@@ -402,6 +402,21 @@ impl CreateIssue {
     }
 
     fn to_new(&self) -> NewIssue {
+        // `Domain`/`Role` serialize to their dotted/snake-case wire form via
+        // their serde rename attributes (`taxonomy.rs`), so the persisted JSON
+        // strings round-trip cleanly back to the enums when the read-side or
+        // graph resources parse them in hq-taxon.4.
+        let domain_json = serde_json::to_string(&self.domain)
+            .unwrap_or_else(|_| "[]".to_string());
+        let surface_json = serde_json::to_string(&self.surface)
+            .unwrap_or_else(|_| "[]".to_string());
+        let depends_on_json = serde_json::to_string(&self.depends_on)
+            .unwrap_or_else(|_| "[]".to_string());
+        let role_scope = self
+            .role_scope
+            .and_then(|r| serde_json::to_value(r).ok())
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+
         NewIssue {
             id: self.id.clone(),
             title: self.title.clone(),
@@ -415,6 +430,10 @@ impl CreateIssue {
             external_ref: self.external_ref.clone(),
             assignee: self.assignee.clone(),
             owner: self.owner.clone(),
+            domain_json,
+            surface_json,
+            depends_on_json,
+            role_scope,
         }
     }
 }

@@ -46,6 +46,25 @@ pub struct IssueRow {
     pub closed_at: Option<String>,
     pub external_ref: Option<String>,
     pub spec_id: Option<String>,
+    /// JSON array of taxonomy domains (hq-taxon.3). Serialised as a raw JSON
+    /// string so consumers (`gt-mcp` resources, `bd` mirrors) re-parse without
+    /// the store needing to know the closed-set `Domain` enum.
+    #[serde(default = "default_json_array")]
+    pub domain_json: String,
+    /// JSON array of impact surfaces (crate names or repo paths).
+    #[serde(default = "default_json_array")]
+    pub surface_json: String,
+    /// JSON array of bead ids this bead is blocked on (forward edges).
+    #[serde(default = "default_json_array")]
+    pub depends_on_json: String,
+    /// Optional `role_scope` discriminator (e.g. `sheriff`); `None` when no
+    /// role owns the bead. Stored as `VARCHAR(32)` so `bd` legacy callers can
+    /// keep filtering with plain string equality.
+    pub role_scope: Option<String>,
+}
+
+fn default_json_array() -> String {
+    "[]".to_string()
 }
 
 /// Patch payload for [`DoltIssues::update`] (hq-mcp-issues.3). Every field is
@@ -129,6 +148,17 @@ pub struct NewIssue {
     pub assignee: Option<String>,
     /// Optional initial owner. `None` stores schema default `''`.
     pub owner: Option<String>,
+    /// Raw JSON array of `Domain` discriminators (e.g. `["orch.merge"]`).
+    /// Empty string is normalised to `[]` by [`DoltIssues::insert`] so the
+    /// schema's `NOT NULL` constraint is honoured even with a default-built
+    /// `NewIssue` (hq-taxon.3).
+    pub domain_json: String,
+    /// Raw JSON array of impact surfaces (free-form strings).
+    pub surface_json: String,
+    /// Raw JSON array of bead ids this bead is blocked on.
+    pub depends_on_json: String,
+    /// Optional `role_scope` discriminator. `None` stores `NULL`.
+    pub role_scope: Option<String>,
 }
 
 /// Read-only Dolt adapter for the `issues` table. The canonical bead table is
@@ -152,9 +182,15 @@ impl DoltIssues {
         &self.pool
     }
 
-    /// Confirm the `issues` table exists. This crate never creates it — the
-    /// schema is owned by `bd` and pre-existing in hq; this is just a probe so
-    /// the gt-mcp boot fails loud against an empty DB.
+    /// Confirm the `issues` table exists and adds the taxonomy columns the
+    /// hq-taxon family layered on top (`domain_json`, `surface_json`,
+    /// `depends_on_json`, `role_scope`). The table itself is owned by `bd` and
+    /// pre-existing in hq; the column adds are idempotent — second runs are
+    /// no-ops once `information_schema.columns` already lists them.
+    ///
+    /// Adds default `'[]'` for JSON arrays so existing rows backfill without a
+    /// follow-up `UPDATE`; the actual `Domain` typing lives in `gt-mcp` and is
+    /// re-validated on the write path.
     pub async fn ensure_schema(&self) -> Result<(), AppError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
         let present: Option<i64> = conn
@@ -169,6 +205,47 @@ impl DoltIssues {
                 "issues table missing in current Dolt database".into(),
             ));
         }
+
+        let taxonomy_columns: &[(&str, &str)] = &[
+            ("domain_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("surface_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("depends_on_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("role_scope", "VARCHAR(32) NULL"),
+        ];
+
+        let mut added_any = false;
+        for (name, ddl) in taxonomy_columns {
+            let exists: Option<i64> = conn
+                .exec_first(
+                    "SELECT 1 FROM information_schema.columns
+                     WHERE table_schema = DATABASE()
+                       AND table_name = 'issues'
+                       AND column_name = :col LIMIT 1",
+                    mysql_async::params! { "col" => *name },
+                )
+                .await
+                .map_err(map_err)?;
+            if exists.is_none() {
+                // Column-name is not a bind parameter — only the closed-set
+                // string literals from `taxonomy_columns` ever reach `format!`,
+                // so there's no caller-controlled SQL here.
+                let sql = format!("ALTER TABLE issues ADD COLUMN {name} {ddl}");
+                conn.query_drop(sql).await.map_err(map_err)?;
+                added_any = true;
+            }
+        }
+
+        if added_any {
+            conn.exec_drop(
+                "CALL DOLT_COMMIT('-A', '-m', :msg)",
+                mysql_async::params! {
+                    "msg" => "hq-taxon.3: add taxonomy columns to issues".to_string(),
+                },
+            )
+            .await
+            .map_err(map_err)?;
+        }
+
         Ok(())
     }
 
@@ -187,13 +264,20 @@ impl DoltIssues {
     /// non-empty fields; only DB-level uniqueness can race here).
     pub async fn insert(&self, row: &NewIssue) -> Result<(), AppError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        // Normalise default-built `NewIssue` (Default derive leaves the JSON
+        // strings as `""`) so the NOT NULL columns honour their `[]` invariant.
+        let domain_json = if row.domain_json.is_empty() { "[]" } else { row.domain_json.as_str() };
+        let surface_json = if row.surface_json.is_empty() { "[]" } else { row.surface_json.as_str() };
+        let depends_on_json = if row.depends_on_json.is_empty() { "[]" } else { row.depends_on_json.as_str() };
         conn.exec_drop(
             "INSERT INTO issues
                 (id, title, description, design, acceptance_criteria, notes,
-                 status, priority, issue_type, assignee, owner, created_by, external_ref)
+                 status, priority, issue_type, assignee, owner, created_by, external_ref,
+                 domain_json, surface_json, depends_on_json, role_scope)
              VALUES
                 (:id, :title, :description, :design, :acceptance_criteria, :notes,
-                 'open', :priority, :issue_type, :assignee, :owner, :created_by, :external_ref)",
+                 'open', :priority, :issue_type, :assignee, :owner, :created_by, :external_ref,
+                 :domain_json, :surface_json, :depends_on_json, :role_scope)",
             mysql_async::params! {
                 "id" => &row.id,
                 "title" => &row.title,
@@ -207,6 +291,10 @@ impl DoltIssues {
                 "owner" => row.owner.clone().unwrap_or_default(),
                 "created_by" => &row.created_by,
                 "external_ref" => row.external_ref.clone(),
+                "domain_json" => domain_json,
+                "surface_json" => surface_json,
+                "depends_on_json" => depends_on_json,
+                "role_scope" => row.role_scope.clone(),
             },
         )
         .await
@@ -379,26 +467,12 @@ impl DoltIssues {
                     DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%SZ') AS created_at,
                     DATE_FORMAT(updated_at, '%Y-%m-%dT%H:%i:%SZ') AS updated_at,
                     DATE_FORMAT(closed_at,  '%Y-%m-%dT%H:%i:%SZ') AS closed_at,
-                    external_ref, spec_id
+                    external_ref, spec_id,
+                    domain_json, surface_json, depends_on_json, role_scope
              FROM issues
              {where_clause}
              ORDER BY updated_at DESC, id ASC
              LIMIT {limit}"
-        );
-
-        type RowTuple = (
-            String,
-            String,
-            String,
-            i32,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
         );
 
         let params = if params_vec.is_empty() {
@@ -407,53 +481,48 @@ impl DoltIssues {
             mysql_async::Params::from(params_vec)
         };
 
-        let rows: Vec<RowTuple> = conn.exec(sql, params).await.map_err(map_err)?;
+        // 16 columns exceeds mysql_async's `FromRow` tuple impls (12), so we
+        // pull each row by ordinal index — keeps the code branchless and the
+        // SELECT order is the single source of truth for the field mapping.
+        let rows: Vec<mysql_async::Row> = conn.exec(sql, params).await.map_err(map_err)?;
 
-        Ok(rows.into_iter().map(row_to_issue).collect())
+        rows.into_iter().map(row_to_issue).collect()
     }
 }
 
-fn row_to_issue(
-    (
-        id,
-        title,
-        status,
-        priority,
-        issue_type,
-        assignee,
-        owner,
-        created_at,
-        updated_at,
-        closed_at,
-        external_ref,
-        spec_id,
-    ): (
-        String,
-        String,
-        String,
-        i32,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    ),
-) -> IssueRow {
-    IssueRow {
-        id,
-        title,
-        status,
-        priority,
-        issue_type,
-        assignee,
-        owner,
-        created_at,
-        updated_at,
-        closed_at,
-        external_ref,
-        spec_id,
-    }
+fn row_to_issue(row: mysql_async::Row) -> Result<IssueRow, AppError> {
+    let mut row = row;
+    let take_string = |row: &mut mysql_async::Row, i: usize| -> Result<String, AppError> {
+        row.take::<String, _>(i)
+            .ok_or_else(|| AppError::Other(format!("issues row missing column {i}")))
+    };
+    let take_i32 = |row: &mut mysql_async::Row, i: usize| -> Result<i32, AppError> {
+        row.take::<i32, _>(i)
+            .ok_or_else(|| AppError::Other(format!("issues row missing column {i}")))
+    };
+    // `take::<Option<String>, _>` returns `Some(None)` for SQL NULL, so the
+    // outer `unwrap_or(None)` collapses both "absent column" and "NULL" into
+    // the same `None` — matches the previous tuple path's semantics.
+    let take_opt = |row: &mut mysql_async::Row, i: usize| -> Option<String> {
+        row.take::<Option<String>, _>(i).unwrap_or(None)
+    };
+
+    Ok(IssueRow {
+        id: take_string(&mut row, 0)?,
+        title: take_string(&mut row, 1)?,
+        status: take_string(&mut row, 2)?,
+        priority: take_i32(&mut row, 3)?,
+        issue_type: take_string(&mut row, 4)?,
+        assignee: take_opt(&mut row, 5),
+        owner: take_opt(&mut row, 6),
+        created_at: take_opt(&mut row, 7),
+        updated_at: take_opt(&mut row, 8),
+        closed_at: take_opt(&mut row, 9),
+        external_ref: take_opt(&mut row, 10),
+        spec_id: take_opt(&mut row, 11),
+        domain_json: take_string(&mut row, 12)?,
+        surface_json: take_string(&mut row, 13)?,
+        depends_on_json: take_string(&mut row, 14)?,
+        role_scope: take_opt(&mut row, 15),
+    })
 }

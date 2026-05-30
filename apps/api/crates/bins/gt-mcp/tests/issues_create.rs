@@ -47,6 +47,10 @@ fn ok_payload() -> CreateIssue {
         external_ref: Some("hq-test".into()),
         assignee: None,
         owner: None,
+        domain: Vec::new(),
+        surface: Vec::new(),
+        depends_on: Vec::new(),
+        role_scope: None,
     }
 }
 
