@@ -320,6 +320,21 @@ pub struct IssueDto {
     pub closed_at: Option<String>,
 }
 
+/// Response of `GET /api/whoami` (hq-fe-rbac.4). Surfaces the request actor + the
+/// frontier's auth mode so the dashboard can short-circuit RBAC gating in dev
+/// (`mode=open` → permissive Guard) and start enforcing scopes once a real bearer is
+/// presented (`mode=bearer`). `roles`/`scopes` are left empty until hq-fe-rbac.1..3
+/// land — the field is on the wire today so the FE can hydrate the auth store
+/// against a stable contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WhoamiDto {
+    pub actor: String,
+    /// Frontier posture: `open` (dev, every request passes) or `bearer` (token enforced).
+    pub mode: String,
+    pub roles: Vec<String>,
+    pub scopes: Vec<String>,
+}
+
 /// One row of `GET /api/merges` (hq-fe-api-r.4). Mirrors `gt_merge::MergeSlot` with the
 /// state enum flattened to the canonical string the SSE stream already emits
 /// (`ready|merging|merged|failed`). The dashboard joins this against the SSE

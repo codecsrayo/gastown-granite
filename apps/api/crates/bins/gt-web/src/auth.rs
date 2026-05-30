@@ -59,6 +59,23 @@ pub fn actor_tag(secret: &str) -> String {
     format!("web:{}", &hex[..12])
 }
 
+/// Identity propagated into request extensions by [`auth_middleware`] so downstream
+/// handlers (e.g. `GET /api/whoami` per hq-fe-rbac.4) can read who they're answering
+/// without re-extracting the bearer header. Bearer mode carries the [`actor_tag`];
+/// open mode carries the literal `web:open` so the dev fall-through is observable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Actor(pub String);
+
+impl Actor {
+    pub fn open() -> Self {
+        Self("web:open".to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 fn constant_time_eq(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
@@ -88,14 +105,17 @@ fn unauthorized(reason: &str) -> Response {
 /// enforces the header and emits one audit record per request (invoked or unauthorized).
 pub async fn auth_middleware(
     State(layer): State<AuthLayer>,
-    req: Request<Body>,
+    mut req: Request<Body>,
     next: Next,
 ) -> Response {
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
 
     match &layer.config {
-        AuthConfig::Open => next.run(req).await,
+        AuthConfig::Open => {
+            req.extensions_mut().insert(Actor::open());
+            next.run(req).await
+        }
         AuthConfig::Bearer { secret } => {
             let Some(presented) = extract_bearer(&req) else {
                 layer.audit.record(WebAuditEvent::Unauthorized {
@@ -114,6 +134,7 @@ pub async fn auth_middleware(
                 return unauthorized("invalid bearer token");
             }
             let actor = actor_tag(secret.as_str());
+            req.extensions_mut().insert(Actor(actor.clone()));
             let resp = next.run(req).await;
             layer.audit.record(WebAuditEvent::Invoked {
                 actor,

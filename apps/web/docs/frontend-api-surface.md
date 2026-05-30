@@ -202,7 +202,7 @@ to the old API; pick the cleanest contract per feature.
 | `GET /api/feed?since=` — activity feed con histórico (PG projection) | **gap** | hq-fe-api-r.5 |
 | `GET /api/sessions?rig=…` — filtro por rig (combinable con `?role=`) | **live** | hq-fe-api-r.6 |
 | `GET /api/mayor/status` — ATTACHED / DETACHED (heartbeat deferred) | **live** | hq-fe-api-r.7 |
-| `GET /api/whoami` — actor + roles[] + scopes[] (RBAC bootstrap) | **gap** | hq-fe-rbac.4 |
+| `GET /api/whoami` — actor + mode + roles[] + scopes[] (roles/scopes pre-RBAC empty) | **live** | hq-fe-rbac.4 |
 | `GET /api/skills` — catálogo de skills | **gap (new domain)** | hq-fe-skills.2 |
 | `GET /api/roles` — catálogo + skills habilitadas por rol | **gap (new domain)** | hq-fe-skills.2 |
 | `GET /api/roles/:role/scope` — MCP allow/deny derivado de `mcp-scope.toml` | **gap** | hq-fe-skills.4 |

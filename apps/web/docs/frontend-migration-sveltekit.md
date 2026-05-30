@@ -188,7 +188,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 | hq-fe-rbac.1 | JWT signing en gt-api (HS256/RS256 decidir) | P1 | open | — | reemplaza bearer plano |
 | hq-fe-rbac.2 | `roles.toml` unificado con `mcp-scope.toml` | P1 | open | — | misma fuente de scopes |
 | hq-fe-rbac.3 | Middleware per-scope en gt-web | P1 | open | — | reemplaza single bearer check |
-| hq-fe-rbac.4 | `GET /api/whoami` (actor + roles + scopes) | P1 | open | — | bootstrap del dashboard |
+| hq-fe-rbac.4 | `GET /api/whoami` (actor + roles + scopes) | P1 | closed | claude-host | `Actor` newtype en request ext via auth middleware (open=`web:open`, bearer=`actor_tag`); `WhoamiDto {actor, mode, roles, scopes}` (roles/scopes empty hasta rbac.{1,2,3}); 3 cargo tests; `lib/{types,api}/whoami.ts` + `+layout.svelte` hidrata `auth.hydrate(whoami)` con skip401Hook |
 | hq-fe-rbac.5 | Enriquecer `web.invoked` con command+target | P2 | open | — | audit feed útil |
 
 ### Epic `hq-fe-auth` — account login pty driver

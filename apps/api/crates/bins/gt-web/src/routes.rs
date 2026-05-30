@@ -23,7 +23,7 @@ use crate::dto::{
     BeadUpdateRequest, BeadsQuery, BulkBeadCreateRequest, BulkBeadCreateResponse,
     ConvoyCreateRequest, ConvoyCreateResponse, DirtyFileDto, IssueDto, IssuesQuery,
     MayorStatusDto, MemberFailRequest, MergeSlotDto, NudgeRequest, NudgeResponse,
-    QuotaRetireResponse, QuotaRotateRequest, SessionDto, SessionsQuery, WorktreeDto,
+    QuotaRetireResponse, QuotaRotateRequest, SessionDto, SessionsQuery, WhoamiDto, WorktreeDto,
 };
 use crate::state::AppState;
 use crate::stream::{sse_from_json_receiver, sse_from_receiver};
@@ -824,6 +824,31 @@ where
         },
     };
     Ok(Json(dto))
+}
+
+/// `GET /api/whoami` — identity bootstrap for the dashboard (hq-fe-rbac.4). Returns
+/// the request's actor tag, the frontier's auth mode, and (pre-RBAC) empty
+/// roles/scopes arrays. The contract is shaped so hq-fe-rbac.{1,2,3} can populate
+/// roles + scopes without breaking the wire — clients already consume them as
+/// arrays.
+pub async fn whoami<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
+    actor: axum::extract::Extension<crate::auth::Actor>,
+) -> Result<Json<WhoamiDto>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
+{
+    let _ = state;
+    let id = actor.0 .0.clone();
+    let mode = if id == "web:open" { "open" } else { "bearer" };
+    Ok(Json(WhoamiDto {
+        actor: id,
+        mode: mode.to_string(),
+        roles: Vec::new(),
+        scopes: Vec::new(),
+    }))
 }
 
 /// `GET /api/merges` — snapshot of the merge slot board (hq-fe-api-r.4). One row per

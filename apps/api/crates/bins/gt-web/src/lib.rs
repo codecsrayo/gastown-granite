@@ -176,6 +176,10 @@ where
         // Read-only; backed by the same `MergeRepository` the actor upserts on each
         // transition. Deltas flow on the existing SSE `merge.*` channel.
         .route("/api/merges", get(routes::list_merges::<R, SQ, M>))
+        // hq-fe-rbac.4 — identity bootstrap for the dashboard. Actor + mode today;
+        // roles/scopes empty until hq-fe-rbac.{1,2,3} land. The contract is shaped
+        // so populating them later doesn't require a client recompile.
+        .route("/api/whoami", get(routes::whoami::<R, SQ, M>))
         .route("/api/worktrees", get(routes::list_worktrees::<R, SQ, M>))
         .route(
             "/api/worktrees/stream",

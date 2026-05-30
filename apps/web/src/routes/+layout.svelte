@@ -5,10 +5,20 @@
   import Shell from '$lib/components/layout/Shell.svelte';
   import { theme } from '$lib/stores/theme.svelte';
   import { setOn401 } from '$lib/api/client';
+  import { fetchWhoami } from '$lib/api/whoami';
   import { clearBearer } from '$lib/bearer';
   import { auth } from '$lib/stores/auth.svelte';
 
   let { children } = $props();
+
+  async function hydrateAuth() {
+    try {
+      const w = await fetchWhoami({ skip401Hook: true });
+      auth.hydrate({ actor: w.actor, roles: w.roles, scopes: w.scopes });
+    } catch {
+      // /api/whoami unreachable — leave auth in dev mode so the UI still renders.
+    }
+  }
 
   onMount(() => {
     theme.hydrate();
@@ -20,6 +30,7 @@
       auth.reset();
       goto('/login');
     });
+    hydrateAuth();
     return () => setOn401(null);
   });
 </script>
