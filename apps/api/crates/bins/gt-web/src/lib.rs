@@ -189,7 +189,10 @@ where
         // hq-fe-api-w.9 — convoy write surface. POST creates + launches; the per-member
         // fail route halts a stuck convoy with an operator-supplied reason. `pause` /
         // `resume` are deferred — domain has no Pause/Resume commands today.
-        .route("/api/convoys", post(routes::create_convoy::<R, SQ, M>))
+        .route(
+            "/api/convoys",
+            get(routes::list_convoys::<R, SQ, M>).post(routes::create_convoy::<R, SQ, M>),
+        )
         .route(
             "/api/convoys/:convoy/members/:member/fail",
             post(routes::fail_convoy_member::<R, SQ, M>),

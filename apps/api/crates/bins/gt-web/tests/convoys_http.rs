@@ -195,6 +195,70 @@ async fn fail_member_rejects_empty_reason() {
     root.shutdown();
 }
 
+/// hq-fe-api-r.3 gate: `GET /api/convoys` returns the actor's snapshot mapped to
+/// `ConvoyDto`. Seeds two convoys, asserts both come back with their member lists in
+/// insertion order + a non-empty state string. Members default to `pending` at Stage and
+/// flip to `active` on Launch's dispatch chain — the exact value is whichever the actor
+/// reports, the gate only checks the field is round-tripped.
+#[tokio::test]
+async fn get_convoys_returns_snapshot() {
+    let (base, root, _srv) = boot().await;
+    let client = reqwest::Client::new();
+    client
+        .post(format!("{base}/api/convoys"))
+        .json(&json!({ "convoy": "cv-a", "members": ["hq-a.1", "hq-a.2"] }))
+        .send()
+        .await
+        .expect("seed a");
+    client
+        .post(format!("{base}/api/convoys"))
+        .json(&json!({ "convoy": "cv-b", "members": ["hq-b.1"] }))
+        .send()
+        .await
+        .expect("seed b");
+
+    let rows: Vec<serde_json::Value> = client
+        .get(format!("{base}/api/convoys"))
+        .send()
+        .await
+        .expect("send get")
+        .json()
+        .await
+        .expect("json");
+    assert!(rows.iter().any(|c| c["id"] == "cv-a"));
+    assert!(rows.iter().any(|c| c["id"] == "cv-b"));
+    let cv_a = rows.iter().find(|c| c["id"] == "cv-a").unwrap();
+    assert_eq!(cv_a["members"][0]["bead"], "hq-a.1");
+    assert_eq!(cv_a["members"][1]["bead"], "hq-a.2");
+    assert!(cv_a["state"].is_string());
+    root.shutdown();
+}
+
+/// hq-fe-api-r.3 gate: `?state=` filter narrows the slice in-memory. Asking for a state
+/// no convoy holds returns `[]` rather than 400 — closed-set enum but permissive route,
+/// mirroring the `?role=` posture on `/api/sessions`.
+#[tokio::test]
+async fn get_convoys_filters_by_state() {
+    let (base, root, _srv) = boot().await;
+    reqwest::Client::new()
+        .post(format!("{base}/api/convoys"))
+        .json(&json!({ "convoy": "cv-flt", "members": ["hq-a.1"] }))
+        .send()
+        .await
+        .expect("seed");
+
+    let rows: Vec<serde_json::Value> = reqwest::Client::new()
+        .get(format!("{base}/api/convoys?state=closed"))
+        .send()
+        .await
+        .expect("send get")
+        .json()
+        .await
+        .expect("json");
+    assert!(rows.is_empty(), "no convoy is closed, got: {rows:?}");
+    root.shutdown();
+}
+
 #[tokio::test]
 async fn fail_member_unknown_convoy_returns_5xx() {
     // `FailMember::validate` returns `AppError::NotFound`, which gt-web today maps to

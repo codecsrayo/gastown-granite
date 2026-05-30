@@ -21,7 +21,8 @@ use gt_store_dolt::{IssueFilter, IssueRow};
 use crate::dto::{
     BeadCommentRequest, BeadCommentResponse, BeadCreateRequest, BeadDto, BeadTransitionRequest,
     BeadUpdateRequest, BeadsQuery, BulkBeadCreateRequest, BulkBeadCreateResponse,
-    ConvoyCreateRequest, ConvoyCreateResponse, DirtyFileDto, IssueDto, IssuesQuery,
+    ConvoyCreateRequest, ConvoyCreateResponse, ConvoyDto, ConvoyMemberDto, ConvoysQuery,
+    DirtyFileDto, IssueDto, IssuesQuery,
     MayorStatusDto, MemberFailRequest, MergeSlotDto, NudgeRequest, NudgeResponse,
     QuotaRetireResponse, QuotaRotateRequest, SessionDto, SessionsQuery, WhoamiDto, WorktreeDto,
 };
@@ -563,6 +564,45 @@ fn is_operator_transition_allowed(from: BeadStatus, to: BeadStatus) -> bool {
         (Done, Pending) | (Failed, Pending) => true,
         _ => false,
     }
+}
+
+/// `GET /api/convoys[?state=launched]` — snapshot of every convoy the orchestrator knows
+/// about (hq-fe-api-r.3). HTTP mirror of the `gt://orch/convoys` MCP resource. Returns
+/// `[]` when the command bus is unwired (CI / test setups without a live root); the bus
+/// is the only path to the actor today + the gateway must not invent a default. The
+/// optional `state` query param filters in-memory after the snapshot — the actor only
+/// exposes the full board, so filtering server-side keeps the contract simple at the
+/// cost of one extra walk over the slice (cheap, the board is small).
+pub async fn list_convoys<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
+    Query(q): Query<ConvoysQuery>,
+) -> Result<Json<Vec<ConvoyDto>>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
+{
+    let Some(bus) = state.bus.as_ref() else {
+        return Ok(Json(Vec::new()));
+    };
+    let convoys = bus.orch().snapshot().await;
+    let dtos: Vec<ConvoyDto> = convoys
+        .into_iter()
+        .map(|c| ConvoyDto {
+            id: c.id,
+            state: c.state.as_str().to_string(),
+            members: c
+                .members
+                .into_iter()
+                .map(|m| ConvoyMemberDto {
+                    bead: m.bead,
+                    state: m.state.as_str().to_string(),
+                })
+                .collect(),
+        })
+        .filter(|d| q.state.as_deref().map_or(true, |s| d.state == s))
+        .collect();
+    Ok(Json(dtos))
 }
 
 /// `POST /api/convoys` — create + launch a convoy (hq-fe-api-w.9). Thin HTTP wrapper

@@ -211,6 +211,34 @@ pub struct ConvoyCreateResponse {
     pub launched: bool,
 }
 
+/// One row of `GET /api/convoys` (hq-fe-api-r.3). HTTP mirror of the `gt://orch/convoys`
+/// MCP resource. `state` is the canonical lifecycle string (`staged|launched|closed|failed`)
+/// from `gt_orchestration::state::ConvoyState::as_str()`. Members are surfaced ordered the
+/// same way the actor stores them so the dashboard preserves convoy ordering when rendering
+/// the e-stop list (hq-fe-view.6).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConvoyDto {
+    pub id: String,
+    pub state: String,
+    pub members: Vec<ConvoyMemberDto>,
+}
+
+/// One member of a convoy. `bead` is the issue id this slot drives; `state` is the canonical
+/// member lifecycle string (`pending|active|done|failed`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConvoyMemberDto {
+    pub bead: String,
+    pub state: String,
+}
+
+/// Query for `GET /api/convoys?state=launched`. Absent = no filter (returns every convoy
+/// the actor knows about). Unknown values yield `[]` rather than 400 — same posture as the
+/// `?role=` filter on `/api/sessions`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ConvoysQuery {
+    pub state: Option<String>,
+}
+
 /// Body of `POST /api/convoys/:convoy/members/:member/fail` (hq-fe-api-w.9). Halts the
 /// convoy with an operator-supplied reason. Path params carry the identifiers so a
 /// curl smoke test can omit the body entirely when `reason` is optional — but we keep
