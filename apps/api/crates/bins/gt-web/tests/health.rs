@@ -67,6 +67,7 @@ async fn boot(auth: AuthConfig, gate: ReadinessGate) -> String {
         login_pty: None,
         login_config: std::sync::Arc::new(gt_web::LoginConfig::default()),
          terminal_attach: None,
+         skills: None,
     };
 
     let audit = InMemoryWebAudit::new();

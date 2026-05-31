@@ -58,6 +58,7 @@ async fn empty_when_issues_unset() {
         login_pty: None,
         login_config: std::sync::Arc::new(gt_web::LoginConfig::default()),
          terminal_attach: None,
+         skills: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

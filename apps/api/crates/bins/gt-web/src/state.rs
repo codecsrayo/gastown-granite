@@ -18,6 +18,7 @@ use crate::comments::IssueCommenter;
 use crate::control::{PolecatControl, PolecatRespawner};
 use crate::dto::WorktreeDto;
 use crate::login::{LoginConfig, LoginRegistry};
+use gt_skills::SkillHandle;
 use gt_terminal::Attach;
 
 /// Read-side composition root. Keep it `Clone` (Arc-backed) so axum can hand a fresh handle
@@ -107,6 +108,12 @@ where
     /// short-circuit with `503` instead of attempting a `tmux pipe-pane` call on a
     /// host that has no tmux server — same posture as [`Self::login_pty`].
     pub terminal_attach: Option<Arc<dyn Attach>>,
+    /// Skills catalog actor (hq-fe-skills.2). Backs `GET /api/skills` (registered
+    /// catalog) and `GET /api/roles` (per-role enabled skill list). `None` in test
+    /// setups not exercising the routes; the handlers return `[]` so the dashboard
+    /// keeps rendering an empty surface without conditional logic on the wire shape.
+    /// `SkillHandle` is itself `Clone` (mpsc-backed) so no `Arc` wrap is needed.
+    pub skills: Option<SkillHandle>,
 }
 
 impl<R, SQ, M> Clone for AppState<R, SQ, M>
@@ -134,6 +141,7 @@ where
             login_pty: self.login_pty.clone(),
             login_config: self.login_config.clone(),
             terminal_attach: self.terminal_attach.clone(),
+            skills: self.skills.clone(),
         }
     }
 }

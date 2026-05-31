@@ -392,6 +392,15 @@ async fn serve<R, SQ, MR, PR, OR>(
             _ => None,
         };
 
+    // hq-fe-skills.2 — skills catalog actor. Always spawned so a future deploy that
+    // registers entries via `.3` does not require a rebuild to surface them; the
+    // GET routes still return `[]` until a register/enable event lands. The relay
+    // drains into a discard task here — `.4`/`.5` will replace it with a fan-out
+    // into the shared events broadcast so SSE subscribers see `skills.*` deltas.
+    let (skills_evt_tx, mut skills_evt_rx) = tokio::sync::mpsc::channel(32);
+    tokio::spawn(async move { while skills_evt_rx.recv().await.is_some() {} });
+    let skills_handle = gt_skills::spawn(skills_evt_tx);
+
     let state = AppState {
         beads,
         sessions,
@@ -414,6 +423,7 @@ async fn serve<R, SQ, MR, PR, OR>(
         login_pty,
         login_config,
         terminal_attach,
+        skills: Some(skills_handle),
     };
 
     // Idempotency-Key cache (hq-fe-api-w.2). TTL overridable via

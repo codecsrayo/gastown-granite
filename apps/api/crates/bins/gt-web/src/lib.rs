@@ -216,6 +216,19 @@ where
             "/api/issues",
             get(routes::list_issues::<R, SQ, M>).route_layer(req("beads.read")),
         )
+        // hq-fe-skills.2 — registered skills catalog + per-role bindings. Read-only
+        // mirrors of the `gt_skills` actor's `skills()` / `bindings()` snapshots.
+        // Both routes share `skills.read` so a single grant covers the dashboard's
+        // RoleList/SkillToggle hydration; `.3` will introduce a sibling `skills.write`
+        // for the toggle POST surface.
+        .route(
+            "/api/skills",
+            get(routes::list_skills::<R, SQ, M>).route_layer(req("skills.read")),
+        )
+        .route(
+            "/api/roles",
+            get(routes::list_roles::<R, SQ, M>).route_layer(req("skills.read")),
+        )
         // hq-fe-api-r.7 — derived snapshot of mayor attach state. Read-only over the
         // active-session registry; heartbeat freshness deferred (see dto).
         .route(

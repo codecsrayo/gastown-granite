@@ -496,6 +496,50 @@ pub struct IssuesQuery {
     pub limit: Option<u32>,
 }
 
+/// One row of `GET /api/skills` (hq-fe-skills.2). Flat projection of
+/// [`gt_skills::Skill`] — the dashboard renders the catalog as a labelled list with
+/// per-skill scope chips, so we surface `default_scopes` (the canonical scope set the
+/// skill grants) but not the `registered_at_secs` timestamp the actor stores. Ordering
+/// follows the actor snapshot: the catalog is a `BTreeMap` keyed by id, so the response
+/// is sorted alphabetically and stable across reads.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillDto {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub default_scopes: Vec<String>,
+}
+
+impl From<gt_skills::Skill> for SkillDto {
+    fn from(s: gt_skills::Skill) -> Self {
+        Self {
+            id: s.id,
+            label: s.label,
+            description: s.description,
+            default_scopes: s.default_scopes,
+        }
+    }
+}
+
+/// One row of `GET /api/roles` (hq-fe-skills.2). Per-role enabled-skill list, flattened
+/// to the id set the dashboard's `RoleList` + `SkillToggle` panels render against.
+/// `skills` is alphabetically sorted (the actor stores it in a `BTreeSet`) so the wire
+/// shape is deterministic across replay — same posture as [`SkillDto`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RoleSkillsDto {
+    pub role: String,
+    pub skills: Vec<String>,
+}
+
+impl From<gt_skills::RoleBinding> for RoleSkillsDto {
+    fn from(b: gt_skills::RoleBinding) -> Self {
+        Self {
+            role: b.role,
+            skills: b.enabled_skills.into_iter().collect(),
+        }
+    }
+}
+
 /// Canonical wire payloads for `quota.login_*` SSE kinds (hq-fe-auth.3).
 ///
 /// Each struct is the **payload** carried inside the `EventRecord.payload` field;

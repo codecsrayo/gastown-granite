@@ -25,8 +25,8 @@ use crate::dto::{
     DirtyFileDto, FeedQuery, IssueDto, IssuesQuery,
     MayorStatusDto, MemberFailRequest, MergeSlotDto, NudgeRequest, NudgeResponse,
     QuotaAccountDto, QuotaRetireResponse, QuotaRotateRequest, QuotaRotationDto,
-    QuotaRotationEntryDto, QuotaRotationQuery, QuotaWaitingUnlockDto, SessionDto, SessionsQuery,
-    WhoamiDto, WorktreeDto,
+    QuotaRotationEntryDto, QuotaRotationQuery, QuotaWaitingUnlockDto, RoleSkillsDto, SessionDto,
+    SessionsQuery, SkillDto, WhoamiDto, WorktreeDto,
 };
 use crate::state::AppState;
 use crate::stream::{sse_from_json_receiver, sse_from_receiver};
@@ -968,6 +968,48 @@ where
         .await
         .map_err(|e| AppError::internal(format!("issues list: {e}")))?;
     Ok(Json(rows.into_iter().map(IssueDto::from).collect()))
+}
+
+/// `GET /api/skills` — registered skills catalog (hq-fe-skills.2). Read-side mirror of
+/// the [`gt_skills`] actor's `skills()` snapshot. Returns `[]` when `AppState.skills` is
+/// unset so the in-memory dev mode keeps working without a live actor — same posture as
+/// `/api/issues` and `/api/worktrees`. The dashboard's `RoleList` panel hydrates the
+/// catalog once at boot and patches deltas off the SSE feed (`skills.*` once `.5` ships).
+pub async fn list_skills<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
+) -> Result<Json<Vec<SkillDto>>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
+{
+    let Some(skills) = state.skills.as_ref() else {
+        return Ok(Json(Vec::new()));
+    };
+    let rows = skills.skills().await;
+    Ok(Json(rows.into_iter().map(SkillDto::from).collect()))
+}
+
+/// `GET /api/roles` — per-role enabled-skill bindings (hq-fe-skills.2). The dashboard
+/// joins this against [`list_skills`] to render the `SkillToggle` grid: every catalog
+/// entry × every role with a checkmark where the binding is live. Empty response when
+/// no actor is wired or when no role has bindings yet (the actor stores them lazily on
+/// first enable — see `gt_skills::SkillCatalog::apply_enable`). Roles with no skills
+/// enabled show up as `{role, skills: []}` rather than being omitted, so the dashboard
+/// can distinguish "stripped to defaults" from "never bound".
+pub async fn list_roles<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
+) -> Result<Json<Vec<RoleSkillsDto>>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
+{
+    let Some(skills) = state.skills.as_ref() else {
+        return Ok(Json(Vec::new()));
+    };
+    let rows = skills.bindings().await;
+    Ok(Json(rows.into_iter().map(RoleSkillsDto::from).collect()))
 }
 
 impl From<IssueRow> for IssueDto {

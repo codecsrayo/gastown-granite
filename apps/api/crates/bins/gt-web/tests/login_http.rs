@@ -82,6 +82,7 @@ async fn boot_with_pty(
         login_pty: Some(pty),
         login_config: Arc::new(LoginConfig::default()),
         terminal_attach: None,
+        skills: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -352,6 +353,7 @@ async fn start_without_pty_returns_503() {
         login_pty: None,
         login_config: Arc::new(LoginConfig::default()),
          terminal_attach: None,
+         skills: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -523,6 +525,7 @@ async fn boot_with_pty_and_config(
         login_pty: Some(pty),
         login_config: Arc::new(cfg),
         terminal_attach: None,
+        skills: None,
     };
     let sink: Arc<dyn WebAuditSink> = Arc::new(InMemoryWebAudit::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

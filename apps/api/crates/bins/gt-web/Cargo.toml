@@ -39,6 +39,8 @@ gt-quota = { path = "../../domain/orchestration/gt-quota" }
 gt-login = { path = "../../domain/orchestration/gt-login" }
 # hq-fe-term.2: Attach port + tmux/pty adapters for the dashboard dock-terminal WS route.
 gt-terminal = { path = "../../domain/platform/gt-terminal" }
+# hq-fe-skills.2: skills catalog + role-bindings actor behind GET /api/skills + /api/roles.
+gt-skills = { path = "../../domain/platform/gt-skills" }
 # Real persistence adapters: opt-in via env (GT_DOLT_URL / GT_PG_AUDIT_URL).
 gt-store-dolt = { path = "../../kernel/gt-store-dolt" }
 gt-store-pg = { path = "../../kernel/gt-store-pg" }

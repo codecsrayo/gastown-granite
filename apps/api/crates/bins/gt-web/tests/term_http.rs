@@ -67,6 +67,7 @@ fn build_state(
         login_pty: None,
         login_config: Arc::new(gt_web::LoginConfig::default()),
         terminal_attach: attach,
+        skills: None,
     }
 }
 
