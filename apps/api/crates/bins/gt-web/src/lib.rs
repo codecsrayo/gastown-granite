@@ -141,11 +141,19 @@ where
     // hq-fe-rbac.3 — per-route scope guards. Each closure builds a fresh `from_fn_with_state`
     // layer carrying the audit sink + a static scope string; only JWT-mode requests carry
     // `AuthClaims` so Bearer/Open posture grandfathers through (see `scope` module doc).
+    //
+    // hq-fe-skills.4 — the guard also captures the live skills handle. When the static
+    // claim scopes do not carry `scope`, the middleware falls back to a dynamic union
+    // over the claim's roles via the skills actor; an enabled skill widens the scope set
+    // without a token re-issue. The clone is cheap (mpsc::Sender) and `None` keeps the
+    // pre-`.4` posture (static-only).
+    let skills_for_guard = state.skills.clone();
     let req = |scope: &'static str| {
         axum::middleware::from_fn_with_state(
             ScopeGuard {
                 audit: layer.audit.clone(),
                 scope,
+                skills: skills_for_guard.clone(),
             },
             scope_middleware,
         )

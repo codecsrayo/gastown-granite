@@ -23,6 +23,13 @@ pub enum SkillMsg {
         role: String,
         reply: oneshot::Sender<Vec<String>>,
     },
+    /// Flattened scope set unioned across every role's enabled skills (`hq-fe-skills.4`).
+    /// Order-preserving + dedup'd in a single actor visit so callers don't have to
+    /// double-walk the catalog from the outside.
+    ScopesForRoles {
+        roles: Vec<String>,
+        reply: oneshot::Sender<Vec<String>>,
+    },
     /// "Ask without doing": run `validate` against the current catalog, no mutation/emit.
     Validate {
         cmd: SkillCommand,
@@ -82,6 +89,25 @@ impl SkillHandle {
         rx.await.unwrap_or_default()
     }
 
+    /// Flattened scope union for a set of roles (`hq-fe-skills.4`). For every role in
+    /// `roles`, look up the enabled skills, then for each skill flatten in its
+    /// `default_scopes`, dedup'd first-seen so the role's primary scope stays at the
+    /// front (matches the `gt_rbac::WebGrant::scopes` ordering posture). Empty input —
+    /// or roles with no bindings — yields an empty vec; callers should union against
+    /// the static `WebGrant.scopes` themselves.
+    pub async fn scopes_for_roles(&self, roles: Vec<String>) -> Vec<String> {
+        let (reply, rx) = oneshot::channel();
+        if self
+            .tx
+            .send(SkillMsg::ScopesForRoles { roles, reply })
+            .await
+            .is_err()
+        {
+            return Vec::new();
+        }
+        rx.await.unwrap_or_default()
+    }
+
     pub async fn validate(&self, cmd: SkillCommand) -> Result<(), AppError> {
         let (reply, rx) = oneshot::channel();
         self.tx
@@ -129,6 +155,9 @@ pub fn spawn_hydrated(
                 }
                 SkillMsg::Bindings(reply) => {
                     let _ = reply.send(catalog.bindings());
+                }
+                SkillMsg::ScopesForRoles { roles, reply } => {
+                    let _ = reply.send(catalog.scopes_for_roles(&roles));
                 }
                 SkillMsg::SkillsForRole { role, reply } => {
                     let _ = reply.send(catalog.skills_for_role(&role));

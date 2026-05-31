@@ -30,16 +30,24 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
+use gt_skills::SkillHandle;
+
 use crate::audit::{WebAuditEvent, WebAuditSink};
 use crate::auth::{Actor, AuthClaims};
 
 /// State carried by [`scope_middleware`]. Built once per route via [`require_scope`] so the
 /// captured `scope` is a `&'static str` and no per-request allocation happens on the hot
 /// path. The audit sink is the same `Arc` the gateway-wide [`crate::auth::AuthLayer`] holds.
+///
+/// `skills` (hq-fe-skills.4) is the dynamic scope source: when the static `claims.scopes`
+/// do not carry `scope`, the middleware falls back to a per-role union via the actor so
+/// an enabled skill widens what the token can drive without a re-issue. `None` keeps the
+/// pre-`.4` posture (static-only) for tests and deploys with no skills actor wired.
 #[derive(Clone)]
 pub struct ScopeGuard {
     pub audit: Arc<dyn WebAuditSink>,
     pub scope: &'static str,
+    pub skills: Option<SkillHandle>,
 }
 
 /// Carries the per-route capability label and addressed resource id from
@@ -99,6 +107,22 @@ pub async fn scope_middleware(
         let mut resp = next.run(req).await;
         resp.extensions_mut().insert(ctx);
         return resp;
+    }
+    // hq-fe-skills.4 — static deny; check the dynamic skill-binding union before
+    // emitting Forbidden. An enabled skill on any of the claim's roles whose
+    // `default_scopes` covers `guard.scope` accepts the request, same RouteContext
+    // posture as the static-accept branch so the audit record stays uniform.
+    if let Some(skills) = guard.skills.as_ref() {
+        let dynamic = skills.scopes_for_roles(claims.0.roles.clone()).await;
+        if dynamic.iter().any(|s| s == guard.scope) {
+            let ctx = RouteContext {
+                command: guard.scope.to_string(),
+                target: target_from_path(req.uri().path()),
+            };
+            let mut resp = next.run(req).await;
+            resp.extensions_mut().insert(ctx);
+            return resp;
+        }
     }
     let actor = req
         .extensions()
@@ -199,6 +223,7 @@ mod tests {
         let guard = ScopeGuard {
             audit: audit.clone(),
             scope: "sessions.write",
+            skills: None,
         };
         let app = Router::new()
             .route(
@@ -256,6 +281,7 @@ mod tests {
         let guard = ScopeGuard {
             audit: audit.clone(),
             scope: "sessions.write",
+            skills: None,
         };
         let app = Router::new()
             .route(
@@ -301,6 +327,7 @@ mod tests {
         let guard = ScopeGuard {
             audit: audit.clone(),
             scope: "beads.write",
+            skills: None,
         };
         let app = router(layer, guard);
         let token = issuer
@@ -341,6 +368,7 @@ mod tests {
         let guard = ScopeGuard {
             audit: audit.clone(),
             scope: "beads.write",
+            skills: None,
         };
         let app = router(layer, guard);
         // Token carries only `merge.read`, not `beads.write`.
@@ -391,6 +419,7 @@ mod tests {
         let guard = ScopeGuard {
             audit: audit.clone(),
             scope: "beads.write",
+            skills: None,
         };
         let app = router(layer, guard);
         let resp = app
@@ -421,6 +450,7 @@ mod tests {
         let guard = ScopeGuard {
             audit: audit.clone(),
             scope: "beads.write",
+            skills: None,
         };
         let app = router(layer, guard);
         let resp = app
@@ -446,6 +476,7 @@ mod tests {
         let guard = ScopeGuard {
             audit: audit.clone(),
             scope: "beads.write",
+            skills: None,
         };
         let app = router(layer, guard);
         let token = issuer.sign("stranger", vec![], vec![]).unwrap();

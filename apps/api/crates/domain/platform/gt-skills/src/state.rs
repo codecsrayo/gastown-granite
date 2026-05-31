@@ -118,6 +118,32 @@ impl SkillCatalog {
             .unwrap_or_default()
     }
 
+    /// Flattened scope set for every role in `roles` (`hq-fe-skills.4`). For each role,
+    /// walks its enabled skills (BTreeSet → alphabetical), then each skill's
+    /// `default_scopes` (registered ordering), dedup'd first-seen so the gateway can
+    /// union this with the static `gt_rbac::WebGrant.scopes` without changing the
+    /// existing scope ordering posture. Roles with no binding contribute nothing.
+    pub fn scopes_for_roles(&self, roles: &[String]) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        for role in roles {
+            let Some(binding) = self.bindings.get(role) else {
+                continue;
+            };
+            for skill_id in &binding.enabled_skills {
+                let Some(skill) = self.skills.get(skill_id) else {
+                    continue;
+                };
+                for scope in &skill.default_scopes {
+                    if seen.insert(scope.clone()) {
+                        out.push(scope.clone());
+                    }
+                }
+            }
+        }
+        out
+    }
+
     // -- mutation helpers (the only writers, consulted by both `commands::execute`
     //    and `SkillState::apply` so the live state and the rebuilt state stay in
     //    lockstep).
@@ -342,6 +368,58 @@ mod tests {
         }
         assert_eq!(a, b);
         assert_eq!(a.catalog.skills_for_role("deacon"), vec!["beta"]);
+    }
+
+    #[test]
+    fn scopes_for_roles_unions_and_dedups_across_skills_and_roles() {
+        let mut s = SkillState::default();
+        // alpha grants two scopes, beta overlaps on `feed.read`.
+        s.apply(&SkillEvent::Registered {
+            skill: "alpha".into(),
+            label: "alpha".into(),
+            description: "".into(),
+            default_scopes: vec!["feed.read".into(), "merge.read".into()],
+            now_secs: 1,
+        });
+        s.apply(&SkillEvent::Registered {
+            skill: "beta".into(),
+            label: "beta".into(),
+            description: "".into(),
+            default_scopes: vec!["feed.read".into(), "beads.read".into()],
+            now_secs: 2,
+        });
+        s.apply(&SkillEvent::EnabledForRole {
+            role: "deacon".into(),
+            skill: "alpha".into(),
+            now_secs: 3,
+        });
+        s.apply(&SkillEvent::EnabledForRole {
+            role: "sheriff".into(),
+            skill: "beta".into(),
+            now_secs: 4,
+        });
+
+        // Single-role lookup hits alpha only.
+        assert_eq!(
+            s.catalog.scopes_for_roles(&["deacon".into()]),
+            vec!["feed.read".to_string(), "merge.read".to_string()]
+        );
+        // Cross-role union: feed.read appears once. alpha first because BTreeSet
+        // iteration on the deacon binding lands before sheriff's.
+        assert_eq!(
+            s.catalog
+                .scopes_for_roles(&["deacon".into(), "sheriff".into()]),
+            vec![
+                "feed.read".to_string(),
+                "merge.read".to_string(),
+                "beads.read".to_string(),
+            ]
+        );
+        // Unknown role → empty contribution.
+        assert!(s
+            .catalog
+            .scopes_for_roles(&["ghost".into()])
+            .is_empty());
     }
 
     #[test]

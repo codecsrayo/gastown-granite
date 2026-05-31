@@ -1148,13 +1148,26 @@ where
     SQ: SessionQueries + Send + Sync + 'static,
     M: MergeRepository + Send + Sync + 'static,
 {
-    let _ = state;
     let id = actor.0 .0.clone();
-    let (mode, roles, scopes) = match claims {
+    let (mode, roles, mut scopes) = match claims {
         Some(c) => ("jwt", c.0 .0.roles.clone(), c.0 .0.scopes.clone()),
         None if id == "web:open" => ("open", Vec::new(), Vec::new()),
         None => ("bearer", Vec::new(), Vec::new()),
     };
+    // hq-fe-skills.4 — widen the response's scope set with the dynamic skill-binding
+    // union so the dashboard sees the effective grants (same set the scope guard
+    // accepts on per-route enforcement). Doing the union here keeps `/api/whoami` in
+    // lockstep with the middleware so the FE renders the right action set without a
+    // re-issued token. Bearer/Open modes have no roles, so they short-circuit.
+    if !roles.is_empty() {
+        if let Some(skills) = state.skills.as_ref() {
+            for s in skills.scopes_for_roles(roles.clone()).await {
+                if !scopes.iter().any(|existing| existing == &s) {
+                    scopes.push(s);
+                }
+            }
+        }
+    }
     Ok(Json(WhoamiDto {
         actor: id,
         mode: mode.to_string(),

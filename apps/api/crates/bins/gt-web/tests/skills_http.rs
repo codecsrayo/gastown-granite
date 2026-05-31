@@ -354,6 +354,127 @@ async fn toggle_route_enforces_skills_write_scope_in_jwt_mode() {
 }
 
 #[tokio::test]
+async fn enabled_skill_widens_scope_guard_dynamically() {
+    // hq-fe-skills.4 — a token whose static `scopes` lack `merge.read` is rejected on
+    // `/api/merges`; after enabling a skill on the token's role that contributes
+    // `merge.read` through its `default_scopes`, the same token passes. No re-issue.
+    let issuer = JwtIssuer::from_secret("test-secret").shared();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    tokio::spawn(async move { while rx.recv().await.is_some() {} });
+    let handle = gt_skills::spawn(tx);
+    handle
+        .exec(SkillCommand::Register(RegisterSkill {
+            skill: "merge_reader".into(),
+            label: "Merge reader".into(),
+            description: "".into(),
+            default_scopes: vec!["merge.read".into()],
+            now_secs: 1,
+        }))
+        .await
+        .unwrap();
+
+    let (base, root) = boot(Some(handle.clone()), AuthConfig::jwt(issuer.clone())).await;
+    let client = reqwest::Client::new();
+
+    let token = issuer
+        .sign(
+            "operator",
+            vec!["deacon".into()],
+            vec!["beads.read".into()],
+        )
+        .unwrap();
+
+    let resp = client
+        .get(format!("{base}/api/merges"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403, "static scope set lacks merge.read");
+
+    handle
+        .exec(SkillCommand::Enable(gt_skills::EnableSkillForRole {
+            role: "deacon".into(),
+            skill: "merge_reader".into(),
+            now_secs: 2,
+        }))
+        .await
+        .unwrap();
+
+    let resp = client
+        .get(format!("{base}/api/merges"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "skill binding widened merge.read");
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    root.shutdown();
+}
+
+#[tokio::test]
+async fn whoami_unions_dynamic_scopes_into_response() {
+    let issuer = JwtIssuer::from_secret("test-secret").shared();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    tokio::spawn(async move { while rx.recv().await.is_some() {} });
+    let handle = gt_skills::spawn(tx);
+    handle
+        .exec(SkillCommand::Register(RegisterSkill {
+            skill: "merge_reader".into(),
+            label: "Merge reader".into(),
+            description: "".into(),
+            default_scopes: vec!["merge.read".into(), "feed.read".into()],
+            now_secs: 1,
+        }))
+        .await
+        .unwrap();
+    handle
+        .exec(SkillCommand::Enable(gt_skills::EnableSkillForRole {
+            role: "deacon".into(),
+            skill: "merge_reader".into(),
+            now_secs: 2,
+        }))
+        .await
+        .unwrap();
+
+    let (base, root) = boot(Some(handle), AuthConfig::jwt(issuer.clone())).await;
+    let client = reqwest::Client::new();
+
+    let token = issuer
+        .sign(
+            "operator",
+            vec!["deacon".into()],
+            vec!["beads.read".into(), "feed.read".into()],
+        )
+        .unwrap();
+
+    let body: gt_web::dto::WhoamiDto = client
+        .get(format!("{base}/api/whoami"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(body.roles, vec!["deacon".to_string()]);
+    // Static first, then dynamic. `feed.read` appears once (dedup across the two sources).
+    assert_eq!(
+        body.scopes,
+        vec![
+            "beads.read".to_string(),
+            "feed.read".to_string(),
+            "merge.read".to_string(),
+        ]
+    );
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    root.shutdown();
+}
+
+#[tokio::test]
 async fn skills_routes_enforce_skills_read_scope_in_jwt_mode() {
     let issuer = JwtIssuer::from_secret("test-secret").shared();
     let (base, root) = boot(None, AuthConfig::jwt(issuer.clone())).await;
