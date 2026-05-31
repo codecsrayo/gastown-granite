@@ -112,10 +112,43 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
     acc == 0
 }
 
-fn extract_bearer(req: &Request<Body>) -> Option<&str> {
-    let header = req.headers().get(header::AUTHORIZATION)?;
-    let value = header.to_str().ok()?;
-    value.strip_prefix("Bearer ").map(str::trim)
+/// Name of the cookie carrying the bearer token (hq-fe-rbac.6). Browser-side WS
+/// (`new WebSocket(...)`) and SSE (`new EventSource(...)`) cannot set an
+/// `Authorization` header, so the SPA mirrors the bearer into a same-origin cookie
+/// the browser auto-sends on upgrade requests. HTTP routes still prefer the header
+/// (the `apiRequest` wrapper sets it) — the cookie is the strict fallback.
+pub const BEARER_COOKIE: &str = "gt_web_token";
+
+/// Extract a bearer token from `Authorization: Bearer …` first, then from the
+/// `gt_web_token=` cookie. Header wins so a curl-style probe with both set still
+/// authenticates against the header value, not whatever stale cookie is around.
+fn extract_bearer(req: &Request<Body>) -> Option<String> {
+    if let Some(header) = req.headers().get(header::AUTHORIZATION) {
+        if let Ok(value) = header.to_str() {
+            if let Some(rest) = value.strip_prefix("Bearer ") {
+                return Some(rest.trim().to_string());
+            }
+        }
+    }
+    extract_bearer_from_cookie(req)
+}
+
+/// Parse `Cookie` header(s) for `gt_web_token=<value>`. Multiple `Cookie` headers +
+/// multiple `name=value` pairs per header both supported. Returns the first match.
+fn extract_bearer_from_cookie(req: &Request<Body>) -> Option<String> {
+    for value in req.headers().get_all(header::COOKIE) {
+        let Ok(raw) = value.to_str() else { continue };
+        for pair in raw.split(';') {
+            let trimmed = pair.trim();
+            if let Some(rest) = trimmed.strip_prefix(&format!("{BEARER_COOKIE}=")) {
+                let val = rest.trim();
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 fn unauthorized(reason: &str) -> Response {
@@ -166,7 +199,7 @@ pub async fn auth_middleware(
                 });
                 return unauthorized("missing bearer token");
             };
-            if !constant_time_eq(presented, secret.as_str()) {
+            if !constant_time_eq(presented.as_str(), secret.as_str()) {
                 layer.audit.record(WebAuditEvent::Unauthorized {
                     method: method.clone(),
                     path: path.clone(),
@@ -197,7 +230,7 @@ pub async fn auth_middleware(
                 });
                 return unauthorized("missing bearer token");
             };
-            let claims = match issuer.verify(presented) {
+            let claims = match issuer.verify(presented.as_str()) {
                 Ok(c) => c,
                 Err(e) => {
                     layer.audit.record(WebAuditEvent::Unauthorized {
@@ -256,6 +289,61 @@ mod tests {
         assert!(constant_time_eq("abc", "abc"));
         assert!(!constant_time_eq("abc", "abd"));
         assert!(!constant_time_eq("abc", "abcd"));
+    }
+
+    fn req_with(header_name: &str, header_value: &str) -> Request<Body> {
+        Request::builder()
+            .uri("/probe")
+            .header(header_name, header_value)
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    #[test]
+    fn extract_bearer_prefers_authorization_header() {
+        let r = Request::builder()
+            .uri("/probe")
+            .header(header::AUTHORIZATION, "Bearer header-tok")
+            .header(header::COOKIE, "gt_web_token=cookie-tok")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_bearer(&r).as_deref(), Some("header-tok"));
+    }
+
+    #[test]
+    fn extract_bearer_falls_back_to_cookie() {
+        let r = req_with("cookie", "gt_web_token=ck-tok");
+        assert_eq!(extract_bearer(&r).as_deref(), Some("ck-tok"));
+    }
+
+    #[test]
+    fn extract_bearer_cookie_picks_named_pair_only() {
+        let r = req_with("cookie", "other=1; gt_web_token=picked; tail=2");
+        assert_eq!(extract_bearer(&r).as_deref(), Some("picked"));
+    }
+
+    #[test]
+    fn extract_bearer_skips_empty_cookie_value() {
+        let r = req_with("cookie", "gt_web_token=; fallback=ok");
+        assert!(extract_bearer(&r).is_none());
+    }
+
+    #[test]
+    fn extract_bearer_handles_multiple_cookie_headers() {
+        // Some clients (and h2) split cookies across multiple headers; we accept either.
+        let r = Request::builder()
+            .uri("/probe")
+            .header(header::COOKIE, "first=1")
+            .header(header::COOKIE, "gt_web_token=multi")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_bearer(&r).as_deref(), Some("multi"));
+    }
+
+    #[test]
+    fn extract_bearer_returns_none_when_neither_present() {
+        let r = Request::builder().uri("/probe").body(Body::empty()).unwrap();
+        assert!(extract_bearer(&r).is_none());
     }
 
     #[test]
@@ -345,6 +433,58 @@ mod tests {
             }
             other => panic!("expected Invoked, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn jwt_mode_accepts_token_from_cookie_only() {
+        // hq-fe-rbac.6 — browser-WS path: no Authorization header, JWT travels in the
+        // gt_web_token cookie. Middleware must accept it identically.
+        let issuer = JwtIssuer::from_secret("sec").shared();
+        let audit = Arc::new(InMemoryWebAudit::new());
+        let layer = AuthLayer {
+            config: AuthConfig::jwt(issuer.clone()),
+            audit: audit.clone(),
+        };
+        let app = router_with(layer);
+        let token = issuer
+            .sign("ws-claude", vec!["operator".into()], vec!["terminal.attach".into()])
+            .unwrap();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/probe")
+                    .header(header::COOKIE, format!("gt_web_token={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_text(resp).await;
+        assert!(body.contains("sub=ws-claude"), "got {body}");
+    }
+
+    #[tokio::test]
+    async fn bearer_mode_accepts_token_from_cookie_only() {
+        // Same cookie fallback for legacy Bearer mode so a deploy without JWT but with
+        // a single shared secret can still drive WS.
+        let audit = Arc::new(InMemoryWebAudit::new());
+        let app = router_with(AuthLayer {
+            config: AuthConfig::bearer("topsecret"),
+            audit: audit.clone(),
+        });
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/probe")
+                    .header(header::COOKIE, "gt_web_token=topsecret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]
