@@ -191,6 +191,169 @@ async fn skills_and_roles_project_actor_snapshot() {
 }
 
 #[tokio::test]
+async fn toggle_enables_then_idempotently_re_enables_then_disables() {
+    use std::sync::{Arc, Mutex};
+    // Real actor + dispatch through `POST /api/roles/:role/skills`. Capture every
+    // emitted `SkillEvent` into a shared Vec so the assertion proves the idempotent
+    // replay did not produce an extra wire event (the route short-circuited).
+    let (tx, mut rx) =
+        tokio::sync::mpsc::channel::<gt_events::Envelope<gt_skills::SkillEvent>>(16);
+    let log: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+    let log_writer = log.clone();
+    tokio::spawn(async move {
+        while let Some(env) = rx.recv().await {
+            let kind = match env.payload {
+                gt_skills::SkillEvent::Registered { .. } => "registered",
+                gt_skills::SkillEvent::Retired { .. } => "retired",
+                gt_skills::SkillEvent::EnabledForRole { .. } => "enabled",
+                gt_skills::SkillEvent::DisabledForRole { .. } => "disabled",
+            };
+            log_writer.lock().unwrap().push(kind);
+        }
+    });
+    let handle = gt_skills::spawn(tx);
+    handle
+        .exec(SkillCommand::Register(RegisterSkill {
+            skill: "merge_admin".into(),
+            label: "Merge admin".into(),
+            description: "".into(),
+            default_scopes: vec!["merge.write".into()],
+            now_secs: 1,
+        }))
+        .await
+        .unwrap();
+
+    let (base, root) = boot(Some(handle), AuthConfig::open()).await;
+    let client = reqwest::Client::new();
+
+    // First enable: 200 + body echoes desired state.
+    let resp = client
+        .post(format!("{base}/api/roles/deacon/skills"))
+        .json(&serde_json::json!({"skill": "merge_admin", "enabled": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: gt_web::dto::SkillToggleResponse = resp.json().await.unwrap();
+    assert_eq!(body.role, "deacon");
+    assert!(body.enabled);
+
+    // Idempotent replay: same body again → 200, no extra SkillEvent fan-out.
+    let resp = client
+        .post(format!("{base}/api/roles/deacon/skills"))
+        .json(&serde_json::json!({"skill": "merge_admin", "enabled": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Disable flips back. Cross-check the role snapshot has no skills left.
+    let resp = client
+        .post(format!("{base}/api/roles/deacon/skills"))
+        .json(&serde_json::json!({"skill": "merge_admin", "enabled": false}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let roles: Vec<gt_web::dto::RoleSkillsDto> = client
+        .get(format!("{base}/api/roles"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    // Binding row sticks around (apply_disable keeps empty bindings — a distinct,
+    // valid state from "never bound").
+    assert_eq!(roles.len(), 1);
+    assert_eq!(roles[0].role, "deacon");
+    assert!(roles[0].skills.is_empty());
+
+    // Let the actor flush its mpsc into the capture task before snapshotting the log.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let kinds = log.lock().unwrap().clone();
+    // Exactly register + enable + disable — the idempotent replay must NOT emit.
+    assert_eq!(kinds, vec!["registered", "enabled", "disabled"]);
+
+    root.shutdown();
+}
+
+#[tokio::test]
+async fn toggle_with_unknown_skill_returns_400() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    tokio::spawn(async move { while rx.recv().await.is_some() {} });
+    let handle = gt_skills::spawn(tx);
+
+    let (base, root) = boot(Some(handle), AuthConfig::open()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/roles/deacon/skills"))
+        .json(&serde_json::json!({"skill": "ghost", "enabled": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "unknown skill must surface as 400");
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    root.shutdown();
+}
+
+#[tokio::test]
+async fn toggle_route_enforces_skills_write_scope_in_jwt_mode() {
+    let issuer = JwtIssuer::from_secret("test-secret").shared();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    tokio::spawn(async move { while rx.recv().await.is_some() {} });
+    let handle = gt_skills::spawn(tx);
+    handle
+        .exec(SkillCommand::Register(RegisterSkill {
+            skill: "audit_reader".into(),
+            label: "Audit reader".into(),
+            description: "".into(),
+            default_scopes: vec![],
+            now_secs: 1,
+        }))
+        .await
+        .unwrap();
+    let (base, root) = boot(Some(handle), AuthConfig::jwt(issuer.clone())).await;
+    let client = reqwest::Client::new();
+
+    // `skills.read` alone is not enough — write scope required.
+    let reader = issuer
+        .sign("reader", vec!["reader".into()], vec!["skills.read".into()])
+        .unwrap();
+    let resp = client
+        .post(format!("{base}/api/roles/deacon/skills"))
+        .bearer_auth(&reader)
+        .json(&serde_json::json!({"skill": "audit_reader", "enabled": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403);
+
+    // With `skills.write` the call succeeds.
+    let writer = issuer
+        .sign(
+            "operator",
+            vec!["mayor".into()],
+            vec!["skills.write".into()],
+        )
+        .unwrap();
+    let resp = client
+        .post(format!("{base}/api/roles/deacon/skills"))
+        .bearer_auth(&writer)
+        .json(&serde_json::json!({"skill": "audit_reader", "enabled": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    root.shutdown();
+}
+
+#[tokio::test]
 async fn skills_routes_enforce_skills_read_scope_in_jwt_mode() {
     let issuer = JwtIssuer::from_secret("test-secret").shared();
     let (base, root) = boot(None, AuthConfig::jwt(issuer.clone())).await;

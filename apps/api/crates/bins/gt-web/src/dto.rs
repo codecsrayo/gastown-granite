@@ -540,6 +540,28 @@ impl From<gt_skills::RoleBinding> for RoleSkillsDto {
     }
 }
 
+/// Body of `POST /api/roles/:role/skills` (hq-fe-skills.3). Single toggle: `enabled=true`
+/// dispatches [`gt_skills::EnableSkillForRole`], `false` dispatches
+/// `DisableSkillForRole`. `now_secs` is stamped server-side so curl smoke tests can omit
+/// it (same posture as [`QuotaRotateRequest`]). The route is idempotent: re-asserting a
+/// role's existing state succeeds without re-emitting a `SkillEvent`, so the dashboard's
+/// optimistic toggle never has to distinguish "already on" from "just turned on".
+#[derive(Debug, Clone, Deserialize)]
+pub struct SkillToggleRequest {
+    pub skill: String,
+    pub enabled: bool,
+}
+
+/// Response of `POST /api/roles/:role/skills`. Echoes the post-mutation state so the
+/// dashboard patches its store off the response body without a follow-up
+/// `GET /api/roles` round-trip.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillToggleResponse {
+    pub role: String,
+    pub skill: String,
+    pub enabled: bool,
+}
+
 /// Canonical wire payloads for `quota.login_*` SSE kinds (hq-fe-auth.3).
 ///
 /// Each struct is the **payload** carried inside the `EventRecord.payload` field;

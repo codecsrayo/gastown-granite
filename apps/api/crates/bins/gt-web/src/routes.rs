@@ -26,7 +26,7 @@ use crate::dto::{
     MayorStatusDto, MemberFailRequest, MergeSlotDto, NudgeRequest, NudgeResponse,
     QuotaAccountDto, QuotaRetireResponse, QuotaRotateRequest, QuotaRotationDto,
     QuotaRotationEntryDto, QuotaRotationQuery, QuotaWaitingUnlockDto, RoleSkillsDto, SessionDto,
-    SessionsQuery, SkillDto, WhoamiDto, WorktreeDto,
+    SessionsQuery, SkillDto, SkillToggleRequest, SkillToggleResponse, WhoamiDto, WorktreeDto,
 };
 use crate::state::AppState;
 use crate::stream::{sse_from_json_receiver, sse_from_receiver};
@@ -988,6 +988,74 @@ where
     };
     let rows = skills.skills().await;
     Ok(Json(rows.into_iter().map(SkillDto::from).collect()))
+}
+
+/// `POST /api/roles/:role/skills` — toggle a skill on or off for a role
+/// (hq-fe-skills.3). Body: `{skill, enabled}`. Dispatches
+/// [`gt_skills::EnableSkillForRole`] / [`gt_skills::DisableSkillForRole`] through the
+/// catalog actor. Role names are NOT pre-validated against an external roster — config-
+/// only roles defined in `gt-rbac` are valid targets (per the `.1` design note).
+///
+/// Idempotency: when the binding already matches the requested state the route returns
+/// `200` with the post-state echoed and dispatches nothing, so the dashboard's
+/// optimistic toggle can replay safely. Validation errors from the actor (unknown
+/// skill, invalid id/role characters) surface as `400 Bad Request` — the wire surface
+/// translates `gt_events::AppError::Validation` here instead of collapsing to `500`
+/// like the blanket [`From`] impl does for routes that don't care about the variant.
+pub async fn toggle_role_skill<R, SQ, M>(
+    State(state): State<AppState<R, SQ, M>>,
+    Path(role): Path<String>,
+    Json(req): Json<SkillToggleRequest>,
+) -> Result<Json<SkillToggleResponse>, AppError>
+where
+    R: BeadRepository + Send + Sync + 'static,
+    SQ: SessionQueries + Send + Sync + 'static,
+    M: MergeRepository + Send + Sync + 'static,
+{
+    if role.is_empty() {
+        return Err(AppError::bad_request("role is empty"));
+    }
+    if req.skill.is_empty() {
+        return Err(AppError::bad_request("skill is empty"));
+    }
+    let skills = state
+        .skills
+        .as_ref()
+        .ok_or_else(|| AppError::internal("skills actor not wired"))?;
+
+    let already_enabled = skills.skills_for_role(&role).await.contains(&req.skill);
+    if already_enabled == req.enabled {
+        return Ok(Json(SkillToggleResponse {
+            role,
+            skill: req.skill,
+            enabled: req.enabled,
+        }));
+    }
+
+    let now_secs = epoch_now();
+    let cmd = if req.enabled {
+        gt_skills::SkillCommand::Enable(gt_skills::EnableSkillForRole {
+            role: role.clone(),
+            skill: req.skill.clone(),
+            now_secs,
+        })
+    } else {
+        gt_skills::SkillCommand::Disable(gt_skills::DisableSkillForRole {
+            role: role.clone(),
+            skill: req.skill.clone(),
+            now_secs,
+        })
+    };
+    skills.exec(cmd).await.map_err(|e| match e {
+        gt_events::AppError::Validation(msg) => AppError::bad_request(msg),
+        gt_events::AppError::NotFound(msg) => AppError::not_found(msg),
+        other => AppError::internal(format!("{other}")),
+    })?;
+    Ok(Json(SkillToggleResponse {
+        role,
+        skill: req.skill,
+        enabled: req.enabled,
+    }))
 }
 
 /// `GET /api/roles` — per-role enabled-skill bindings (hq-fe-skills.2). The dashboard

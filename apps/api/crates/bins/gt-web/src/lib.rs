@@ -229,6 +229,14 @@ where
             "/api/roles",
             get(routes::list_roles::<R, SQ, M>).route_layer(req("skills.read")),
         )
+        // hq-fe-skills.3 — toggle a single skill on/off for a role. Sibling
+        // `skills.write` scope so a `skills.read` token can hydrate but never mutate.
+        // Idempotent: re-asserting the existing state returns 200 without dispatching
+        // an event, so the dashboard's optimistic toggle is safe to replay.
+        .route(
+            "/api/roles/:role/skills",
+            post(routes::toggle_role_skill::<R, SQ, M>).route_layer(req("skills.write")),
+        )
         // hq-fe-api-r.7 — derived snapshot of mayor attach state. Read-only over the
         // active-session registry; heartbeat freshness deferred (see dto).
         .route(
