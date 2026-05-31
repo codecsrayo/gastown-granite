@@ -42,3 +42,21 @@ export interface QuotaRotation {
   waiting_unlock: QuotaWaitingUnlock[];
   recent_rotations: QuotaRotationEntry[];
 }
+
+// Write-side wire shapes (hq-fe-api-w.10). Promotes `quota.rotate` / `quota.retire`
+// from MCP-only to the HTTP gateway. Mirrors `gt_web::dto`.
+
+/** Body of `POST /api/quota/accounts/:id/rotate`. Path `:id` is the source account;
+ *  `to_account` is the healthy target. `now_secs` is optional — when absent the
+ *  gateway stamps `SystemTime::now()` so curl smoke tests stay one-liners. */
+export interface QuotaRotateRequest {
+  to_account: string;
+  now_secs?: number;
+}
+
+/** Response of `POST /api/quota/accounts/:id/retire`. `removed: false` when the id
+ *  was already absent — the route is idempotent (200, never 404). */
+export interface QuotaRetireResponse {
+  account: string;
+  removed: boolean;
+}

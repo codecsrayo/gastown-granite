@@ -225,9 +225,10 @@ to the old API; pick the cleanest contract per feature.
 | `GET /api/sessions?rig=…` — filtro por rig (combinable con `?role=`) | **live** | hq-fe-api-r.6 |
 | `GET /api/mayor/status` — ATTACHED / DETACHED (heartbeat deferred) | **live** | hq-fe-api-r.7 |
 | `GET /api/whoami` — actor + mode + roles[] + scopes[] (roles/scopes pre-RBAC empty) | **live** | hq-fe-rbac.4 |
-| `GET /api/skills` — catálogo de skills | **gap (new domain)** | hq-fe-skills.2 |
-| `GET /api/roles` — catálogo + skills habilitadas por rol | **gap (new domain)** | hq-fe-skills.2 |
-| `GET /api/roles/:role/scope` — MCP allow/deny derivado de `mcp-scope.toml` | **gap** | hq-fe-skills.4 |
+| `GET /api/skills` — catálogo de skills | **done** (gt-web · scope `skills.read`) | hq-fe-skills.2 |
+| `GET /api/roles` — catálogo + skills habilitadas por rol | **done** (gt-web · scope `skills.read`) | hq-fe-skills.2 |
+| `GET /api/whoami` scopes incluye union dinámica de skill bindings | **done** (gt-web) | hq-fe-skills.4 |
+| `GET /api/roles/:role/scope` — MCP allow/deny derivado de `mcp-scope.toml` | **gap** | hq-fe-skills.4 follow-up |
 | `GET /api/patrols` — leases snapshot | **gap** | hq-fe-api-r.* (follow-up) |
 
 ### Write-side gaps
@@ -246,7 +247,8 @@ to the old API; pick the cleanest contract per feature.
 | `pause` · `resume` (convoy lifecycle) | **gap** (no domain ops) | hq-fe-api-w.9 follow-up |
 | `POST /api/quota/accounts/:n/rotate` · `retire` | **gap (HTTP)** (existe MCP) | hq-fe-api-w.10 |
 | `POST /api/beads/bulk` + rate-limit | **done** (gt-web) | hq-fe-api-w.11 |
-| `POST /api/roles/:role/skills` (toggle) | **gap (new domain)** | hq-fe-skills.3 |
+| `POST /api/roles/:role/skills` (toggle, idempotent) | **done** (gt-web · scope `skills.write`) | hq-fe-skills.3 |
+| Skill events fan-out to `/api/stream` (`skills.registered\|enabled_for_role\|...`) | **done** (gt-web) | hq-fe-skills.5 |
 
 ### Auth gaps
 
