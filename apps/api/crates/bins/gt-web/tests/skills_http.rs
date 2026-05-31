@@ -354,6 +354,80 @@ async fn toggle_route_enforces_skills_write_scope_in_jwt_mode() {
 }
 
 #[tokio::test]
+async fn skill_events_fan_out_to_events_broadcast() {
+    // hq-fe-skills.5 — replicate the main.rs wiring: actor relay → EventRecord →
+    // events broadcast. Subscribe before triggering so the assertion proves the
+    // broadcast sees the delta the dashboard's SSE listener will consume.
+    let beads = Arc::new(InMemoryBeads::default());
+    let sessions = Arc::new(InMemorySessions::new(vec![]));
+    let merges = Arc::new(InMemoryMergeRepo::default());
+    let _ = sessions; // satisfy the bound below in case unused
+    let log = std::env::temp_dir().join(format!("gt-web-skills5-{}.jsonl", ulid::Ulid::new()));
+    let root = gt_root::spawn(
+        beads.clone(),
+        merges.clone(),
+        Arc::new(gt_patrol::InMemoryPatrolRepo::default()),
+        Arc::new(gt_orchestration::InMemoryOrchRepo::default()),
+        NoopEffects,
+        gt_root::SystemClock,
+        log,
+        gt_root::RootConfig::default(),
+    );
+
+    let (tx, mut rx) =
+        tokio::sync::mpsc::channel::<gt_events::Envelope<gt_skills::SkillEvent>>(16);
+    let bcast = root.events_sender();
+    tokio::spawn(async move {
+        while let Some(env) = rx.recv().await {
+            if let Ok(rec) = gt_audit::EventRecord::from_envelope(&env) {
+                let _ = bcast.send(rec);
+            }
+        }
+    });
+    let handle = gt_skills::spawn(tx);
+
+    // Subscribe BEFORE driving the actor so the receiver does not miss the records.
+    let mut sub = root.events_sender().subscribe();
+
+    handle
+        .exec(SkillCommand::Register(RegisterSkill {
+            skill: "merge_admin".into(),
+            label: "Merge admin".into(),
+            description: "".into(),
+            default_scopes: vec!["merge.write".into()],
+            now_secs: 1,
+        }))
+        .await
+        .unwrap();
+    handle
+        .exec(SkillCommand::Enable(gt_skills::EnableSkillForRole {
+            role: "deacon".into(),
+            skill: "merge_admin".into(),
+            now_secs: 2,
+        }))
+        .await
+        .unwrap();
+
+    let mut got: Vec<String> = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(400);
+    while got.len() < 2 && tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(100), sub.recv()).await {
+            Ok(Ok(rec)) if rec.kind.starts_with("skills.") => got.push(rec.kind),
+            _ => continue,
+        }
+    }
+    assert_eq!(
+        got,
+        vec![
+            "skills.registered".to_string(),
+            "skills.enabled_for_role".to_string(),
+        ]
+    );
+
+    root.shutdown();
+}
+
+#[tokio::test]
 async fn enabled_skill_widens_scope_guard_dynamically() {
     // hq-fe-skills.4 — a token whose static `scopes` lack `merge.read` is rejected on
     // `/api/merges`; after enabling a skill on the token's role that contributes

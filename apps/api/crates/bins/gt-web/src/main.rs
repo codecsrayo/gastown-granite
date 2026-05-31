@@ -393,12 +393,31 @@ async fn serve<R, SQ, MR, PR, OR>(
         };
 
     // hq-fe-skills.2 — skills catalog actor. Always spawned so a future deploy that
-    // registers entries via `.3` does not require a rebuild to surface them; the
-    // GET routes still return `[]` until a register/enable event lands. The relay
-    // drains into a discard task here — `.4`/`.5` will replace it with a fan-out
-    // into the shared events broadcast so SSE subscribers see `skills.*` deltas.
-    let (skills_evt_tx, mut skills_evt_rx) = tokio::sync::mpsc::channel(32);
-    tokio::spawn(async move { while skills_evt_rx.recv().await.is_some() {} });
+    // registers entries via `.3` does not require a rebuild to surface them.
+    //
+    // hq-fe-skills.5 — the relay no longer discards: every `SkillEvent` envelope is
+    // converted to an `EventRecord` (kind `skills.registered`, `skills.enabled_for_role`,
+    // etc., from the existing `EventKind` impl on `SkillEvent`) and broadcast on the
+    // same channel `/api/stream` SSE subscribers watch. The dashboard catches the
+    // delta and reissues `GET /api/skills` + `/api/roles` to refresh the catalog.
+    // We don't persist into `events.jsonl` here — the reactor owns the writer; SSE
+    // delivery is enough for the reload signal contract, and a future bead can
+    // promote skills to first-class log entries when historical replay needs them.
+    let (skills_evt_tx, mut skills_evt_rx) =
+        tokio::sync::mpsc::channel::<gt_events::Envelope<gt_skills::SkillEvent>>(64);
+    let skills_bcast = root.events_sender();
+    tokio::spawn(async move {
+        while let Some(env) = skills_evt_rx.recv().await {
+            match gt_audit::EventRecord::from_envelope(&env) {
+                Ok(rec) => {
+                    let _ = skills_bcast.send(rec);
+                }
+                Err(e) => {
+                    eprintln!("[gt-web] skills event encode failed: {e}");
+                }
+            }
+        }
+    });
     let skills_handle = gt_skills::spawn(skills_evt_tx);
 
     let state = AppState {
