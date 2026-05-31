@@ -73,12 +73,16 @@ where
         .into_response()
 }
 
-/// Resize control frame body. Shape: `{"resize":{"cols":N,"rows":M}}`. Reserving text
-/// frames for control keeps the binary channel pure pane bytes so xterm.js can pipe them
-/// straight into its decoder without inspecting each frame.
+/// Resize / typed-chunk control frame body. Shape:
+/// `{"resize":{"cols":N,"rows":M}}` (hq-fe-term.2) or
+/// `{"chunk":{"kind":"warn","text":"..."}}` (hq-fe-term.3). Both fields are
+/// independent; a single frame may carry one or both. Future verbs land as
+/// additional `Option` fields without breaking older clients — `Message::Binary`
+/// frames remain the fast path for raw pane bytes.
 #[derive(Debug, Deserialize)]
 struct ControlFrame {
     resize: Option<ResizePayload>,
+    chunk: Option<crate::dto::TerminalChunk>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,6 +95,25 @@ fn parse_resize(text: &str) -> Option<(u16, u16)> {
     let frame: ControlFrame = serde_json::from_str(text).ok()?;
     let r = frame.resize?;
     Some((r.cols, r.rows))
+}
+
+/// Parse a typed [`crate::dto::TerminalChunk`] off a `Message::Text` frame
+/// (hq-fe-term.3). `None` when the text is malformed or carries no `chunk` field,
+/// so the caller can fall back to the existing resize-or-ignore path without
+/// committing to one frame verb per call.
+pub(crate) fn parse_chunk(text: &str) -> Option<crate::dto::TerminalChunk> {
+    let frame: ControlFrame = serde_json::from_str(text).ok()?;
+    frame.chunk
+}
+
+/// Encode a typed chunk for the WS text channel (hq-fe-term.3). Output is a
+/// JSON-encoded [`crate::dto::TerminalStreamFrame`] wrapping `chunk`, ready to
+/// drop into `Message::Text`. Returns `None` only on a serde failure, which is
+/// unreachable for the owned types — the optional return avoids a panic at the
+/// boundary if a future schema change introduces a non-encodable field.
+pub fn encode_chunk_frame(chunk: crate::dto::TerminalChunk) -> Option<String> {
+    let frame = crate::dto::TerminalStreamFrame { chunk: Some(chunk) };
+    serde_json::to_string(&frame).ok()
 }
 
 async fn run_attach(socket: WebSocket, attach: Arc<dyn Attach>, session_id: String) {
@@ -161,6 +184,16 @@ async fn run_attach(socket: WebSocket, attach: Arc<dyn Attach>, session_id: Stri
             Message::Text(t) => {
                 if let Some((cols, rows)) = parse_resize(&t) {
                     let _ = writer.resize(cols, rows);
+                } else if let Some(chunk) = parse_chunk(&t) {
+                    // hq-fe-term.3 — accept typed text input from the client. Only
+                    // `Raw` chunks are reflected to the pane as keystrokes; other
+                    // kinds are display-side hints (server has no classifier today
+                    // and must not invent shell semantics from them).
+                    if matches!(chunk.kind, crate::dto::TerminalChunkKind::Raw)
+                        && writer.write_keys(chunk.text.as_bytes()).is_err()
+                    {
+                        break;
+                    }
                 }
                 // Unknown text frames are ignored — leaves room for future control verbs
                 // without breaking older clients.
@@ -207,5 +240,40 @@ mod tests {
     fn parse_resize_requires_both_fields() {
         // serde rejects the partial payload — missing `rows` -> None.
         assert_eq!(parse_resize(r#"{"resize":{"cols":120}}"#), None);
+    }
+
+    #[test]
+    fn parse_chunk_extracts_kind_and_text() {
+        let parsed = parse_chunk(r#"{"chunk":{"kind":"warn","text":"low disk"}}"#).unwrap();
+        assert_eq!(parsed.kind, crate::dto::TerminalChunkKind::Warn);
+        assert_eq!(parsed.text, "low disk");
+    }
+
+    #[test]
+    fn parse_chunk_is_none_without_chunk_field() {
+        assert!(parse_chunk(r#"{"resize":{"cols":80,"rows":24}}"#).is_none());
+        assert!(parse_chunk(r#"{"hello":"world"}"#).is_none());
+        assert!(parse_chunk("not json").is_none());
+    }
+
+    #[test]
+    fn parse_chunk_rejects_unknown_kind() {
+        // Strict deserialization on the kind enum surfaces typos in the producer
+        // loudly instead of silently rendering as raw.
+        assert!(
+            parse_chunk(r#"{"chunk":{"kind":"chartreuse","text":"hi"}}"#).is_none()
+        );
+    }
+
+    #[test]
+    fn encode_chunk_frame_roundtrips_through_parse_chunk() {
+        let encoded = encode_chunk_frame(crate::dto::TerminalChunk {
+            kind: crate::dto::TerminalChunkKind::Highlight,
+            text: "FAIL: 3/100".into(),
+        })
+        .unwrap();
+        let back = parse_chunk(&encoded).unwrap();
+        assert_eq!(back.kind, crate::dto::TerminalChunkKind::Highlight);
+        assert_eq!(back.text, "FAIL: 3/100");
     }
 }

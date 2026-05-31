@@ -540,6 +540,51 @@ impl From<gt_skills::RoleBinding> for RoleSkillsDto {
     }
 }
 
+/// Kind tag for typed chunks on `GET /api/sessions/:id/term` (hq-fe-term.3). Raw bytes
+/// from the tmux pane continue to ride `Message::Binary` frames for the fast path; a
+/// producer that already knows the semantic meaning of an emit (a sidecar classifier,
+/// an agent-side annotator, a future PTY mux that tags compiler output) sends the
+/// chunk as a `Message::Text` JSON frame carrying [`TerminalChunk`] and the dashboard's
+/// xterm wrapper styles it accordingly. Unknown kinds deserialize-fail at the frontier
+/// so a typo in the producer surfaces loudly instead of silently rendering as raw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalChunkKind {
+    /// Passthrough — same rendering as a `Message::Binary` frame would yield.
+    Raw,
+    /// Source-code-like content (monospace, language-coloured).
+    Code,
+    /// Conversational / commentary text emitted by an agent.
+    Comment,
+    /// Operator-flagged span the dashboard should highlight (e.g. test failure summary).
+    Highlight,
+    /// Warning / advisory output (yellow / amber styling).
+    Warn,
+}
+
+/// One typed chunk on the WS terminal stream (hq-fe-term.3). Wire shape:
+/// `{"chunk":{"kind":"warn","text":"..."}}` as a `Message::Text` frame so it can
+/// coexist with the existing `{"resize":...}` control verbs without colliding on the
+/// envelope. `text` is the rendered string the dashboard pipes into the xterm
+/// instance (or a sidebar pane, depending on `kind`); no terminal escape sequences
+/// are stripped — the producer is responsible for the byte content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalChunk {
+    pub kind: TerminalChunkKind,
+    pub text: String,
+}
+
+/// Envelope shape accepted on the `GET /api/sessions/:id/term` text channel
+/// (hq-fe-term.3). Existing `{"resize":...}` frames keep flowing through
+/// [`crate::term::parse_resize`]; this is the symmetric carrier for typed chunks in
+/// either direction. Unknown fields are ignored so a future verb (e.g.
+/// `{"signal":...}`) extends the channel without breaking older peers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalStreamFrame {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk: Option<TerminalChunk>,
+}
+
 /// Body of `POST /api/roles/:role/skills` (hq-fe-skills.3). Single toggle: `enabled=true`
 /// dispatches [`gt_skills::EnableSkillForRole`], `false` dispatches
 /// `DisableSkillForRole`. `now_secs` is stamped server-side so curl smoke tests can omit
