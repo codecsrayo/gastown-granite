@@ -11,7 +11,10 @@
 //!   writeback.
 //! - `.2` — `POST /api/quota/accounts/:n/login` wiring on top of [`LoginDriver`].
 //! - `.3` — SSE `quota.login_*` kinds mapped from [`LoginEvent`].
-//! - `.4` — timeout / zombie cleanup / per-account lock.
+//! - `.4` — soft timeout (HTTP-side watchdog) + panic guard.
+//! - `.5` — URL-phase HARD-kill via [`pty::PtyKiller`] +
+//!   [`driver::LoginDriver::run_with_timeouts`] + zombie-reap on
+//!   [`pty::PortablePty`]'s `Drop`.
 //!
 //! The driver is split into three layers so the state machine + URL extraction can be
 //! tested without touching a real process:
@@ -28,7 +31,7 @@ pub mod events;
 pub mod pty;
 pub mod state;
 
-pub use driver::{LoginDriver, LoginHandle, LoginOutcome};
+pub use driver::{LoginDriver, LoginHandle, LoginOutcome, LoginTimeouts};
 pub use events::{LoginEvent, LoginFailure};
-pub use pty::{FakePty, PortablePty, Pty, PtyChild};
+pub use pty::{FakePty, PortablePty, Pty, PtyChild, PtyKiller};
 pub use state::{extract_url, LoginState};

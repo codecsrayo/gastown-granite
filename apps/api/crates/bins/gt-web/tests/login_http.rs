@@ -689,6 +689,13 @@ impl gt_login::PtyChild for PanickyChild {
         Ok(0)
     }
     fn kill(&mut self) {}
+    fn killer(&self) -> Box<dyn gt_login::PtyKiller> {
+        struct NoopKiller;
+        impl gt_login::PtyKiller for NoopKiller {
+            fn kill(&self) {}
+        }
+        Box::new(NoopKiller)
+    }
 }
 
 #[tokio::test]
