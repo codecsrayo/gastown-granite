@@ -32,6 +32,8 @@ members = [
     "crates/domain/platform/gt-notify",
     # hq-mc72.12.29 Paso 10 C11 — rig catalog as orchestrator state (filesystem bootstrap stays in deploy/).
     "crates/domain/platform/gt-rig",
+    # hq-fe-skills.1 — skills + role bindings (event-sourced); HTTP / scope resolver in .2/.3/.4.
+    "crates/domain/platform/gt-skills",
     # hq-fe-term.1 — terminal attach substrate (Attach port + tmux pipe-pane / pty / fake adapters).
     "crates/domain/platform/gt-terminal",
     # hq-92z9 Paso 9.D role crates — scaffolding pass; behavior fills in subsequent commits.

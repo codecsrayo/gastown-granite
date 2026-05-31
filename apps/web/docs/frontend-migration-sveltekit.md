@@ -64,7 +64,7 @@ Docs hermanos (lectura obligada antes de tocar nada):
 | **hq-fe-api-w** | Write-side commands (HTTP routes) | 11 | hq-fe-api-w.1 (bus) | DONE · 11/11 CLOSED |
 | **hq-fe-rbac** | RBAC · JWT · whoami · scopes | 5 | hq-fe-api-w.1 | DONE · 5/5 CLOSED |
 | **hq-fe-auth** | Account auth (Claude `/login` pty driver) | 5 | hq-fe-api-w (idem) | DONE · 4/5 closed (.0 spike deferido P2) |
-| **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | PLANEADO |
+| **hq-fe-skills** | Skills + Roles domain (nuevo) | 5 | hq-fe-rbac | EN PROGRESO · .1 CLOSED (1/5) |
 | **hq-fe-term** | Terminal bridge (xterm + tmux) | 4 | spike `.0` | spike DECIDIDO ([doc](spike-hq-fe-term-0-transport.md)) → WS en gt-web · `.1`/`.2` desbloqueados |
 | **hq-fe-build** | SvelteKit scaffold + tooling | 8 | — | EN PROGRESO · .1-.4 + .6 + .8 CLOSED (6/8) |
 | **hq-fe-view** | Vistas + componentes (UI) | 19 | hq-fe-build + hq-fe-api-r | EN PROGRESO · view.1-.7/.12/.13/.14-.19 CLOSED (15/19) |
@@ -205,7 +205,7 @@ Total ~90 beads. Tabla viva — actualiza al reclamar/cerrar.
 
 | Bead | Título | Pri | Estado | Agente | Notas |
 |---|---|---|---|---|---|
-| hq-fe-skills.1 | Domain crate `gt-skills` (catalog + role binding) | P2 | open | — | event-sourced; persistencia Dolt |
+| hq-fe-skills.1 | Domain crate `gt-skills` (catalog + role binding) | P2 | closed | claude-host | nueva crate en `domain/platform/`: `SkillCatalog` + `RoleBinding` + `SkillState` reducer; `SkillEvent {Registered, Retired, EnabledForRole, DisabledForRole}` con `EventKind` (`skills.*`); 4 commands sync (`RegisterSkill / RetireSkill / EnableSkillForRole / DisableSkillForRole`) + `SkillCommand` enum tagged `op`; `SkillsRepository` port + `InMemorySkills` adapter con cascada retire→bindings; `SkillHandle` actor (snapshot/skills/bindings/skills_for_role/validate/exec); `validate_skill_id` + `validate_role_name` ASCII alnum + `-` + `_`, máx 64 bytes; persistencia Dolt = port listo, adapter en .2/.3 cuando el shape de la columna se conoce; 17 tests verde (state replay determinista + retire cascade + actor round-trip + validador) |
 | hq-fe-skills.2 | `GET /api/skills` + `GET /api/roles` (+ skills habilitadas) | P2 | open | — | |
 | hq-fe-skills.3 | `POST /api/roles/:role/skills` toggle (validate+execute) | P2 | open | — | |
 | hq-fe-skills.4 | Map skills → MCP scope additions (config dinámica) | P2 | open | — | reload mcp-scope sin restart |

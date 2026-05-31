@@ -1,0 +1,17 @@
+[package]
+name = "gt-skills"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+# Skills + role-binding domain (`hq-fe-skills.1`). Same shape as gt-rig / gt-quota:
+# owned events + pure replay reducer + sync `Command` path. No HTTP, no scope
+# resolution — that's `.2`/`.3`/`.4`.
+[dependencies]
+gt-events = { path = "../../../kernel/gt-events" }
+tokio.workspace = true
+serde.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
