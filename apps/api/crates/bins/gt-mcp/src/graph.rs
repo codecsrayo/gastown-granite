@@ -235,6 +235,7 @@ mod tests {
             surface_json,
             depends_on_json,
             role_scope: role.map(|s| s.to_string()),
+            version: 0,
         }
     }
 

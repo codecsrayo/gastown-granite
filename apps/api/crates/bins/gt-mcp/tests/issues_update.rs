@@ -47,6 +47,7 @@ fn ok_payload() -> UpdateIssue {
         domain: None,
         surface: None,
         depends_on: None,
+        expected_version: None,
     }
 }
 

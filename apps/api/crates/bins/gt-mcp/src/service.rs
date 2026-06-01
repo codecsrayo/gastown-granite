@@ -605,6 +605,13 @@ pub struct UpdateIssue {
     /// `validate`, mirroring `issues.create`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depends_on: Option<Vec<String>>,
+    /// Optimistic-concurrency guard (hq-mcp-issues.8). Pass the `version` you
+    /// read from `gt://issue/{id}`; the write then applies only if the row is
+    /// still at that version, else it fails with a `version conflict` so you
+    /// re-read and retry instead of clobbering a concurrent edit. Omit for the
+    /// legacy unguarded last-write-wins behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<i64>,
 }
 
 impl UpdateIssue {
@@ -713,6 +720,7 @@ impl UpdateIssue {
             domain_json,
             surface_json,
             depends_on_json,
+            expected_version: self.expected_version,
         }
     }
 }
@@ -1449,7 +1457,7 @@ impl McpService {
 
     #[tool(
         name = "issues.update.validate",
-        description = "Check whether patching hq.issues fields (title/description/design/acceptance_criteria/notes/priority/issue_type/assignee/owner/external_ref/domain/surface/depends_on) would be accepted. domain/surface/depends_on overwrite the JSON-array columns. Empty patch rejected. No state change."
+        description = "Check whether patching hq.issues fields (title/description/design/acceptance_criteria/notes/priority/issue_type/assignee/owner/external_ref/domain/surface/depends_on) would be accepted. domain/surface/depends_on overwrite the JSON-array columns. Optional expected_version guards against concurrent clobber (optimistic concurrency). Empty patch rejected. No state change."
     )]
     async fn issues_update_validate(
         &self,
@@ -1460,7 +1468,7 @@ impl McpService {
 
     #[tool(
         name = "issues.update.execute",
-        description = "Patch editable hq.issues columns + atomic Dolt commit. Status transitions go through issues.transition.*."
+        description = "Patch editable hq.issues columns + atomic Dolt commit. Pass expected_version (from gt://issue/{id}) for optimistic concurrency — a stale write fails with 'version conflict' instead of clobbering. Status transitions go through issues.transition.*."
     )]
     async fn issues_update_execute(
         &self,

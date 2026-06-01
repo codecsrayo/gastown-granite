@@ -457,6 +457,69 @@ async fn close_stamps_attribution_and_rejects_double() {
 }
 
 #[tokio::test]
+async fn update_optimistic_concurrency_blocks_stale_writes() {
+    let Ok(base) = std::env::var("GT_DOLT_URL") else {
+        eprintln!("GT_DOLT_URL unset — skipping DoltIssues OCC contract");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    seed(&base).await.expect("seed");
+    let repo = DoltIssues::connect(&format!("{base}/{TEST_DB}")).expect("connect");
+
+    let id = format!("hq-occ-{}", ulid::Ulid::new());
+    repo.insert(&NewIssue {
+        id: id.clone(),
+        title: "occ".into(),
+        issue_type: "task".into(),
+        created_by: "test".into(),
+        ..Default::default()
+    })
+    .await
+    .expect("seed bead");
+
+    // Fresh row starts at version 0.
+    let v0 = repo.get_detail(&id).await.expect("d").expect("row").version;
+    assert_eq!(v0, 0);
+
+    // Guarded update at the read version succeeds and bumps the token.
+    repo.update(
+        &id,
+        &IssuePatch { title: Some("v1".into()), expected_version: Some(v0), ..Default::default() },
+    )
+    .await
+    .expect("guarded update at current version");
+    let v1 = repo.get_detail(&id).await.expect("d").expect("row").version;
+    assert_eq!(v1, v0 + 1, "version must advance");
+
+    // A second writer still holding v0 is now stale -> version conflict.
+    let err = repo
+        .update(
+            &id,
+            &IssuePatch { title: Some("stale".into()), expected_version: Some(v0), ..Default::default() },
+        )
+        .await
+        .expect_err("stale write must be rejected");
+    assert!(err.to_string().contains("version conflict"), "got `{err}`");
+    // The losing write did not land.
+    assert_eq!(repo.get_detail(&id).await.expect("d").expect("row").title, "v1");
+
+    // Re-reading the current version lets the retry succeed.
+    repo.update(
+        &id,
+        &IssuePatch { title: Some("v2".into()), expected_version: Some(v1), ..Default::default() },
+    )
+    .await
+    .expect("retry at current version");
+
+    // Unguarded update (no expected_version) still works and bumps version.
+    let before = repo.get_detail(&id).await.expect("d").expect("row").version;
+    repo.update(&id, &IssuePatch { notes: Some("unguarded".into()), ..Default::default() })
+        .await
+        .expect("unguarded update");
+    assert_eq!(repo.get_detail(&id).await.expect("d").expect("row").version, before + 1);
+}
+
+#[tokio::test]
 async fn claim_cas_is_exclusive_and_attributed() {
     let Ok(base) = std::env::var("GT_DOLT_URL") else {
         eprintln!("GT_DOLT_URL unset — skipping DoltIssues.claim contract");

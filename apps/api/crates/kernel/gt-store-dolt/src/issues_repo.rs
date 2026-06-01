@@ -103,6 +103,11 @@ pub struct IssueRow {
     /// role owns the bead. Stored as `VARCHAR(32)` so `bd` legacy callers can
     /// keep filtering with plain string equality.
     pub role_scope: Option<String>,
+    /// Optimistic-concurrency token (hq-mcp-issues.8). Monotonic per write;
+    /// pass the value you read as `expected_version` to `issues.update` to make
+    /// a stale edit fail instead of clobbering a concurrent one.
+    #[serde(default)]
+    pub version: i64,
 }
 
 fn default_json_array() -> String {
@@ -149,6 +154,9 @@ pub struct IssueDetail {
     #[serde(default = "default_json_array")]
     pub depends_on_json: String,
     pub role_scope: Option<String>,
+    /// Optimistic-concurrency token (hq-mcp-issues.8). See [`IssueRow::version`].
+    #[serde(default)]
+    pub version: i64,
 }
 
 /// Maps a patch string to a SQL value where an empty string means `NULL`.
@@ -204,6 +212,12 @@ pub struct IssuePatch {
     /// New `depends_on_json` — raw JSON array string of dependency bead ids.
     /// `None` leaves the column alone; `Some(_)` overwrites verbatim.
     pub depends_on_json: Option<String>,
+    /// Optimistic-concurrency guard (hq-mcp-issues.8). `None` = unguarded
+    /// last-write-wins (back-compat). `Some(v)` makes the UPDATE match only when
+    /// the row's current `version` equals `v`; a mismatch surfaces as
+    /// `AppError::Conflict` so a stale edit fails instead of clobbering. This is
+    /// a guard, NOT a column to set — [`IssuePatch::is_empty`] ignores it.
+    pub expected_version: Option<i64>,
 }
 
 impl IssuePatch {
@@ -321,6 +335,10 @@ impl DoltIssues {
             ("surface_json", "TEXT NOT NULL DEFAULT '[]'"),
             ("depends_on_json", "TEXT NOT NULL DEFAULT '[]'"),
             ("role_scope", "VARCHAR(32) NULL"),
+            // hq-mcp-issues.8 — optimistic-concurrency token. Bumped on every
+            // write path; `issues.update` can guard on it (expected_version) so
+            // a stale edit fails loud instead of clobbering a concurrent write.
+            ("version", "BIGINT NOT NULL DEFAULT 0"),
         ];
 
         let mut added_any = false;
@@ -627,9 +645,24 @@ impl DoltIssues {
         }
 
         set_parts.push("updated_at = NOW()");
+        // Always advance the optimistic-concurrency token so any reader that
+        // held the prior value detects the write (hq-mcp-issues.8).
+        set_parts.push("version = version + 1");
+        // Optional OCC guard: match only when the row's version is still what
+        // the caller read. `None` keeps the legacy unguarded last-write-wins.
+        let where_clause = if patch.expected_version.is_some() {
+            params_vec.push((
+                "expected_version".to_string(),
+                mysql_async::Value::from(patch.expected_version.unwrap()),
+            ));
+            "id = :id AND version = :expected_version"
+        } else {
+            "id = :id"
+        };
         let sql = format!(
-            "UPDATE issues SET {} WHERE id = :id",
+            "UPDATE issues SET {} WHERE {}",
             set_parts.join(", "),
+            where_clause,
         );
 
         let result = conn
@@ -641,7 +674,15 @@ impl DoltIssues {
         let _ = result.drop_result().await.map_err(map_err)?;
 
         if affected == 0 {
-            return Err(AppError::NotFound(format!("issue {id}")));
+            // Disambiguate missing row from a version conflict so a stale edit
+            // fails loud (Validation = "version conflict") instead of silently.
+            return match (patch.expected_version, self.current_version(id).await?) {
+                (_, None) => Err(AppError::NotFound(format!("issue {id}"))),
+                (Some(exp), Some(cur)) => Err(AppError::Validation(format!(
+                    "version conflict on {id}: expected {exp}, current {cur} — re-read and retry"
+                ))),
+                (None, Some(_)) => Err(AppError::NotFound(format!("issue {id}"))),
+            };
         }
 
         let commit_msg = format!("update {id}");
@@ -719,7 +760,8 @@ impl DoltIssues {
                  SET status = 'working',
                      owner = :owner,
                      assignee = :owner,
-                     updated_at = NOW()
+                     updated_at = NOW(),
+                     version = version + 1
                  WHERE id = :id
                    AND status = 'open'
                    AND (owner IS NULL OR owner = '')",
@@ -774,6 +816,21 @@ impl DoltIssues {
         let row: Option<String> = conn
             .exec_first(
                 "SELECT status FROM issues WHERE id = :id LIMIT 1",
+                mysql_async::params! { "id" => id },
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(row)
+    }
+
+    /// Read the current optimistic-concurrency token of `id` (hq-mcp-issues.8).
+    /// `None` when the row does not exist. Used by [`Self::update`] to tell a
+    /// version conflict from a missing row after a guarded UPDATE matches 0.
+    pub async fn current_version(&self, id: &str) -> Result<Option<i64>, AppError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        let row: Option<i64> = conn
+            .exec_first(
+                "SELECT version FROM issues WHERE id = :id LIMIT 1",
                 mysql_async::params! { "id" => id },
             )
             .await
@@ -836,7 +893,8 @@ impl DoltIssues {
             "UPDATE issues
              SET status = :target,
                  {closed_at_set}
-                 updated_at = NOW()
+                 updated_at = NOW(),
+                 version = version + 1
              WHERE id = :id AND {where_status}"
         );
 
@@ -889,7 +947,8 @@ impl DoltIssues {
                  SET status = 'closed',
                      closed_at = NOW(),
                      closed_by_session = :session,
-                     updated_at = NOW()
+                     updated_at = NOW(),
+                     version = version + 1
                  WHERE id = :id AND status IN ('open', 'working')",
                 mysql_async::params! {
                     "id" => id,
@@ -980,7 +1039,7 @@ impl DoltIssues {
                     DATE_FORMAT(updated_at, '%Y-%m-%dT%H:%i:%SZ') AS updated_at,
                     DATE_FORMAT(closed_at,  '%Y-%m-%dT%H:%i:%SZ') AS closed_at,
                     external_ref, spec_id,
-                    domain_json, surface_json, depends_on_json, role_scope
+                    domain_json, surface_json, depends_on_json, role_scope, version
              FROM issues
              {where_clause}
              ORDER BY updated_at DESC, id ASC
@@ -1014,7 +1073,7 @@ impl DoltIssues {
                     DATE_FORMAT(closed_at,  '%Y-%m-%dT%H:%i:%SZ') AS closed_at,
                     external_ref, spec_id,
                     description, design, acceptance_criteria, notes,
-                    domain_json, surface_json, depends_on_json, role_scope
+                    domain_json, surface_json, depends_on_json, role_scope, version
              FROM issues
              WHERE id = :id
              LIMIT 1";
@@ -1060,6 +1119,7 @@ fn row_to_detail(row: mysql_async::Row) -> Result<IssueDetail, AppError> {
         surface_json: take_string(&mut row, 17)?,
         depends_on_json: take_string(&mut row, 18)?,
         role_scope: take_opt(&mut row, 19),
+        version: row.take::<i64, _>(20).unwrap_or(0),
     })
 }
 
@@ -1097,5 +1157,6 @@ fn row_to_issue(row: mysql_async::Row) -> Result<IssueRow, AppError> {
         surface_json: take_string(&mut row, 13)?,
         depends_on_json: take_string(&mut row, 14)?,
         role_scope: take_opt(&mut row, 15),
+        version: row.take::<i64, _>(16).unwrap_or(0),
     })
 }
