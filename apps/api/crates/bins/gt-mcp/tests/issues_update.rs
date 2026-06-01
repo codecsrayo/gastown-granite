@@ -10,7 +10,7 @@ use std::sync::Arc;
 use gt_mcp::{
     audit::{AuditEvent, AuditSink, InMemoryAudit, Outcome},
     auth::Scope,
-    McpService, UpdateIssue,
+    ClaimIssue, McpService, UpdateIssue,
 };
 use tokio::sync::mpsc;
 
@@ -246,6 +246,63 @@ async fn execute_without_backend_surfaces_clear_error() {
     assert!(
         err.to_string().contains("issues backend not wired"),
         "got `{err}`",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claim_validate_accepts_well_formed_id() {
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    svc.run_claim_issue("issues.claim.validate", ClaimIssue { id: "hq-c-1".into() }, true)
+        .await
+        .expect("claim validate ok");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claim_validate_rejects_empty_id() {
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    let err = svc
+        .run_claim_issue("issues.claim.validate", ClaimIssue { id: String::new() }, true)
+        .await
+        .expect_err("empty id must be rejected");
+    assert!(err.to_string().contains("issue id is empty"), "got `{err}`");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claim_execute_without_backend_surfaces_clear_error() {
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    let err = svc
+        .run_claim_issue("issues.claim.execute", ClaimIssue { id: "hq-c-1".into() }, false)
+        .await
+        .expect_err("execute must fail without backend");
+    assert!(
+        err.to_string().contains("issues backend not wired"),
+        "got `{err}`",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claim_execute_rejected_by_narrow_scope() {
+    let audit = Arc::new(InMemoryAudit::new());
+    let scope = narrow_scope("read-only", &["issues.update.validate"]);
+    let svc = full_service(scope, audit.clone());
+    let err = svc
+        .run_claim_issue("issues.claim.execute", ClaimIssue { id: "hq-c-1".into() }, false)
+        .await
+        .expect_err("scope must reject claim");
+    assert!(
+        err.to_string().to_lowercase().contains("scope")
+            || err.to_string().to_lowercase().contains("not in scope"),
+        "got `{err}`",
+    );
+    assert!(
+        audit.snapshot().iter().any(|e| matches!(
+            e,
+            AuditEvent::Unauthorized { tool, .. } if tool == "issues.claim.execute"
+        )),
+        "unauthorized audit row missing",
     );
 }
 

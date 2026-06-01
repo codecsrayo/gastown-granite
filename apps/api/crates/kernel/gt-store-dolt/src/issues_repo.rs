@@ -109,6 +109,16 @@ fn default_json_array() -> String {
     "[]".to_string()
 }
 
+/// Result of [`DoltIssues::claim`]. `Won` means this caller now holds the bead
+/// (status moved to `working`, owner stamped); `Lost` carries the current
+/// `status` + `holder` so the loser can report who owns it and stand down.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "outcome")]
+pub enum ClaimOutcome {
+    Won,
+    Lost { status: String, holder: String },
+}
+
 /// Full single-issue row returned by [`DoltIssues::get_detail`]. Superset of
 /// [`IssueRow`] that also carries the heavy text bodies (`description`,
 /// `design`, `acceptance_criteria`, `notes`) the list snapshot omits to stay
@@ -688,6 +698,72 @@ impl DoltIssues {
         .await
         .map_err(map_err)?;
         Ok(())
+    }
+
+    /// Atomically claim an `open` bead for `owner` (hq-mcp-issues.7 — the
+    /// server-side CAS the concurrency protocol, docs/05 §1, calls for). A
+    /// single guarded UPDATE flips `status` open -> working AND stamps
+    /// `owner`/`assignee` in one statement, so two agents racing the same bead
+    /// cannot both win: the SQL `WHERE` is the compare-and-swap point.
+    ///
+    /// Guard: `status='open' AND (owner IS NULL OR owner='')`. The winner gets
+    /// [`ClaimOutcome::Won`]; a row already held returns [`ClaimOutcome::Lost`]
+    /// with the current holder + status so the caller can stand down against a
+    /// named owner. Re-claiming a row the same `owner` already holds
+    /// (`status='working'`) is idempotent success. Missing id -> `NotFound`.
+    pub async fn claim(&self, id: &str, owner: &str) -> Result<ClaimOutcome, AppError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        let result = conn
+            .exec_iter(
+                "UPDATE issues
+                 SET status = 'working',
+                     owner = :owner,
+                     assignee = :owner,
+                     updated_at = NOW()
+                 WHERE id = :id
+                   AND status = 'open'
+                   AND (owner IS NULL OR owner = '')",
+                mysql_async::params! {
+                    "id" => id,
+                    "owner" => owner,
+                },
+            )
+            .await
+            .map_err(map_err)?;
+        let affected = result.affected_rows();
+        let _ = result.drop_result().await.map_err(map_err)?;
+
+        if affected == 1 {
+            let commit_msg = format!("claim {id} by {owner}");
+            conn.exec_drop(
+                "CALL DOLT_COMMIT('-A', '-m', :msg)",
+                mysql_async::params! { "msg" => commit_msg },
+            )
+            .await
+            .map_err(map_err)?;
+            return Ok(ClaimOutcome::Won);
+        }
+
+        // CAS missed — disambiguate missing / already-mine / held-by-other.
+        let row: Option<(String, Option<String>)> = conn
+            .exec_first(
+                "SELECT status, owner FROM issues WHERE id = :id LIMIT 1",
+                mysql_async::params! { "id" => id },
+            )
+            .await
+            .map_err(map_err)?;
+        match row {
+            None => Err(AppError::NotFound(format!("issue {id}"))),
+            Some((status, owner_now)) => {
+                let holder = owner_now.unwrap_or_default();
+                if status == "working" && holder == owner {
+                    // Idempotent: this owner already holds it.
+                    Ok(ClaimOutcome::Won)
+                } else {
+                    Ok(ClaimOutcome::Lost { status, holder })
+                }
+            }
+        }
     }
 
     /// Read the current status of `id`. `None` when the row does not exist.

@@ -183,6 +183,19 @@ impl IssuesRead {
             None => Err(AppError::Other("issues backend not wired".into())),
         }
     }
+
+    /// Atomic server-side claim (hq-mcp-issues.7). Mirrors [`Self::insert`]'s
+    /// unwired-backend behavior.
+    pub async fn claim(
+        &self,
+        id: &str,
+        owner: &str,
+    ) -> Result<gt_store_dolt::ClaimOutcome, AppError> {
+        match &self.inner {
+            Some(d) => d.claim(id, owner).await,
+            None => Err(AppError::Other("issues backend not wired".into())),
+        }
+    }
 }
 
 /// Input for the `quota.register` tool (hq-mc72.10). Account registration is intentionally
@@ -774,6 +787,25 @@ impl CloseIssue {
             Some(s) => s,
             None => scope_actor,
         }
+    }
+}
+
+/// Input for the `issues.claim` tool (hq-mcp-issues.7 — server-side CAS claim,
+/// docs/05 §1). The owner is intentionally NOT a wire field: it is the
+/// authenticated MCP scope actor, server-injected like `workspace_id`, so a
+/// caller cannot claim a bead on someone else's behalf.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ClaimIssue {
+    /// Target bead id. Non-empty.
+    pub id: String,
+}
+
+impl ClaimIssue {
+    fn validate(&self) -> Result<(), AppError> {
+        if self.id.is_empty() {
+            return Err(AppError::Validation("issue id is empty".into()));
+        }
+        Ok(())
     }
 }
 
@@ -1575,6 +1607,88 @@ impl McpService {
         Parameters(args): Parameters<CloseIssue>,
     ) -> Result<CallToolResult, McpError> {
         self.run_close_issue("issues.close.execute", args, false).await
+    }
+
+    /// Scope check + (validate | atomic CAS claim) + audit for `issues.claim`
+    /// (hq-mcp-issues.7). The owner is the scope actor (server-injected). On a
+    /// won claim the result text is the JSON outcome; a lost claim surfaces as
+    /// an error naming the current holder so the caller stands down.
+    pub async fn run_claim_issue(
+        &self,
+        tool: &str,
+        args: ClaimIssue,
+        validate_only: bool,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(err) = self.inner.scope.check(tool) {
+            self.inner.audit.record(AuditEvent::Unauthorized {
+                actor: self.inner.scope.actor.clone(),
+                tool: tool.to_string(),
+                reason: err.to_string(),
+            });
+            return Err(McpError::invalid_request(err.to_string(), None));
+        }
+
+        let json = serde_json::to_value(&args).expect("ClaimIssue is Serialize");
+        let owner = self.inner.scope.actor.clone();
+        // `domain_result` carries the claim outcome on success so the audit row
+        // and the tool result both reflect won-vs-lost without a second read.
+        let domain_result: Result<gt_store_dolt::ClaimOutcome, AppError> = if validate_only {
+            args.validate().map(|()| gt_store_dolt::ClaimOutcome::Won)
+        } else {
+            match args.validate() {
+                Ok(()) => self.inner.issues.claim(&args.id, &owner).await,
+                Err(e) => Err(e),
+            }
+        };
+
+        let outcome = match &domain_result {
+            Ok(_) => Outcome::Ok,
+            Err(e) => Outcome::Failed { error: e.to_string() },
+        };
+        self.inner.audit.record(AuditEvent::Invoked {
+            actor: self.inner.scope.actor.clone(),
+            tool: tool.to_string(),
+            arguments: json,
+            outcome,
+        });
+
+        match domain_result {
+            Ok(gt_store_dolt::ClaimOutcome::Won) => {
+                let body = serde_json::json!({ "outcome": "won", "owner": owner });
+                Ok(CallToolResult::success(vec![Content::text(body.to_string())]))
+            }
+            Ok(gt_store_dolt::ClaimOutcome::Lost { status, holder }) => {
+                // A lost claim is a hard error so the caller cannot proceed as if
+                // it owns the bead — the message names the current holder.
+                Err(McpError::invalid_request(
+                    format!("already claimed: {} holds it (status={status})", holder),
+                    None,
+                ))
+            }
+            Err(err) => Err(McpError::internal_error(err.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "issues.claim.validate",
+        description = "Check whether an atomic claim would be accepted (shape only — id non-empty). No state change. The owner is the MCP scope actor, server-injected."
+    )]
+    async fn issues_claim_validate(
+        &self,
+        Parameters(args): Parameters<ClaimIssue>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_claim_issue("issues.claim.validate", args, true).await
+    }
+
+    #[tool(
+        name = "issues.claim.execute",
+        description = "Atomically claim an OPEN, unowned bead for the calling actor: single compare-and-swap that flips status open->working and stamps owner/assignee. Two agents racing the same bead cannot both win — the loser gets an error naming the holder. Re-claiming a bead you already hold is idempotent. Missing id returns NotFound."
+    )]
+    async fn issues_claim_execute(
+        &self,
+        Parameters(args): Parameters<ClaimIssue>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_claim_issue("issues.claim.execute", args, false).await
     }
 
     /// Patrol-domain shim around [`Self::run_command`] (hq-fe-api-w.1). The lease tracker

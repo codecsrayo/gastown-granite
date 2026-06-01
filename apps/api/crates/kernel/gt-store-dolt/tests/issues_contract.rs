@@ -8,7 +8,7 @@
 
 use mysql_async::prelude::Queryable;
 
-use gt_store_dolt::{DoltIssues, IssueFilter, IssuePatch, IssueStatus, NewIssue};
+use gt_store_dolt::{ClaimOutcome, DoltIssues, IssueFilter, IssuePatch, IssueStatus, NewIssue};
 
 const TEST_DB: &str = "gt_rs_issues_test";
 
@@ -454,4 +454,52 @@ async fn close_stamps_attribution_and_rejects_double() {
         err.to_string().to_lowercase().contains("not found"),
         "got `{err}`",
     );
+}
+
+#[tokio::test]
+async fn claim_cas_is_exclusive_and_attributed() {
+    let Ok(base) = std::env::var("GT_DOLT_URL") else {
+        eprintln!("GT_DOLT_URL unset — skipping DoltIssues.claim contract");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    seed(&base).await.expect("seed");
+    let repo = DoltIssues::connect(&format!("{base}/{TEST_DB}")).expect("connect");
+
+    let id = format!("hq-claim-{}", ulid::Ulid::new());
+    repo.insert(&NewIssue {
+        id: id.clone(),
+        title: "claimable".into(),
+        issue_type: "task".into(),
+        created_by: "test".into(),
+        ..Default::default()
+    })
+    .await
+    .expect("seed open bead");
+
+    // First claimer wins: status flips to working, owner stamped.
+    assert_eq!(repo.claim(&id, "agent-a").await.expect("claim a"), ClaimOutcome::Won);
+    let after = repo.get_detail(&id).await.expect("detail").expect("row");
+    assert_eq!(after.status, "working");
+    assert_eq!(after.owner.as_deref(), Some("agent-a"));
+    assert_eq!(after.assignee.as_deref(), Some("agent-a"));
+
+    // Second claimer loses with the holder named — the CAS is exclusive.
+    match repo.claim(&id, "agent-b").await.expect("claim b") {
+        ClaimOutcome::Lost { status, holder } => {
+            assert_eq!(status, "working");
+            assert_eq!(holder, "agent-a");
+        }
+        ClaimOutcome::Won => panic!("agent-b must not win a held bead"),
+    }
+
+    // Re-claim by the holder is idempotent success.
+    assert_eq!(repo.claim(&id, "agent-a").await.expect("reclaim a"), ClaimOutcome::Won);
+
+    // Missing id surfaces NotFound.
+    let err = repo
+        .claim("hq-no-claim", "agent-a")
+        .await
+        .expect_err("missing id must error");
+    assert!(err.to_string().to_lowercase().contains("not found"), "got `{err}`");
 }
