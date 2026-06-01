@@ -44,6 +44,9 @@ fn ok_payload() -> UpdateIssue {
         assignee: Some("alice".into()),
         owner: None,
         external_ref: None,
+        domain: None,
+        surface: None,
+        depends_on: None,
     }
 }
 
@@ -120,6 +123,74 @@ async fn validate_rejects_empty_title_string() {
         .await
         .expect_err("title='' must be rejected");
     assert!(err.to_string().contains("title is empty"), "got `{err}`");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_accepts_surface_only_overwrite() {
+    // The core repoint case: a patch that touches ONLY surface_json must count
+    // as non-empty and pass shape validation (regression for the gap where the
+    // JSON-array columns were unreachable from issues.update).
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    let mut p = ok_payload();
+    p.title = None;
+    p.priority = None;
+    p.assignee = None;
+    p.surface = Some(vec!["crates/domain/platform/gt-web-context/src/lib.rs".into()]);
+    svc.run_update_issue("issues.update.validate", p, true)
+        .await
+        .expect("surface-only patch is a valid non-empty update");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_accepts_domain_and_depends_on_overwrite() {
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    let mut p = ok_payload();
+    p.domain = Some(vec![gt_mcp::taxonomy::Domain::OrchMerge]);
+    p.depends_on = Some(vec!["hq-other-1".into(), "hq-other-2".into()]);
+    svc.run_update_issue("issues.update.validate", p, true)
+        .await
+        .expect("domain + depends_on overwrite accepted");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_rejects_empty_domain_overwrite() {
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    let mut bad = ok_payload();
+    bad.domain = Some(vec![]);
+    let err = svc
+        .run_update_issue("issues.update.validate", bad, true)
+        .await
+        .expect_err("empty domain overwrite must be rejected");
+    assert!(err.to_string().contains("at least one domain"), "got `{err}`");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_rejects_depends_on_self_cycle() {
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    let mut bad = ok_payload();
+    bad.depends_on = Some(vec![bad.id.clone()]);
+    let err = svc
+        .run_update_issue("issues.update.validate", bad, true)
+        .await
+        .expect_err("self-cycle must be rejected");
+    assert!(err.to_string().contains("self-cycle"), "got `{err}`");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_rejects_duplicate_depends_on() {
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    let mut bad = ok_payload();
+    bad.depends_on = Some(vec!["hq-dup-1".into(), "hq-dup-1".into()]);
+    let err = svc
+        .run_update_issue("issues.update.validate", bad, true)
+        .await
+        .expect_err("duplicate depends_on must be rejected");
+    assert!(err.to_string().contains("more than once"), "got `{err}`");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

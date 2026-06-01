@@ -561,6 +561,22 @@ pub struct UpdateIssue {
     /// New epic linkage. Empty string clears.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_ref: Option<String>,
+    /// New closed-set semantic domains (hq-taxon, doc 14 §3). `None` leaves the
+    /// column untouched; `Some(_)` overwrites. An empty vector is rejected —
+    /// every bead must declare at least one domain, mirroring `issues.create`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<Vec<crate::taxonomy::Domain>>,
+    /// New physical impact surface — crate names or repo paths (doc 14 §2).
+    /// `None` leaves the column untouched; `Some(_)` overwrites (empty allowed
+    /// for pure spec/process beads). This is the field that lets stale
+    /// `surface_json` paths be repointed after a crate moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<Vec<String>>,
+    /// New forward dependency edges. `None` leaves the column untouched;
+    /// `Some(_)` overwrites. Self-cycle and duplicate ids are rejected at
+    /// `validate`, mirroring `issues.create`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depends_on: Option<Vec<String>>,
 }
 
 impl UpdateIssue {
@@ -584,6 +600,33 @@ impl UpdateIssue {
                 )));
             }
         }
+        // hq-taxon.2 shape rules, mirrored from `issues.create`: an explicit
+        // domain overwrite must keep at least one domain, and a dependency
+        // overwrite may not introduce a self-cycle or duplicate edges. Cross-bead
+        // cycle detection needs a DB read and stays out of this shape-only path.
+        if let Some(domain) = &self.domain {
+            if domain.is_empty() {
+                return Err(AppError::Validation(
+                    "domain overwrite is empty; a bead must declare at least one domain (hq-taxon.2 — see apps/api/docs/14-bead-taxonomy.md §2)".into(),
+                ));
+            }
+        }
+        if let Some(depends_on) = &self.depends_on {
+            if depends_on.iter().any(|d| d == &self.id) {
+                return Err(AppError::Validation(format!(
+                    "depends_on contains the bead's own id ({}) — self-cycle",
+                    self.id
+                )));
+            }
+            let mut seen = std::collections::HashSet::new();
+            for dep in depends_on {
+                if !seen.insert(dep.as_str()) {
+                    return Err(AppError::Validation(format!(
+                        "depends_on lists `{dep}` more than once"
+                    )));
+                }
+            }
+        }
         let patch = self.to_patch();
         if patch.is_empty() {
             return Err(AppError::Validation(
@@ -594,6 +637,21 @@ impl UpdateIssue {
     }
 
     fn to_patch(&self) -> IssuePatch {
+        // Typed `Domain`/dependency vectors serialize to the same dotted/JSON
+        // wire form `issues.create` persists (taxonomy.rs serde renames), so the
+        // stored arrays round-trip cleanly back to the enums on the read side.
+        let domain_json = self
+            .domain
+            .as_ref()
+            .map(|d| serde_json::to_string(d).unwrap_or_else(|_| "[]".to_string()));
+        let surface_json = self
+            .surface
+            .as_ref()
+            .map(|s| serde_json::to_string(s).unwrap_or_else(|_| "[]".to_string()));
+        let depends_on_json = self
+            .depends_on
+            .as_ref()
+            .map(|d| serde_json::to_string(d).unwrap_or_else(|_| "[]".to_string()));
         IssuePatch {
             title: self.title.clone(),
             description: self.description.clone(),
@@ -605,6 +663,9 @@ impl UpdateIssue {
             assignee: self.assignee.clone(),
             owner: self.owner.clone(),
             external_ref: self.external_ref.clone(),
+            domain_json,
+            surface_json,
+            depends_on_json,
         }
     }
 }
@@ -1322,7 +1383,7 @@ impl McpService {
 
     #[tool(
         name = "issues.update.validate",
-        description = "Check whether patching hq.issues fields (title/description/design/acceptance_criteria/notes/priority/issue_type/assignee/owner/external_ref) would be accepted. Empty patch rejected. No state change."
+        description = "Check whether patching hq.issues fields (title/description/design/acceptance_criteria/notes/priority/issue_type/assignee/owner/external_ref/domain/surface/depends_on) would be accepted. domain/surface/depends_on overwrite the JSON-array columns. Empty patch rejected. No state change."
     )]
     async fn issues_update_validate(
         &self,

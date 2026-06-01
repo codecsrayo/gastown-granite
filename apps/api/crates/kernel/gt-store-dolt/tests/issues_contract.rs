@@ -226,6 +226,9 @@ async fn update_patches_visible_fields_and_commits() {
         priority: Some(0),
         assignee: Some("alice".into()),
         notes: Some("patched".into()),
+        domain_json: Some("[\"orch.merge\"]".into()),
+        surface_json: Some("[\"crates/domain/platform/gt-web-context\"]".into()),
+        depends_on_json: Some("[\"hq-dep-1\"]".into()),
         ..Default::default()
     };
     repo.update(&id, &patch).await.expect("update");
@@ -244,6 +247,10 @@ async fn update_patches_visible_fields_and_commits() {
     assert_eq!(row_after.title, "after");
     assert_eq!(row_after.priority, 0);
     assert_eq!(row_after.assignee.as_deref(), Some("alice"));
+    // JSON-array columns are patchable through issues.update now.
+    assert_eq!(row_after.domain_json, "[\"orch.merge\"]");
+    assert_eq!(row_after.surface_json, "[\"crates/domain/platform/gt-web-context\"]");
+    assert_eq!(row_after.depends_on_json, "[\"hq-dep-1\"]");
 
     // Unknown id surfaces a NotFound — the row never existed.
     let err = repo
@@ -328,7 +335,7 @@ async fn close_stamps_attribution_and_rejects_double() {
     let base = base.trim_end_matches('/').to_string();
     seed(&base).await.expect("seed");
 
-    use mysql_async::prelude::Queryable;
+    use mysql_async::prelude::*;
     let repo = DoltIssues::connect(&format!("{base}/{TEST_DB}")).expect("connect");
 
     let id = format!("hq-close-{}", ulid::Ulid::new());

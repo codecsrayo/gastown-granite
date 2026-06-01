@@ -139,6 +139,16 @@ pub struct IssuePatch {
     /// New epic linkage. `Some(String::new())` clears to empty string (schema
     /// is nullable, so the frontier can map to `NULL` if desired).
     pub external_ref: Option<String>,
+    /// New `domain_json` — raw JSON array string (e.g. `["orch.merge"]`).
+    /// `None` leaves the column alone; `Some(_)` overwrites verbatim. The
+    /// frontier serializes typed `Vec<Domain>` so the stored form round-trips.
+    pub domain_json: Option<String>,
+    /// New `surface_json` — raw JSON array string of crate names / repo paths.
+    /// `None` leaves the column alone; `Some(_)` overwrites verbatim.
+    pub surface_json: Option<String>,
+    /// New `depends_on_json` — raw JSON array string of dependency bead ids.
+    /// `None` leaves the column alone; `Some(_)` overwrites verbatim.
+    pub depends_on_json: Option<String>,
 }
 
 impl IssuePatch {
@@ -156,6 +166,9 @@ impl IssuePatch {
             && self.assignee.is_none()
             && self.owner.is_none()
             && self.external_ref.is_none()
+            && self.domain_json.is_none()
+            && self.surface_json.is_none()
+            && self.depends_on_json.is_none()
     }
 }
 
@@ -490,6 +503,21 @@ impl DoltIssues {
             set_parts.push("external_ref = :external_ref");
             params_vec.push((
                 "external_ref".to_string(),
+                mysql_async::Value::from(v.clone()),
+            ));
+        }
+        if let Some(v) = &patch.domain_json {
+            set_parts.push("domain_json = :domain_json");
+            params_vec.push(("domain_json".to_string(), mysql_async::Value::from(v.clone())));
+        }
+        if let Some(v) = &patch.surface_json {
+            set_parts.push("surface_json = :surface_json");
+            params_vec.push(("surface_json".to_string(), mysql_async::Value::from(v.clone())));
+        }
+        if let Some(v) = &patch.depends_on_json {
+            set_parts.push("depends_on_json = :depends_on_json");
+            params_vec.push((
+                "depends_on_json".to_string(),
                 mysql_async::Value::from(v.clone()),
             ));
         }
