@@ -109,6 +109,38 @@ fn default_json_array() -> String {
     "[]".to_string()
 }
 
+/// Full single-issue row returned by [`DoltIssues::get_detail`]. Superset of
+/// [`IssueRow`] that also carries the heavy text bodies (`description`,
+/// `design`, `acceptance_criteria`, `notes`) the list snapshot omits to stay
+/// cheap. This is the read path an agent uses after claiming a bead so it can
+/// see the actual spec instead of inventing it from the title.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IssueDetail {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub priority: i32,
+    pub issue_type: String,
+    pub assignee: Option<String>,
+    pub owner: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub closed_at: Option<String>,
+    pub external_ref: Option<String>,
+    pub spec_id: Option<String>,
+    pub description: String,
+    pub design: String,
+    pub acceptance_criteria: String,
+    pub notes: String,
+    #[serde(default = "default_json_array")]
+    pub domain_json: String,
+    #[serde(default = "default_json_array")]
+    pub surface_json: String,
+    #[serde(default = "default_json_array")]
+    pub depends_on_json: String,
+    pub role_scope: Option<String>,
+}
+
 /// Maps a patch string to a SQL value where an empty string means `NULL`.
 /// Used by [`DoltIssues::update`] for the nullable "clear-able" columns
 /// (`assignee`/`owner`/`external_ref`) so passing `""` detaches the value
@@ -468,6 +500,53 @@ impl DoltIssues {
     /// which is wasted churn; the frontier validates before delegating.
     pub async fn update(&self, id: &str, patch: &IssuePatch) -> Result<(), AppError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+
+        // Advisory cross-bead cycle guard: when the patch overwrites
+        // `depends_on`, refuse an edge set that would make `id` reachable from
+        // one of its own (transitive) dependencies. Best-effort only — it reads
+        // the current edges and is not atomic with the write below (a concurrent
+        // edit could still introduce a cycle), but it catches the common case of
+        // a single agent wiring a back-edge by hand. Self-edges are rejected too.
+        if let Some(deps_json) = &patch.depends_on_json {
+            let new_deps: Vec<String> = serde_json::from_str(deps_json)
+                .map_err(|e| AppError::Validation(format!("depends_on is not a JSON array: {e}")))?;
+            if new_deps.iter().any(|d| d == id) {
+                return Err(AppError::Validation(format!(
+                    "depends_on contains the bead's own id ({id}) — self-cycle"
+                )));
+            }
+            // Load the full edge set once, then override this bead's deps with the
+            // proposed set and walk forward from each new dep looking for `id`.
+            let edge_rows: Vec<(String, String)> = conn
+                .exec(
+                    "SELECT id, depends_on_json FROM issues",
+                    mysql_async::Params::Empty,
+                )
+                .await
+                .map_err(map_err)?;
+            let mut adj: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+            for (rid, dj) in edge_rows {
+                let v: Vec<String> = serde_json::from_str(&dj).unwrap_or_default();
+                adj.insert(rid, v);
+            }
+            adj.insert(id.to_string(), new_deps.clone());
+            // BFS from each proposed dependency; reaching `id` means id -> dep ->* id.
+            let mut stack: Vec<String> = new_deps.clone();
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            while let Some(node) = stack.pop() {
+                if node == id {
+                    return Err(AppError::Validation(format!(
+                        "depends_on would create a cycle: {id} is reachable from its own dependency `{node}`"
+                    )));
+                }
+                if !seen.insert(node.clone()) {
+                    continue;
+                }
+                if let Some(next) = adj.get(&node) {
+                    stack.extend(next.iter().cloned());
+                }
+            }
+        }
 
         let mut set_parts: Vec<&str> = Vec::new();
         let mut params_vec: Vec<(String, mysql_async::Value)> =
@@ -845,6 +924,67 @@ impl DoltIssues {
 
         rows.into_iter().map(row_to_issue).collect()
     }
+
+    /// Fetch one issue by id WITH the heavy text bodies (hq-mcp-issues.6 — the
+    /// `issues.get` read the original `IssueRow` doc comment anticipated but the
+    /// epic never shipped). Returns `None` when no row matches. This is the
+    /// read path that lets an agent see `description`/`design`/
+    /// `acceptance_criteria`/`notes` after claiming a bead.
+    pub async fn get_detail(&self, id: &str) -> Result<Option<IssueDetail>, AppError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        let sql = "SELECT id, title, status, priority, issue_type, assignee, owner,
+                    DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%SZ') AS created_at,
+                    DATE_FORMAT(updated_at, '%Y-%m-%dT%H:%i:%SZ') AS updated_at,
+                    DATE_FORMAT(closed_at,  '%Y-%m-%dT%H:%i:%SZ') AS closed_at,
+                    external_ref, spec_id,
+                    description, design, acceptance_criteria, notes,
+                    domain_json, surface_json, depends_on_json, role_scope
+             FROM issues
+             WHERE id = :id
+             LIMIT 1";
+        let rows: Vec<mysql_async::Row> = conn
+            .exec(sql, mysql_async::params! { "id" => id })
+            .await
+            .map_err(map_err)?;
+        rows.into_iter().next().map(row_to_detail).transpose()
+    }
+}
+
+fn row_to_detail(row: mysql_async::Row) -> Result<IssueDetail, AppError> {
+    let mut row = row;
+    let take_string = |row: &mut mysql_async::Row, i: usize| -> Result<String, AppError> {
+        row.take::<String, _>(i)
+            .ok_or_else(|| AppError::Other(format!("issues row missing column {i}")))
+    };
+    let take_i32 = |row: &mut mysql_async::Row, i: usize| -> Result<i32, AppError> {
+        row.take::<i32, _>(i)
+            .ok_or_else(|| AppError::Other(format!("issues row missing column {i}")))
+    };
+    let take_opt =
+        |row: &mut mysql_async::Row, i: usize| -> Option<String> { row.take::<Option<String>, _>(i).unwrap_or(None) };
+
+    Ok(IssueDetail {
+        id: take_string(&mut row, 0)?,
+        title: take_string(&mut row, 1)?,
+        status: take_string(&mut row, 2)?,
+        priority: take_i32(&mut row, 3)?,
+        issue_type: take_string(&mut row, 4)?,
+        assignee: take_opt(&mut row, 5),
+        owner: take_opt(&mut row, 6),
+        created_at: take_opt(&mut row, 7),
+        updated_at: take_opt(&mut row, 8),
+        closed_at: take_opt(&mut row, 9),
+        external_ref: take_opt(&mut row, 10),
+        spec_id: take_opt(&mut row, 11),
+        description: take_opt(&mut row, 12).unwrap_or_default(),
+        design: take_opt(&mut row, 13).unwrap_or_default(),
+        acceptance_criteria: take_opt(&mut row, 14).unwrap_or_default(),
+        notes: take_opt(&mut row, 15).unwrap_or_default(),
+        domain_json: take_string(&mut row, 16)?,
+        surface_json: take_string(&mut row, 17)?,
+        depends_on_json: take_string(&mut row, 18)?,
+        role_scope: take_opt(&mut row, 19),
+    })
 }
 
 fn row_to_issue(row: mysql_async::Row) -> Result<IssueRow, AppError> {

@@ -268,6 +268,54 @@ async fn update_patches_visible_fields_and_commits() {
     let cleared = rows.iter().find(|r| r.id == id).expect("row present");
     assert_eq!(cleared.assignee, None, "empty-string clear must store NULL");
 
+    // get_detail returns the heavy text bodies the snapshot omits.
+    let detail = repo
+        .get_detail(&id)
+        .await
+        .expect("get_detail ok")
+        .expect("row present");
+    assert_eq!(detail.id, id);
+    assert_eq!(detail.title, "after");
+    assert_eq!(detail.description, "before-desc");
+    assert_eq!(detail.notes, "patched");
+    assert_eq!(detail.surface_json, "[\"crates/domain/platform/gt-web-context\"]");
+    assert!(
+        repo.get_detail("hq-missing-zzz").await.expect("ok").is_none(),
+        "missing id must be None",
+    );
+
+    // Cross-bead cycle guard: self-edge and a 2-node back-edge are both rejected.
+    let self_cycle = IssuePatch {
+        depends_on_json: Some(format!("[\"{id}\"]")),
+        ..Default::default()
+    };
+    let err = repo
+        .update(&id, &self_cycle)
+        .await
+        .expect_err("self-cycle must be rejected");
+    assert!(err.to_string().contains("self-cycle"), "got `{err}`");
+
+    let other = format!("hq-cyc-{}", ulid::Ulid::new());
+    repo.insert(&NewIssue {
+        id: other.clone(),
+        title: "dependent".into(),
+        issue_type: "task".into(),
+        created_by: "test".into(),
+        depends_on_json: format!("[\"{id}\"]"),
+        ..Default::default()
+    })
+    .await
+    .expect("seed dependent");
+    let back_edge = IssuePatch {
+        depends_on_json: Some(format!("[\"{other}\"]")),
+        ..Default::default()
+    };
+    let err = repo
+        .update(&id, &back_edge)
+        .await
+        .expect_err("2-node cycle must be rejected");
+    assert!(err.to_string().contains("cycle"), "got `{err}`");
+
     // Unknown id surfaces a NotFound — the row never existed.
     let err = repo
         .update("hq-missing-zzz", &patch)

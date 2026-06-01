@@ -56,6 +56,10 @@ async fn resource_catalog_lists_every_domain_snapshot() {
             // with the `IssuesRead::none` default, so the resource returns an
             // empty array — still readable, which the loop below asserts.
             "gt://issues",
+            // hq-mcp-issues.6: single-bead detail WITH text bodies. Template URI;
+            // unwired backend yields NotFound for any concrete id, which the
+            // readability loop tolerates below (the scheme still routes).
+            "gt://issue/{id}",
             // hq-taxon.4: dependency-graph projections. The catalog entries are
             // RFC 6570-flavoured templates; the readability loop substitutes a
             // concrete key below before reading. Unwired backend returns an empty
@@ -78,12 +82,20 @@ async fn resource_catalog_lists_every_domain_snapshot() {
                 .replace("{r}", "sheriff")
                 .replace("{bead}", "hq-probe")
                 .replace("{crate}", "gt-mcp")
+                .replace("{id}", "hq-probe")
         } else {
             (*uri).clone()
         };
-        svc.read_resource_json(&concrete)
-            .await
-            .unwrap_or_else(|e| panic!("read {concrete}: {e}"));
+        // `gt://issue/{id}` routes to a per-row lookup; on the unwired backend
+        // any concrete id is genuinely absent, so a NotFound here means the
+        // scheme routed correctly. Every other resource must read cleanly.
+        match svc.read_resource_json(&concrete).await {
+            Ok(_) => {}
+            Err(e) if concrete.starts_with("gt://issue/") => {
+                assert!(e.to_string().to_lowercase().contains("not found"), "read {concrete}: {e}");
+            }
+            Err(e) => panic!("read {concrete}: {e}"),
+        }
     }
 }
 

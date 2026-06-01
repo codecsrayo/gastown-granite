@@ -115,6 +115,21 @@ impl IssuesRead {
         }
     }
 
+    /// Single-bead detail WITH the heavy text bodies (description/design/
+    /// acceptance_criteria/notes) the snapshot omits. Backs the `gt://issue/{id}`
+    /// resource so an agent reads the real spec after claiming, instead of
+    /// inventing it from the title. `Ok(None)` on a missing id; empty JSON when
+    /// the backend is unwired (matches the snapshot fallback).
+    pub async fn get_detail(
+        &self,
+        id: &str,
+    ) -> Result<Option<gt_store_dolt::IssueDetail>, AppError> {
+        match &self.inner {
+            Some(d) => d.get_detail(id).await,
+            None => Ok(None),
+        }
+    }
+
     /// Full table snapshot for the `gt://graph/*` resources (hq-taxon.4).
     /// Returns an empty vec when the backend is unwired so the graph builders
     /// still produce a valid empty payload instead of erroring at the edge.
@@ -623,6 +638,25 @@ impl UpdateIssue {
                 if !seen.insert(dep.as_str()) {
                     return Err(AppError::Validation(format!(
                         "depends_on lists `{dep}` more than once"
+                    )));
+                }
+            }
+        }
+        // Light surface hygiene: no empty entries (a `""` surface is a hotspot
+        // blind spot the graph cannot key on) and no duplicates. Path/crate
+        // existence is deliberately NOT checked here — the MCP server does not
+        // own the repo tree and the table tracks beads for multiple layouts.
+        if let Some(surface) = &self.surface {
+            let mut seen = std::collections::HashSet::new();
+            for s in surface {
+                if s.trim().is_empty() {
+                    return Err(AppError::Validation(
+                        "surface contains an empty entry".into(),
+                    ));
+                }
+                if !seen.insert(s.as_str()) {
+                    return Err(AppError::Validation(format!(
+                        "surface lists `{s}` more than once"
                     )));
                 }
             }
@@ -2289,7 +2323,12 @@ impl McpService {
             mk(
                 "gt://issues",
                 "issues",
-                "Canonical issues snapshot from Dolt. Filters via querystring: status=open[,working], priority_max=2, assignee=X, external_ref=Y, issue_type=epic, limit=N.",
+                "Canonical issues snapshot from Dolt. Filters via querystring: status=open[,working], priority_max=2, assignee=X, external_ref=Y, issue_type=epic, limit=N. Snapshot omits the text bodies — use gt://issue/{id} for those.",
+            ),
+            mk(
+                "gt://issue/{id}",
+                "issue.detail",
+                "Single bead WITH full text bodies (description/design/acceptance_criteria/notes) + taxonomy columns. Read this after claiming a bead to see the actual spec instead of inventing it from the title.",
             ),
             // hq-taxon.4 — dependency graph projections over the taxonomy
             // columns introduced in hq-taxon.{1,3}. URI segment after the
@@ -2339,6 +2378,22 @@ impl McpService {
         if let Some(qs) = issues_match {
             let filter = parse_issue_filter(qs)?;
             return self.inner.issues.snapshot(&filter).await;
+        }
+        // `gt://issue/{id}` — single bead WITH text bodies. The trailing slash
+        // disambiguates from `gt://issues` (which never has one). One path
+        // segment only; a missing row is `NotFound` so the caller can tell an
+        // empty bead from a typo'd id.
+        if let Some(id) = uri.strip_prefix("gt://issue/") {
+            if id.is_empty() || id.contains('/') {
+                return Err(AppError::Validation(
+                    "gt://issue/<id> expects a single non-empty path segment".into(),
+                ));
+            }
+            return match self.inner.issues.get_detail(id).await? {
+                Some(detail) => serde_json::to_value(&detail)
+                    .map_err(|e| AppError::Other(format!("encode issue: {e}"))),
+                None => Err(AppError::NotFound(format!("issue {id}"))),
+            };
         }
         // hq-taxon.4 — graph projections. The URI segment after the kind is
         // a path component (single-segment by spec; trailing `/` or extra

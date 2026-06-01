@@ -210,6 +210,32 @@ async fn validate_accepts_empty_string_clear_of_assignee() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_rejects_empty_surface_entry() {
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    let mut bad = ok_payload();
+    bad.surface = Some(vec!["crates/ok".into(), "  ".into()]);
+    let err = svc
+        .run_update_issue("issues.update.validate", bad, true)
+        .await
+        .expect_err("empty surface entry must be rejected");
+    assert!(err.to_string().contains("empty entry"), "got `{err}`");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_rejects_duplicate_surface() {
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    let mut bad = ok_payload();
+    bad.surface = Some(vec!["crates/dup".into(), "crates/dup".into()]);
+    let err = svc
+        .run_update_issue("issues.update.validate", bad, true)
+        .await
+        .expect_err("duplicate surface must be rejected");
+    assert!(err.to_string().contains("more than once"), "got `{err}`");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn execute_without_backend_surfaces_clear_error() {
     let audit = Arc::new(InMemoryAudit::new());
     let svc = full_service(Scope::admin("max"), audit.clone());
