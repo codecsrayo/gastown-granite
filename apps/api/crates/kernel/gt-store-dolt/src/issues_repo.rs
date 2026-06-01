@@ -109,6 +109,19 @@ fn default_json_array() -> String {
     "[]".to_string()
 }
 
+/// Maps a patch string to a SQL value where an empty string means `NULL`.
+/// Used by [`DoltIssues::update`] for the nullable "clear-able" columns
+/// (`assignee`/`owner`/`external_ref`) so passing `""` detaches the value
+/// rather than storing a literal empty string the read side cannot distinguish
+/// from "unassigned".
+fn str_or_null(v: &str) -> mysql_async::Value {
+    if v.is_empty() {
+        mysql_async::Value::NULL
+    } else {
+        mysql_async::Value::from(v.to_string())
+    }
+}
+
 /// Patch payload for [`DoltIssues::update`] (hq-mcp-issues.3). Every field is
 /// `Option<T>`: `None` leaves the column untouched, `Some(_)` overwrites it.
 /// Status changes belong to [`DoltIssues::transition`] (hq-mcp-issues.4) so they
@@ -491,20 +504,22 @@ impl DoltIssues {
             set_parts.push("issue_type = :issue_type");
             params_vec.push(("issue_type".to_string(), mysql_async::Value::from(v.clone())));
         }
+        // `assignee`/`owner`/`external_ref` carry "clear" semantics: an empty
+        // string overwrites the column with SQL `NULL` (canonical "unassigned"
+        // / "no epic"), so the read side's `take_opt` round-trips back to `None`.
+        // A non-empty string is stored verbatim. This is the only way to detach
+        // an owner/assignee — there is no separate "unset" wire field.
         if let Some(v) = &patch.assignee {
             set_parts.push("assignee = :assignee");
-            params_vec.push(("assignee".to_string(), mysql_async::Value::from(v.clone())));
+            params_vec.push(("assignee".to_string(), str_or_null(v)));
         }
         if let Some(v) = &patch.owner {
             set_parts.push("owner = :owner");
-            params_vec.push(("owner".to_string(), mysql_async::Value::from(v.clone())));
+            params_vec.push(("owner".to_string(), str_or_null(v)));
         }
         if let Some(v) = &patch.external_ref {
             set_parts.push("external_ref = :external_ref");
-            params_vec.push((
-                "external_ref".to_string(),
-                mysql_async::Value::from(v.clone()),
-            ));
+            params_vec.push(("external_ref".to_string(), str_or_null(v)));
         }
         if let Some(v) = &patch.domain_json {
             set_parts.push("domain_json = :domain_json");

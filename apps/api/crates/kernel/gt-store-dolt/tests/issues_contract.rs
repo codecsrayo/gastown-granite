@@ -252,6 +252,22 @@ async fn update_patches_visible_fields_and_commits() {
     assert_eq!(row_after.surface_json, "[\"crates/domain/platform/gt-web-context\"]");
     assert_eq!(row_after.depends_on_json, "[\"hq-dep-1\"]");
 
+    // Empty-string overwrite clears the nullable columns back to NULL/None.
+    let clear = IssuePatch {
+        assignee: Some(String::new()),
+        ..Default::default()
+    };
+    repo.update(&id, &clear).await.expect("clear assignee");
+    let rows = repo
+        .list(&IssueFilter {
+            issue_type: Some("task".into()),
+            ..Default::default()
+        })
+        .await
+        .expect("list after clear");
+    let cleared = rows.iter().find(|r| r.id == id).expect("row present");
+    assert_eq!(cleared.assignee, None, "empty-string clear must store NULL");
+
     // Unknown id surfaces a NotFound — the row never existed.
     let err = repo
         .update("hq-missing-zzz", &patch)

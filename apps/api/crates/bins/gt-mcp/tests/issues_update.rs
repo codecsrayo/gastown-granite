@@ -194,6 +194,22 @@ async fn validate_rejects_duplicate_depends_on() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_accepts_empty_string_clear_of_assignee() {
+    // Clearing assignee/owner is expressed as an empty-string overwrite, which
+    // must count as a non-empty patch (the repo maps "" -> SQL NULL). Regression
+    // for the gap where there was no way to detach an owner/assignee.
+    let audit = Arc::new(InMemoryAudit::new());
+    let svc = full_service(Scope::admin("max"), audit.clone());
+    let mut p = ok_payload();
+    p.title = None;
+    p.priority = None;
+    p.assignee = Some(String::new());
+    svc.run_update_issue("issues.update.validate", p, true)
+        .await
+        .expect("empty-string assignee clear is a valid non-empty patch");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn execute_without_backend_surfaces_clear_error() {
     let audit = Arc::new(InMemoryAudit::new());
     let svc = full_service(Scope::admin("max"), audit.clone());
